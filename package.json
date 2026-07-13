@@ -1,0 +1,13 @@
+{
+  "name": "@gravity-7/meridianos-core",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "MeridianOS — provider/harness-agnostic autonomous agent-orchestration core. Tenant behavior injected via a DomainPlugin.",
+  "main": "./config.mjs",
+  "exports": { ".": "./config.mjs", "./*": "./*" },
+  "dependencies": { "better-sqlite3": "12.11.1" },
+  "publishConfig": { "registry": "https://npm.pkg.github.com" },
+  "repository": { "type": "git", "url": "git+https://github.com/gravity-7/meridianos-core.git" },
+  "scripts": { "test": "node --disable-warning=ExperimentalWarning --test \"tests/*.test.mjs\"" }
+}

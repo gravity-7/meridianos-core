@@ -1,0 +1,457 @@
+#!/usr/bin/env node
+/**
+ * scheduler — the AIOS daemon. A single long-running Node process that:
+ *   1. Starts the dashboard HTTP server (localhost:4317)
+ *   2. Runs the watchdog tick every 60s (reap stale leases, collect health)
+ *   3. Fires agent runs on the policy-defined cadence (hourly by default)
+ *
+ * This is the ONLY process the founder needs to keep running for full autonomy.
+ * Register it as a Windows startup task:
+ *   schtasks /create /tn "AIOS-Daemon" /tr "node C:\projects\propertyverdict\tools\aios\scheduler.mjs" /sc onlogon /rl highest
+ *
+ * Or run it manually:
+ *   node tools/aios/scheduler.mjs
+ *
+ * Environment:
+ *   AIOS_DASHBOARD_PORT  — dashboard port (default 4317)
+ *   AIOS_DRY_RUN         — set to "1" to skip the real launcher (dry-run mode)
+ *
+ * SAFETY: if AIOS_DRY_RUN=1 or policy.kill_switch=true, no agents are spawned.
+ * The scheduler itself never modifies policy.yaml — it only reads it.
+ *
+ * Crash resilience:
+ *   • Each subsystem tick is wrapped so a throw/reject in one tick logs the error
+ *     and the daemon keeps running and keeps serving :4317.
+ *   • process.on('unhandledRejection') → log + continue.
+ *   • process.on('uncaughtException')  → log + exit(1) so the scheduled task
+ *     relaunches a clean process rather than continuing in a corrupt state.
+ *   • All output is mirrored to a size-capped rotating file under .ai/logs/
+ *     so the daemon is diagnosable even when launched without a console.
+ */
+import { openDb } from './db.mjs';
+import { loadPolicy } from './budget.mjs';
+import { executeRun, cadenceMs, runnerStatus } from './runner.mjs';
+import { tick } from './watchdog.mjs';
+import { render } from './render.mjs';
+import { launchAgent } from './launcher.mjs';
+import { releaseAllLeases, pruneHistory } from './state.mjs';
+import { createDashboardServer } from './dashboard/server.mjs';
+import { verifyCycle } from './verify-loop.mjs';
+import { pushEscalations } from './escalation-push.mjs';
+import { selectModel } from './router.mjs';
+import { plannerCycle } from './planner.mjs';
+import { pruneAllWorktrees } from './worktree.mjs';
+import { restorePrimaryTreeToMain } from './boot-guard.mjs';
+import { info, warn, error as logError, pruneEvents } from './event-log.mjs';
+import { createRotatingLogger } from './daemon-logger.mjs';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createAios } from './config.mjs';
+
+// Composition root: as of ★③.2 Part B, a DomainPlugin is a REQUIRED, explicitly-injected
+// dependency (there is no baked-in default tenant) — so the AIOS config can no longer be
+// constructed at MODULE LOAD (that would throw for every importer, including the test runner,
+// which imports this module without ever calling start()). `config` is therefore assigned ONCE,
+// inside `start({domain})`, and every module-scope function below reads it via closure — a plain
+// reassignment of this `let`, never a redeclaration, so start()'s value is visible everywhere.
+let config;
+const WATCHDOG_INTERVAL_MS = 60_000; // 1 min
+const MIN_CADENCE_MS = 60_000;       // safety floor: never run faster than 1 min
+
+// ---------------------------------------------------------------------------
+// Daemon-level rotating file logger (mirrors to console + .ai/logs/daemon.log)
+// ---------------------------------------------------------------------------
+// Like `config`, the REAL config-backed rotating logger can only be constructed once a domain is
+// injected in start(). The process guards immediately below register at module load time and must
+// stay functional even if start() never runs (e.g. this module merely being imported by tests) —
+// so `logger` starts as a minimal console-only fallback and start() upgrades it in place.
+let logger = {
+  log(tag, msg) { console.log(`[aios:${tag}] ${msg}`); },
+  error(tag, msg, err) { console.error(`[aios:${tag}] ${msg}${err != null ? ` — ${err?.stack ?? err}` : ''}`); },
+  close() {},
+};
+
+// ---------------------------------------------------------------------------
+// Global process guards
+// ---------------------------------------------------------------------------
+
+/**
+ * Unhandled promise rejections: log and continue.  One bad async chain must
+ * not kill the daemon and take down the dashboard.
+ */
+process.on('unhandledRejection', (reason) => {
+  logger.error('scheduler', 'unhandledRejection', reason);
+  // intentionally NOT exiting — let the daemon keep serving :4317
+});
+
+/**
+ * Synchronous uncaught exceptions: these leave the process in an undefined
+ * state, so we log and exit(1).  The Windows scheduled task (configured with
+ * restart-on-failure) relaunches a clean process.
+ */
+process.on('uncaughtException', (err) => {
+  logger.error('scheduler', 'uncaughtException', err);
+  process.exit(1);
+});
+
+// ---------------------------------------------------------------------------
+
+function loadMeta() {
+  if (!existsSync(config.boardJson)) return {};
+  try { const b = JSON.parse(readFileSync(config.boardJson, 'utf8')); return { milestones: b.milestones, founder_actions: b.founder_actions }; } catch { return {}; }
+}
+
+let db;
+let tickCount = 0;
+const startedAt = Date.now();
+
+// ---------------------------------------------------------------------------
+// Extracted, testable tick bodies
+// ---------------------------------------------------------------------------
+
+/**
+ * Core watchdog tick body.  All external dependencies are injected so the
+ * function can be unit-tested without real sockets or a real DB.
+ *
+ * @param {object} deps
+ * @param {object}   deps.db          SQLite handle
+ * @param {object}   deps.logger      { log, error } — rotating logger or test double
+ * @param {number}   deps.tickCount   current tick counter
+ * @param {number}   deps.startedAt   daemon start timestamp (ms)
+ * @param {boolean}  deps.dryRun
+ * @param {Function} deps._tick           watchdog.tick
+ * @param {Function} deps._plannerCycle   planner.plannerCycle
+ * @param {Function} deps._pushEscalations escalation-push.pushEscalations
+ * @param {Function} deps._verifyCycle    verify-loop.verifyCycle
+ * @param {Function} deps._selectModel    router.selectModel
+ * @param {Function} deps._render         render.render
+ * @param {Function} deps._loadMeta
+ * @param {Function} deps._loadPolicy
+ * @param {Function} deps._pruneEvents    event-log.pruneEvents
+ * @param {Function} deps._pruneHistory   state.pruneHistory
+ * @param {object}   [deps.config]     the injected AiosConfig (defaults to the composition root's)
+ */
+export async function runWatchdogTick(deps) {
+  const {
+    db,
+    logger,
+    tickCount,
+    startedAt,
+    dryRun,
+    config: cfg = config,
+    _tick           = tick,
+    _plannerCycle   = plannerCycle,
+    _pushEscalations = pushEscalations,
+    _verifyCycle    = verifyCycle,
+    _selectModel    = selectModel,
+    _render         = render,
+    _loadMeta       = loadMeta,
+    _loadPolicy     = loadPolicy,
+    _pruneEvents    = pruneEvents,
+    _pruneHistory   = pruneHistory,
+  } = deps;
+
+  try {
+    const policy = _loadPolicy(undefined, cfg);
+
+    // Watchdog: reap stale leases, collect health, heartbeat/prune. Isolated
+    // so a throw here does not starve the planner/verify subsystems below for
+    // the rest of this cycle.
+    let h;
+    try {
+      h = _tick(db, { policy, config: cfg });
+      if (h.reaped?.length) logger.log('watchdog', `reaped: ${h.reaped.join(', ')}`);
+
+      // Heartbeat every 10th tick (~10 min)
+      if (tickCount % 10 === 0) {
+        info(db, 'scheduler', 'heartbeat', { tick: tickCount, uptimeMin: Math.round((Date.now() - startedAt) / 60_000) });
+        _pruneEvents(db);
+        try { _pruneHistory(db); } catch { /* best-effort */ }
+      }
+    } catch (tickErr) {
+      logger.error('watchdog', `tick-error: ${tickErr?.message ?? String(tickErr)}`, tickErr);
+      logError(db, 'watchdog', 'tick-error', { error: tickErr?.message ?? String(tickErr) });
+    }
+
+    // Planner: auto-promote proposed → spec → designing. Isolated so a throw
+    // here does not skip the escalation push or verify loop below.
+    try {
+      const pc = _plannerCycle(db, { now: Date.now(), config: cfg });
+      if (pc.promoted.length) {
+        logger.log('planner', `promoted: ${pc.promoted.map(p => `${p.id} (${p.from}→${p.to})`).join(', ')}`);
+        info(db, 'planner', 'promote', { promoted: pc.promoted });
+      }
+    } catch (plannerErr) {
+      logger.error('planner', `cycle-error: ${plannerErr?.message ?? String(plannerErr)}`, plannerErr);
+      logError(db, 'planner', 'cycle-error', { error: plannerErr?.message ?? String(plannerErr) });
+    }
+
+    // Push escalations via webhook. `h` is undefined if the watchdog tick
+    // above threw, so guard rather than skipping the rest of the cycle.
+    if (h?.escalations?.length > 0) {
+      try {
+        const pushResult = await _pushEscalations(h.escalations, { policy, config: cfg });
+        if (pushResult.sent > 0) {
+          logger.log('escalation', `pushed ${pushResult.sent} escalation(s)`);
+          info(db, 'escalation', 'push', { sent: pushResult.sent });
+        }
+        if (pushResult.error) {
+          logger.log('escalation', `push error: ${pushResult.error}`);
+          logError(db, 'escalation', 'push-fail', { error: pushResult.error });
+        }
+      } catch (pushErr) {
+        logger.log('escalation', `push error: ${pushErr.message}`);
+        logError(db, 'escalation', 'push-fail', { error: pushErr.message });
+      }
+    }
+
+    // Run the verify loop (check in-review tasks, merge on pass). Isolated so
+    // a throw here still lets the render below run.
+    try {
+      const modelSelector = (agent) => _selectModel(policy, agent, 'ok', null, cfg.domain);
+      const vr = await _verifyCycle(db, { policy, selectModel: modelSelector, dryRun, config: cfg });
+      if (vr.merged.length) {
+        logger.log('verifier', `merged: ${vr.merged.map(m => m.task).join(', ')}`);
+        info(db, 'verifier', 'merge', { tasks: vr.merged.map(m => m.task) });
+      }
+      if (vr.failed.length) {
+        logger.log('verifier', `failed: ${vr.failed.map(f => f.task).join(', ')}`);
+        warn(db, 'verifier', 'check-fail', { tasks: vr.failed.map(f => f.task) });
+      }
+      if (vr.pending.length) logger.log('verifier', `pending: ${vr.pending.join(', ')}`);
+    } catch (verifyErr) {
+      logger.error('verifier', `cycle-error: ${verifyErr?.message ?? String(verifyErr)}`, verifyErr);
+      logError(db, 'verifier', 'cycle-error', { error: verifyErr?.message ?? String(verifyErr) });
+    }
+
+    // Re-render after state changes
+    try { _render(db, _loadMeta(), cfg); } catch (renderErr) {
+      warn(db, 'scheduler', 'render-fail', { error: renderErr.message });
+    }
+  } catch (e) {
+    // Belt-and-suspenders outer catch: any subsystem that slips past its own
+    // guard lands here.  Log and return — never re-throw.
+    logger.error('watchdog', `tick-error: ${e?.message ?? String(e)}`, e);
+    logError(db, 'watchdog', 'tick-error', { error: e?.message ?? String(e) });
+  }
+}
+
+/**
+ * Core runner cycle body.  All external dependencies are injected so the
+ * function can be unit-tested without real spawns or a real DB.
+ *
+ * @param {object} deps
+ * @param {object}   deps.db
+ * @param {object}   deps.logger
+ * @param {boolean}  deps.dryRun
+ * @param {Function} deps._executeRun   runner.executeRun
+ * @param {Function} deps._render       render.render
+ * @param {Function} deps._loadMeta
+ * @param {Function} deps._loadPolicy
+ * @param {Function} deps._launchAgent  launcher.launchAgent
+ * @param {object}   [deps.config]   the injected AiosConfig (defaults to the composition root's)
+ */
+export async function runRunnerCycle(deps) {
+  const {
+    db,
+    logger,
+    dryRun,
+    config: cfg   = config,
+    _executeRun   = executeRun,
+    _render       = render,
+    _loadMeta     = loadMeta,
+    _loadPolicy   = loadPolicy,
+    _launchAgent  = launchAgent,
+  } = deps;
+
+  try {
+    const policy  = _loadPolicy(undefined, cfg);
+    const launcher = dryRun ? undefined : _launchAgent;
+
+    const result = await _executeRun({ db, policy, launch: launcher, config: cfg });
+
+    // Re-render the board after any state changes
+    try { _render(db, _loadMeta(), cfg); } catch (renderErr) {
+      warn(db, 'scheduler', 'render-fail', { error: renderErr.message });
+    }
+
+    if (result.fired) {
+      logger.log('runner', `fired ${result.runs.length} run(s)`);
+      for (const r of result.runs) logger.log('runner', `  → ${r.agent} ${r.task} ${r.outcome}: ${r.note}`);
+    } else {
+      logger.log('runner', `skipped: ${result.reason}`);
+    }
+  } catch (e) {
+    // Belt-and-suspenders outer catch: log and return — never re-throw.
+    logger.error('runner', `cycle-error: ${e?.message ?? String(e)}`, e);
+    logError(db, 'runner', 'cycle-error', { error: e?.message ?? String(e) });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler internals (thin wrappers that isolate tick errors)
+// ---------------------------------------------------------------------------
+
+/** Watchdog tick: reap stale leases, collect health, push escalations, run verify loop. */
+async function watchdogTick() {
+  tickCount++;
+  try {
+    await runWatchdogTick({
+      db,
+      logger,
+      tickCount,
+      startedAt,
+      dryRun: process.env.AIOS_DRY_RUN === '1',
+      config,
+    });
+  } catch (e) {
+    // Belt-and-suspenders: runWatchdogTick should not throw (it has its own
+    // internal guards), but if something slips through we catch it here so the
+    // setInterval loop — and therefore :4317 — stay alive.
+    logger.error('watchdog', 'tick-escaped', e);
+    logError(db, 'watchdog', 'tick-escaped', { error: e?.message ?? String(e) });
+  }
+}
+
+/** Runner cycle: decide, claim, launch. */
+async function runCycle() {
+  try {
+    await runRunnerCycle({
+      db,
+      logger,
+      dryRun: process.env.AIOS_DRY_RUN === '1',
+      config,
+    });
+  } catch (e) {
+    // Same belt-and-suspenders pattern as watchdogTick.
+    logger.error('runner', 'cycle-escaped', e);
+    logError(db, 'runner', 'cycle-escaped', { error: e?.message ?? String(e) });
+  }
+}
+
+/** Re-read cadence from policy and reschedule the runner interval. */
+let runnerTimer = null;
+let currentCadence = null;
+function scheduleRunner({ force = false } = {}) {
+  const policy = loadPolicy(undefined, config);
+  const cadence = policy?.schedule?.cadence ?? 'off';
+
+  if (!force && cadence === currentCadence) return;
+  currentCadence = cadence;
+
+  if (runnerTimer) clearInterval(runnerTimer);
+  const ms = cadenceMs(cadence);
+
+  if (!ms) {
+    runnerTimer = null;
+    logger.log('scheduler', `cadence=${cadence} — runner disabled (manual/event only)`);
+    return;
+  }
+
+  const safems = Math.max(ms, MIN_CADENCE_MS);
+  logger.log('scheduler', `cadence=${cadence} (${safems / 1000}s)`);
+  runnerTimer = setInterval(runCycle, safems);
+}
+
+/** Policy watcher: re-read cadence every 5 minutes in case the founder changed it. */
+function startPolicyWatcher() {
+  setInterval(() => {
+    try { scheduleRunner(); } catch (e) {
+      warn(db, 'scheduler', 'policy-reload-fail', { error: e.message });
+    }
+  }, 5 * 60_000);
+}
+
+/**
+ * Start the AIOS daemon.
+ * @param {object} [opts]
+ * @param {object} [opts.domain]  the tenant's DomainPlugin (REQUIRED — see config.mjs). The PV
+ *                                launcher (`tools/aios/scheduler.mjs`) passes `PV_DOMAIN`; there is
+ *                                no default here, so calling `start()` with no domain throws.
+ */
+export function start({ domain } = {}) {
+  // Composition root: construct the AIOS config ONCE at daemon startup, from the caller's injected
+  // domain, and upgrade the console-only fallback logger to the real config-backed rotating one.
+  // This must be the very first thing start() does — everything below (and every module-scope
+  // function this file exports) reads `config`/`logger` via closure.
+  ({ config } = createAios({ domain }));
+  logger = createRotatingLogger({ config });
+
+  // Load repo-root .env (gitignored) so runtime secrets like AIOS_ESCALATION_WEBHOOK are available.
+  try {
+    const envPath = join(config.repoRoot, '.env');
+    if (existsSync(envPath) && typeof process.loadEnvFile === 'function') process.loadEnvFile(envPath);
+  } catch { /* best-effort */ }
+
+  db = openDb(undefined, config);
+  const port = Number(process.env.AIOS_DASHBOARD_PORT) || 4317;
+
+  // Boot tree-hygiene recovery (do this FIRST): the PRIMARY working tree must only ever carry
+  // generated board drift — all agent work happens in isolated worktrees. It has repeatedly been
+  // found stranded on an agent's feature branch after a crash/prune/merge race on Windows, which
+  // breaks the founder's manual git pull/merge. Auto-heal: if HEAD != main, discard the generated
+  // board drift and switch back. Non-generated uncommitted changes are left untouched (skipped).
+  try {
+    const r = restorePrimaryTreeToMain({ config });
+    if (r.switched) {
+      logger.log('boot', `WARN: primary tree was stranded on '${r.from}' — restored to main (discarded board drift)`);
+      warn(db, 'boot', 'primary-tree-restored', { from: r.from });
+    } else if (r.reason === 'dirty') {
+      logger.log('boot', `WARN: primary tree on '${r.from}' has non-board uncommitted changes (${r.dirty.join(', ')}) — leaving it untouched; manual cleanup needed`);
+      warn(db, 'boot', 'primary-tree-stranded-dirty', { from: r.from, dirty: r.dirty });
+    } else if (r.reason === 'switch-failed' || r.reason === 'head-unknown') {
+      logger.error('boot', `primary-tree restore failed (${r.reason}): ${r.error || ''}`);
+      logError(db, 'boot', 'primary-tree-restore-fail', { reason: r.reason, error: r.error });
+    }
+  } catch (e) { warn(db, 'boot', 'primary-tree-guard-fail', { error: e.message }); }
+
+  // Clean any worktrees orphaned by a previous crash (agents from a dead daemon are gone anyway).
+  try { const p = pruneAllWorktrees(config); if (p.removed) logger.log('worktree', `pruned ${p.removed} orphaned worktree(s)`); } catch { /* best-effort */ }
+
+  // Boot lease recovery (RCA-4): any agent a previous daemon launched died with it, so its lease is
+  // an orphan. Free every live lease now — the TTL reaper would otherwise sit on non-expired ones
+  // for up to lease_ttl_min, wedging a max_parallel slot after every crash/restart.
+  try { const r = releaseAllLeases(db); if (r.freed.length) logger.log('boot', `freed ${r.freed.length} orphaned lease(s): ${r.freed.join(', ')}`); } catch (e) { warn(db, 'scheduler', 'boot-lease-recovery-fail', { error: e.message }); }
+
+  // 1. Dashboard
+  createDashboardServer(config).listen(port, '127.0.0.1', () => {
+    logger.log('dashboard', `http://localhost:${port}`);
+  });
+
+  // 2. Watchdog
+  setInterval(watchdogTick, WATCHDOG_INTERVAL_MS);
+  watchdogTick(); // first tick immediately
+
+  // 3. Runner on cadence
+  scheduleRunner({ force: true });
+  startPolicyWatcher();
+
+  // 4. "Run now" hook — the dashboard POST /api/run-now triggers this
+  globalThis.__aiosRunNow = () => { runCycle(); return { ok: true, note: 'run cycle triggered' }; };
+
+  // 5. First run after a short boot delay (let the dashboard come up first)
+  setTimeout(runCycle, 5_000);
+
+  const cadence = loadPolicy(undefined, config)?.schedule?.cadence ?? 'off';
+  info(db, 'scheduler', 'start', { port, cadence });
+  logger.log('scheduler', 'AIOS daemon started — Ctrl+C to stop');
+
+  // Graceful shutdown
+  const shutdown = () => {
+    info(db, 'scheduler', 'shutdown');
+    logger.log('scheduler', 'shutting down...');
+    if (runnerTimer) clearInterval(runnerTimer);
+    logger.close();
+    db?.close?.();
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+// Only run the daemon when this file is the direct entry point.  When it is
+// imported by the test runner (or any other module), we export the tick
+// functions for unit testing without starting the server or scheduling timers.
+const _isMain = fileURLToPath(import.meta.url) === process.argv[1];
+if (_isMain) start();

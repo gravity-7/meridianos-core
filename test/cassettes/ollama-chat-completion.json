@@ -1,0 +1,50 @@
+{
+  "recordedAt": "2026-07-09T19:03:56.876Z",
+  "request": {
+    "method": "POST",
+    "url": "http://localhost:11434/v1/chat/completions",
+    "headers": {
+      "authorization": "[REDACTED]"
+    },
+    "body": {
+      "model": "gemma4:e4b",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with exactly: MOCK_CASSETTE_OK"
+        }
+      ],
+      "max_tokens": 32
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-length": "300",
+      "content-type": "application/json",
+      "date": "Thu, 09 Jul 2026 19:03:56 GMT"
+    },
+    "body": {
+      "id": "chatcmpl-663",
+      "object": "chat.completion",
+      "created": 1783623836,
+      "model": "gemma4:e4b",
+      "system_fingerprint": "fp_ollama",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "MOCK_CASSETTE_OK"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 28,
+        "completion_tokens": 9,
+        "total_tokens": 37
+      }
+    }
+  }
+}
