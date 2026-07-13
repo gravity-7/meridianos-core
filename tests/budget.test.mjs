@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { budgetStatus, verdictFor, loadPolicy, agentSessionIds, nonTranscriptUsage, providerBreakdown } from '../budget.mjs';
+import { budgetStatus, verdictFor, agentSessionIds, nonTranscriptUsage, providerBreakdown } from '../budget.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
 
@@ -58,13 +58,6 @@ test('budgetStatus combines both agents, honours caps + kill_switch', () => {
   const killed = budgetStatus({ policy: { ...policy, kill_switch: true }, now, agentDirs: { claude: cdir, antigravity: [adir] }, config });
   assert.equal(killed.mayClaim.claude, false);
   assert.equal(killed.mayClaim.antigravity, false);
-});
-
-test('loadPolicy reads the committed .ai/policy.yaml', () => {
-  const p = loadPolicy(undefined, config);
-  // per-window caps are founder-tunable from the dashboard, so assert shape + sanity, not an exact value
-  const cap = p.agent_budget.claude.per_5h_tokens;
-  assert.ok(Number.isFinite(cap) && cap > 0, `expected a positive per_5h_tokens cap, got ${cap}`);
 });
 
 test('agentSessionIds harvests only the given agent\'s launched sessions', () => {

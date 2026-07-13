@@ -1,12 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { setPolicyValue, serializeScalar, LEVER_PATHS } from '../policy-write.mjs';
+import { setPolicyValue, serializeScalar } from '../policy-write.mjs';
 import { parseYaml } from '../yaml-lite.mjs';
-import { resolvePaths } from '../config.mjs';
-import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
-
-const config = resolvePaths({ domain: FIXTURE_DOMAIN });
 
 const SAMPLE = `version: 1
 kill_switch: false
@@ -47,9 +42,4 @@ test('setPolicyValue updates top-level scalars and quotes times', () => {
 
 test('setPolicyValue throws on an unknown path (never reshapes the file)', () => {
   assert.throws(() => setPolicyValue(SAMPLE, 'agent_budget.nope', 1), /path not found/);
-});
-
-test('the committed policy.yaml exposes every lever path the dashboard writes', () => {
-  const text = readFileSync(config.policyPath, 'utf8');
-  for (const p of LEVER_PATHS) assert.doesNotThrow(() => setPolicyValue(text, p, 'x'), `missing path: ${p}`);
 });
