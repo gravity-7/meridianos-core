@@ -416,13 +416,10 @@ button:active { transform: translateY(0); box-shadow: none; }
 
   <div class="live">
     <div class="h">compute budget</div>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
-      <div class="tile"><div style="font-size:12px;color:var(--text-secondary)">claude · 5h</div><div style="display:flex;align-items:baseline;gap:4px"><span id="c5pct" style="font-size:24px;font-weight:500">—</span><span style="font-size:13px;color:var(--text-muted)">%</span></div><div class="meter"><span id="c5bar" style="width:0"></span></div><div id="c5sub" class="mono" style="font-size:11px;color:var(--text-muted)">— / —</div></div>
-      <div class="tile"><div style="font-size:12px;color:var(--text-secondary)">claude · week</div><div style="display:flex;align-items:baseline;gap:4px"><span id="cwpct" style="font-size:24px;font-weight:500">—</span><span style="font-size:13px;color:var(--text-muted)">%</span></div><div class="meter"><span id="cwbar" style="width:0"></span></div><div id="cwsub" class="mono" style="font-size:11px;color:var(--text-muted)">— / —</div></div>
-      <div class="tile"><div id="a5lbl" style="font-size:12px;color:var(--text-secondary)">antigravity · 5h</div><div style="display:flex;align-items:baseline;gap:4px"><span id="a5pct" style="font-size:24px;font-weight:500">—</span><span style="font-size:13px;color:var(--text-muted)">%</span></div><div class="meter"><span id="a5bar" style="width:0"></span></div><div id="a5sub" class="mono" style="font-size:11px;color:var(--text-muted)">— / —</div></div>
-      <div class="tile"><div id="awlbl" style="font-size:12px;color:var(--text-secondary)">antigravity · week</div><div style="display:flex;align-items:baseline;gap:4px"><span id="awpct" style="font-size:24px;font-weight:500">—</span><span style="font-size:13px;color:var(--text-muted)">%</span></div><div class="meter"><span id="awbar" style="width:0"></span></div><div id="awsub" class="mono" style="font-size:11px;color:var(--text-muted)">— / —</div></div>
-      <div id="agPools" style="display:contents"></div>
-    </div>
+    <!-- Roster-driven (§4b-ii): one 5h + one week tile per agent in config.domain.agents, built by
+         renderBudgetCards() from /api/status's budget.mayClaim keys. Scales to N agents/providers;
+         was previously 4 tiles hardcoded to claude/antigravity. -->
+    <div class="grid" id="budgetGrid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"></div>
     <div id="founderUsage" style="font-size:12px;color:var(--text-muted);margin-top:8px">founder usage · —</div>
   </div>
 
@@ -988,18 +985,38 @@ function renderQuiet(){
 
 function renderFounderUsage(b){
   const el=$('founderUsage'); if(!el||!b) return;
-  const cf=b.claude&&b.claude.founder, af=b.antigravity&&b.antigravity.founder;
-  if(!cf&&!af){ el.textContent='founder usage · —'; return; }
+  const roster=Object.keys(b.mayClaim||{});
+  const anyFounder=roster.some(a=>b[a]&&b[a].founder);
+  if(!anyFounder){ el.textContent='founder usage · —'; return; }
   const pair=(f)=>f?`<span class="mono">${fmt(f.last5h.billable)}</span> 5h / <span class="mono">${fmt(f.last7d.billable)}</span> wk`:'—';
-  el.innerHTML=`founder usage (read-only, ${esc(b.attribution==='total'?'counted in the gauges above':'not gated')}) · claude ${pair(cf)} · antigravity ${pair(af)}`;
+  const parts=roster.map(a=>`${esc(a)} ${pair(b[a]&&b[a].founder)}`);
+  el.innerHTML=`founder usage (read-only, ${esc(b.attribution==='total'?'counted in the gauges above':'not gated')}) · ${parts.join(' · ')}`;
 }
 function resetIn(ts){ if(!ts) return ''; const ms=Date.parse(ts)-Date.now(); if(ms<=0) return ' · resetting…'; const h=Math.floor(ms/3600000), m=Math.floor(ms%3600000/60000); return ' · resets in '+(h?h+'h ':'')+m+'m'; }
-function renderAgPools(a){
-  // Antigravity no longer meters separate quota pools (§1.4) — every agent reports a plain 5h +
-  // weekly verdict via the two static gauges below. This just keeps the (now-empty) box clear and
-  // the gauge labels plain.
-  const box=$('agPools'); if(box) box.innerHTML='';
-  $('a5lbl').textContent='antigravity · 5h'; $('awlbl').textContent='antigravity · week';
+// Roster-driven budget cards (§4b-ii): one 5h + one week tile per agent in the roster, instead of
+// the old hardcoded claude/antigravity pair. The roster comes from budget.mayClaim's keys — built
+// 1:1 with config.domain.agents inside budgetStatus() (budget.mjs), so it's always in sync and
+// scales to N agents without any client-side agent-name literals.
+function budgetTile(agent, label, w, resetAt){
+  const pct = w && w.pct != null ? w.pct : '—';
+  const barWidth = Math.min((w && w.pct) || 0, 100);
+  const barColor = stateColor(w && w.state);
+  const sub = w ? (fmt(w.used)+' / '+fmt(w.cap)+resetIn(resetAt)) : '— / —';
+  return `<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">${esc(agent)} · ${label}</div>`+
+    `<div style="display:flex;align-items:baseline;gap:4px"><span style="font-size:24px;font-weight:500">${pct}</span><span style="font-size:13px;color:var(--text-muted)">%</span></div>`+
+    `<div class="meter"><span style="width:${barWidth}%;background:${barColor}"></span></div>`+
+    `<div class="mono" style="font-size:11px;color:var(--text-muted)">${sub}</div></div>`;
+}
+function renderBudgetCards(budget){
+  const el=$('budgetGrid'); if(!el||!budget) return;
+  const roster=Object.keys(budget.mayClaim||{});
+  if(!roster.length){ el.innerHTML='<div style="font-size:12px;color:var(--text-muted)">no agents in roster</div>'; return; }
+  const resets=budget.resets||{};
+  el.innerHTML=roster.map(agent=>{
+    const windows=(budget[agent]&&budget[agent].windows)||[];
+    const w5=windows.find(w=>w.window==='5h'), wk=windows.find(w=>w.window==='week');
+    return budgetTile(agent,'5h',w5,resets[agent+'_5h_at']) + budgetTile(agent,'week',wk,resets[agent+'_week_at']);
+  }).join('');
 }
 function renderProviderCost(last7d){
   const el=$('providerCostGrid'); if(!el) return;
@@ -1011,12 +1028,6 @@ function renderProviderCost(last7d){
       `<div style="display:flex;align-items:baseline;gap:4px"><span class="mono" style="font-size:22px;font-weight:500">${costStr}</span></div>`+
       `<div class="mono" style="font-size:11px;color:var(--text-muted)">${fmt(p.billable)} tok · ${p.runs} run${p.runs===1?'':'s'}</div></div>`;
   }).join('');
-}
-function gaugeFrom(prefix,w,resetAt){
-  if(!w){ return; }
-  $(prefix+'pct').textContent = w.pct==null?'—':w.pct;
-  const bar=$(prefix+'bar'); bar.style.width=Math.min(w.pct||0,100)+'%'; bar.style.background=stateColor(w.state);
-  $(prefix+'sub').textContent = fmt(w.used)+' / '+fmt(w.cap)+resetIn(resetAt);
 }
 function copySession(sess, agent) {
   const cmd = agent === 'antigravity' ? `agy --session ${sess}` : `claude --session-id ${sess}`;
@@ -1169,10 +1180,7 @@ function renderRuns(runs){
 }
 
 function render(s){
-  const cw=s.budget.claude.windows||[], aw=s.budget.antigravity.windows||[], rs=s.budget.resets||{};
-  gaugeFrom('c5',cw.find(w=>w.window==='5h'),rs.claude_5h_at); gaugeFrom('cw',cw.find(w=>w.window==='week'),rs.claude_week_at);
-  gaugeFrom('a5',aw.find(w=>w.window==='5h'),rs.antigravity_5h_at); gaugeFrom('aw',aw.find(w=>w.window==='week'),rs.antigravity_week_at);
-  renderAgPools(s.budget.antigravity);
+  renderBudgetCards(s.budget);
   renderFounderUsage(s.budget);
   renderProviderCost(s.budget.providerUsage && s.budget.providerUsage.last7d);
   $('clock').textContent=new Date(s.ts).toLocaleTimeString();
