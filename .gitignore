@@ -1,1 +1,3 @@
 node_modules/
+# transient publish-time npmrc (holds only an env-var reference, never a token) — belt-and-suspenders
+.npmrc.publish
