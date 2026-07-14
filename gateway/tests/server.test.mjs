@@ -57,6 +57,12 @@ before(async () => {
       send(200, { id: 'chatcmpl_2' });
       return;
     }
+    // Base-path preservation: an upstream mounted under '/prefix' must still receive the client's
+    // '/v1/messages' as '/prefix/v1/messages' (see the /base-path route + token below).
+    if (req.url === '/prefix/v1/messages') {
+      send(200, { id: 'msg_bp', usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } });
+      return;
+    }
     send(404, { error: 'not found' });
   });
   await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
@@ -66,10 +72,12 @@ before(async () => {
     version: 1,
     generatedAt: new Date().toISOString(),
     tenant: 'pv',
-    providers: { anthropic: PROVIDERS.anthropic, deepseek: PROVIDERS.deepseek },
+    providers: { anthropic: PROVIDERS.anthropic, deepseek: PROVIDERS.deepseek, basepath: { ...PROVIDERS.anthropic, name: 'basepath' } },
     routes: {
       anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' },
       deepseek: { upstreamUrl: stubUrl, wire: 'openai', keyEnv: 'TEST_DEEPSEEK_KEY' },
+      // A provider whose upstream is mounted under a base path (like DeepSeek's '…/anthropic').
+      basepath: { upstreamUrl: `${stubUrl}/prefix`, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' },
     },
   };
   assert.equal(validateProviderRegistry(registry), true);
@@ -81,6 +89,7 @@ before(async () => {
   runs.registerRun('tok-deepseek', { tenant: 'pv', agent: 'claude', session: 's2', task: 't2', runId: 'r2', provider: 'deepseek', model: 'deepseek-chat', tier: 'medium' });
   runs.registerRun('tok-unknown-provider', { tenant: 'pv', agent: 'claude', session: 's3', task: null, runId: null, provider: 'nope', model: 'nope-model', tier: 'medium' });
   runs.registerRun('tok-network-fail', { tenant: 'pv', agent: 'claude', session: 's4', task: null, runId: null, provider: 'deadroute', model: 'deepseek-chat', tier: 'medium' });
+  runs.registerRun('tok-basepath', { tenant: 'pv', agent: 'claude', session: 's5', task: null, runId: null, provider: 'basepath', model: 'claude-sonnet-5', tier: 'medium' });
 
   events = [];
   gateway = await startGateway({
@@ -186,9 +195,25 @@ test('openai wire: injects Authorization Bearer, meters usage including cached_t
   assert.equal(evt.outputTokens, 7);
   assert.equal(evt.cacheReadTokens, 2);
   assert.equal(evt.cacheWriteTokens, null);
-  // openai has no cache-write concept: one component (cacheWriteTokens) is always unknown, so
-  // per the null-is-unknown contract totalTokens stays null rather than guessing a partial sum.
-  assert.equal(evt.totalTokens, null);
+  // openai has no cache-write concept: a null cacheWriteTokens means "no cache-write" (0), NOT
+  // "unknown", so the total is real (input+output+cacheRead+0) — it must NOT be nulled, or all
+  // openai spend would vanish from downstream caps math.
+  assert.equal(evt.totalTokens, 14);
+});
+
+test('preserves the upstream base path: a route mounted under /prefix gets /prefix + the request path', async () => {
+  const res = await fetch(`${gateway.url}/v1/messages`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-basepath' },
+    body: '{}',
+  });
+  // If the base path were dropped, the stub would 404 (it only answers '/prefix/v1/messages').
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.id, 'msg_bp');
+  const evt = events.at(-1);
+  assert.equal(evt.provider, 'basepath');
+  assert.equal(evt.totalTokens, 3);
 });
 
 test('null-is-unknown: usage fields are null (never 0) when the upstream response has no usage block', async () => {

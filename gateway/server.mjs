@@ -90,13 +90,13 @@ function extractUsage(wire, parsedBody) {
   };
 }
 
-/** Sum of the four usage components, but ONLY when every one of them is known (non-null) —
- * otherwise null. Never guesses a partial total. */
+/** Total tokens for the call. Unknown (null) ONLY when a CORE component (input or output) is
+ * unknown. The cache components absent means "no cache tokens" (0), NOT "unknown" — e.g. OpenAI
+ * has no cache-write concept, so treating its null cacheWriteTokens as unknown would wrongly null
+ * every OpenAI total and drop all OpenAI spend from downstream caps math (3.3b). */
 function computeTotal({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) {
-  if ([inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens].some((v) => v === null)) {
-    return null;
-  }
-  return inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+  if (inputTokens === null || outputTokens === null) return null;
+  return inputTokens + outputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
 }
 
 function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstreamStatus, latencyMs, usage, checkVerdict }) {
@@ -187,7 +187,11 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
 
   const body = await readBody(req);
   const headers = buildForwardHeaders(req, route, resolveKey);
-  const target = new URL(req.url, route.upstreamUrl);
+  // Preserve the upstream base path: an upstreamUrl like 'https://api.deepseek.com/anthropic' must
+  // become '…/anthropic/v1/messages', NOT '…/v1/messages'. `new URL(req.url, base)` would drop the
+  // base path (an absolute-path req.url replaces the whole path), so concatenate base path + req.url.
+  const base = new URL(route.upstreamUrl);
+  const target = new URL(base.pathname.replace(/\/$/, '') + req.url, base.origin);
   const transport = target.protocol === 'https:' ? https : http;
 
   let upstreamRes;
