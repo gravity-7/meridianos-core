@@ -58,3 +58,15 @@ export function toEnforcementDecision(verdict) {
   const halted = verdict.windows.find((w) => w.state === 'halt');
   return { decision: 'deny', capWindow: halted?.window ?? null };
 }
+
+/**
+ * The real verdict factory a caller passes as `startGateway({ checkVerdict })` (see server.mjs,
+ * bite 3.2c). Closes over the ledger/policy/config once at gateway-start time, but re-evaluates
+ * `now()` on EVERY call so each request's spend is checked against a fresh window — a request
+ * made 10 minutes after the gateway started must not be judged against a 10-minute-stale clock.
+ */
+export function makeCheckVerdict({ ledger, policy, config, now = () => Date.now() } = {}) {
+  return (ctx) => toEnforcementDecision(
+    agentBudgetVerdict(ledger, { tenant: ctx.tenant, agent: ctx.agent, now: now(), policy, config }),
+  );
+}

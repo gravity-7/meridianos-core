@@ -1,7 +1,15 @@
 /**
  * server — the gateway sidecar's HTTP proxy core (bite 3.2a). Transparent metering pass-through
- * for BOTH wires, NON-STREAMING only (streaming is 3.2b; real enforcement is 3.2c — here the
- * `checkVerdict` seam always allows; launcher wiring is 3.2d).
+ * for BOTH wires, NON-STREAMING only (streaming is 3.2b; launcher wiring is 3.2d).
+ *
+ * Enforcement (bite 3.2c): `checkVerdict(ctx)` is called EXACTLY ONCE per request, before
+ * forwarding, and the single resulting verdict is threaded through to the token-event emitted for
+ * that request — never re-queried, so the decision that blocked (or allowed) the call is always
+ * the one stamped on the event. A 'deny' verdict never forwards upstream and responds 429 in the
+ * client's own wire format; any other decision (incl. a future 'degrade') is treated as "forward"
+ * for now (see windows.mjs's `makeCheckVerdict` for a real ledger-backed verdict source). The
+ * default `checkVerdict` still always allows, so a gateway started without a real verdict source
+ * stays permissive.
  *
  * No wire translation (locked decision D1): every request is forwarded to a same-wire upstream
  * (resolved from the provider-registry envelope) and metered — the gateway never converts an
@@ -56,6 +64,18 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
+/** The 429 body for a denied request, shaped in the CLIENT's own wire format so a harness's
+ * existing error-handling (built for real provider rate-limit errors) recognizes it without any
+ * gateway-specific parsing. */
+function denyBody(wire, capWindow) {
+  const message = `gateway: over budget (${capWindow})`;
+  if (wire === 'anthropic') {
+    return { type: 'error', error: { type: 'rate_limit_error', message } };
+  }
+  // openai
+  return { error: { message, type: 'rate_limit_exceeded', code: 'over_budget' } };
+}
+
 function buildForwardHeaders(req, route, resolveKey) {
   const headers = { ...req.headers };
   for (const name of HOP_BY_HOP_HEADERS) delete headers[name];
@@ -105,9 +125,9 @@ function computeTotal({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTo
   return inputTokens + outputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
 }
 
-function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstreamStatus, latencyMs, usage, checkVerdict }) {
+function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstreamStatus, latencyMs, usage, verdict }) {
   const usageFields = usage ?? { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null };
-  const verdict = checkVerdict(ctx) ?? {};
+  const v = verdict ?? {};
   const evt = makeTokenEvent(
     {
       tenant: ctx.tenant,
@@ -126,8 +146,8 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstre
       cacheReadTokens: usageFields.cacheReadTokens,
       cacheWriteTokens: usageFields.cacheWriteTokens,
       totalTokens: computeTotal(usageFields),
-      enforcementDecision: verdict.decision ?? 'allow',
-      capWindow: verdict.capWindow ?? null,
+      enforcementDecision: v.decision ?? 'allow',
+      capWindow: v.capWindow ?? null,
     },
     { defaultTenant: ctx.tenant },
   );
@@ -141,7 +161,8 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstre
  * run-registry.mjs). `onTokenEvent` is a sink callback for every emitted token-event (the ledger
  * is 3.3; defaults to a no-op so this module has no storage dependency). `resolveKey` and `now`
  * are test seams (default `process.env` lookup and `Date.now`). `checkVerdict` is the
- * enforcement seam — 3.2a always allows; 3.2c fills in real cap checks.
+ * enforcement seam — defaults to always-allow; pass `makeCheckVerdict(...)` (windows.mjs) for
+ * real ledger-backed cap enforcement (3.2c).
  */
 export function startGateway({
   port = 0,
@@ -191,6 +212,31 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     return sendJson(res, 502, { error: `gateway: no route for provider '${ctx.provider}'` });
   }
 
+  // Compute the enforcement verdict ONCE per request, before forwarding. The same verdict object
+  // is threaded through to every emitEvent call below so the decision that blocked (or allowed)
+  // the call is exactly the one stamped on the token-event — never re-queried against the ledger
+  // a second time, which could return a different answer than the one just enforced.
+  const verdict = checkVerdict(ctx) ?? { decision: 'allow', capWindow: null };
+
+  // Any decision other than 'deny' is treated as "forward" for this bite. FOLLOW-UP: a future
+  // 'degrade' decision (reroute to a cheaper provider instead of blocking outright) is a
+  // documented follow-up, not implemented here.
+  if (verdict.decision === 'deny') {
+    emitEvent({
+      onTokenEvent,
+      ctx,
+      requestId,
+      provider: ctx.provider,
+      model: ctx.model,
+      wire: route.wire,
+      upstreamStatus: null,
+      latencyMs: now() - start,
+      usage: null,
+      verdict,
+    });
+    return sendJson(res, 429, denyBody(route.wire, verdict.capWindow));
+  }
+
   const body = await readBody(req);
   const headers = buildForwardHeaders(req, route, resolveKey);
   // Preserve the upstream base path: an upstreamUrl like 'https://api.deepseek.com/anthropic' must
@@ -222,7 +268,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       upstreamStatus: null,
       latencyMs: now() - start,
       usage: null,
-      checkVerdict,
+      verdict,
     });
     return sendJson(res, 502, { error: 'gateway: upstream request failed', detail: String(err?.message ?? err) });
   }
@@ -249,7 +295,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       upstreamStatus: upstreamRes.statusCode ?? null,
       latencyMs,
       usage: null,
-      checkVerdict,
+      verdict,
     });
     return sendJson(res, 502, { error: 'gateway: could not parse upstream response' });
   }
@@ -265,7 +311,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     upstreamStatus: upstreamRes.statusCode ?? null,
     latencyMs,
     usage,
-    checkVerdict,
+    verdict,
   });
 
   const responseHeaders = { ...upstreamRes.headers };
