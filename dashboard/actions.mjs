@@ -68,6 +68,22 @@ export function taskAction(db, { id, action, now = Date.now(), days, reason } = 
       setGovernanceFlags(db, { taskId: id, skippedAt: null, skipReason: null }, { actor: 'founder', op: 'unskip', now: nowIso });
       return { ok: true, task: id };
     }
+    // G2: Bounce — send a task ONE stage backward so the spec/design agent gets another pass.
+    // The system will pick it up again on the next runner cycle without founder intervention.
+    // Allowed: in-review→in-progress, ready-for-impl→designing, designing→spec, spec→proposed.
+    if (action === 'bounce') {
+      const bounceMap = {
+        'in-review':      'in-progress',
+        'ready-for-impl': 'designing',
+        'designing':      'spec',
+        'spec':           'proposed',
+      };
+      const to = bounceMap[t0.status];
+      if (!to) return { ok: false, error: `cannot bounce from status '${t0.status}'` };
+      const note = reason ? `bounced by founder: ${reason}` : 'bounced from dashboard';
+      const r = transition(db, { taskId: id, to, actor: 'founder', note, now: nowIso });
+      return (r && r.ok) ? { ok: true, task: id, status: to } : { ok: false, error: r?.reason ?? 'transition failed' };
+    }
     return { ok: false, error: `unsupported action: ${action}` };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };

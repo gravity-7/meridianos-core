@@ -37,11 +37,15 @@ const STAGE = {
   'in-progress':    { target: 'in-review',       verb: 'Implement it' },
 };
 
-function stageInstructions(status) {
+function stageInstructions(status, taskId) {
   const s = STAGE[status] ?? STAGE['ready-for-impl'];
   if (status === 'spec') return [
     'Write a detailed spec for this task. Create/update the spec file at `.ai/features/<feature>/spec.md`.',
     'Define the contracts (API shapes, component props, data models) the implementation must satisfy.',
+    // G1: agent is responsible for writing ACs + complexity back to the DB so the Tier-2 DoR
+    // check in planner.mjs can promote the task to `designing` without founder intervention.
+    `After writing the spec, update the task with proper acceptance criteria and complexity score:`,
+    `\`node tools/aios/cli.mjs update-task --id ${taskId} --acceptance-criteria "<AC text>" --complexity <1-5>\``,
     `Then transition the task to \`${s.target}\`:`,
   ];
   if (status === 'designing') return [
@@ -76,7 +80,7 @@ export function buildPrompt(task, { branch, config } = {}) {
     `## Task: ${task.id} — ${task.title}`,
     '',
     'You are an autonomous agent executing a task from the AIOS task board.',
-    ...stageInstructions(status),
+    ...stageInstructions(status, task.id),
     '`' + transitionCmd + '`',
     '',
     'A task can only be merged once its PR number is recorded — do NOT move to in-review without --pr.',
@@ -211,7 +215,21 @@ export async function launchAgent({ agent, model, task, session, provider, harne
     const prompt = buildPrompt(task, { branch: wt.branch, config });
     const resolvedProvider = provider ?? resolveProvider('anthropic', undefined, config);
     const harnessName = harness ?? config.domain.agentHarness?.[agent] ?? agent;
-    const plan = buildSpawnPlan(harnessName, { prompt, model, session, provider: resolvedProvider, worktreePath: wt.path, tier });
+
+    // G3: write a per-worktree .mcp.json for spec/designing stages when the tenant has configured
+    // MCP servers. Implementation-stage runs are never given MCP config (cost + unnecessary).
+    let mcpConfigPath = null;
+    const contextStages = new Set(['spec', 'designing']);
+    if (contextStages.has(task.status)) {
+      const servers = resolveMcpServers(config.domain.mcpServers, task.status);
+      if (servers.length > 0) {
+        const mcpJson = JSON.stringify(buildMcpJson(servers), null, 2);
+        writePlanFile(wt.path, { path: '.mcp.json', content: mcpJson });
+        mcpConfigPath = '.mcp.json';
+      }
+    }
+
+    const plan = buildSpawnPlan(harnessName, { prompt, model, session, provider: resolvedProvider, worktreePath: wt.path, tier, mcpConfigPath });
     for (const file of plan.files ?? []) writePlanFile(wt.path, file);
     const env = { ...agentEnv(process.env, {}, config), ...plan.env };
     const result = await _spawn(plan.cmd, plan.args, { cwd: wt.path, env });
@@ -220,4 +238,30 @@ export async function launchAgent({ agent, model, task, session, provider, harne
   } finally {
     try { wt.cleanup(); } catch { /* best-effort */ }
   }
+}
+
+/**
+ * Resolve the MCP server list for a given task stage from the DomainPlugin's `mcpServers`.
+ * Accepts either a flat array (same servers for all stages) or a stage-keyed object.
+ */
+function resolveMcpServers(mcpServers, stage) {
+  if (!mcpServers) return [];
+  if (Array.isArray(mcpServers)) return mcpServers;                    // flat — all stages
+  return mcpServers[stage] ?? mcpServers['*'] ?? [];                   // stage-specific with '*' fallback
+}
+
+/**
+ * Build the `.mcp.json` object that Claude Code and agy expect.
+ * Each entry: { name, command, args?, env? }
+ */
+function buildMcpJson(servers) {
+  return {
+    mcpServers: Object.fromEntries(
+      servers.map(s => [s.name, {
+        command: s.command,
+        ...(s.args  ? { args:  s.args  } : {}),
+        ...(s.env   ? { env:   s.env   } : {}),
+      }])
+    ),
+  };
 }
