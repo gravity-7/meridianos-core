@@ -134,6 +134,31 @@ test('accepts the token via Authorization: Bearer as well as x-gateway-token', a
   assert.equal(res.status, 200);
 });
 
+// A claude-code (anthropic-wire) run sends its ANTHROPIC_API_KEY as the x-api-key header — 3.2d's
+// launcher wiring rewrites that env var to the minted gateway token, so the gateway must accept
+// the token riding on x-api-key too (see gateway/inject.mjs's applyGatewayInjection).
+test('accepts the token via x-api-key (the header claude-code/anthropic-wire sends its key on)', async () => {
+  const res = await fetch(`${gateway.url}/anthropic`, {
+    method: 'POST',
+    headers: { 'x-api-key': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  // The inbound x-api-key (the gateway TOKEN) must not leak upstream as-is — the gateway resolves
+  // and forwards the REAL provider key instead (buildForwardHeaders strips + re-adds x-api-key).
+  assert.equal(body.receivedHeaders.xApiKey, KEYS.TEST_ANTHROPIC_KEY);
+});
+
+test('x-gateway-token takes precedence over x-api-key when both are present', async () => {
+  const res = await fetch(`${gateway.url}/anthropic`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'x-api-key': 'bogus-should-be-ignored', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+});
+
 // ─── Anthropic wire ─────────────────────────────────────────────────────────
 
 test('anthropic wire: injects x-api-key, passes through client anthropic-version, meters usage', async () => {

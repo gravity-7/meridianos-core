@@ -350,6 +350,143 @@ test('launchAgent selects the opencode harness and writes opencode.json into the
   assert.equal(config.provider.deepseek.options.apiKey, '{env:DEEPSEEK_KEY}');
 });
 
+// ─── launchAgent gateway wiring (3.2d, opt-in, locked decision D4) ─────────
+// A stub run-registry that records call order (register/unregister) alongside a stub _spawn so
+// tests can assert "registered BEFORE spawn, unregistered AFTER" without a real gateway process.
+
+function makeStubRuns() {
+  const calls = [];
+  const store = new Map();
+  return {
+    calls,
+    registerRun(token, ctx) { calls.push({ op: 'register', token }); store.set(token, ctx); },
+    resolveRun(token) { return store.get(token) ?? null; },
+    unregisterRun(token) { calls.push({ op: 'unregister', token }); store.delete(token); },
+  };
+}
+
+test('launchAgent injects the gateway when config.gateway.enabled=true and the provider has an anthropic-wire route', async () => {
+  let captured = null;
+  const runs = makeStubRuns();
+  const fakeSpawn = async (cmd, args, opts) => {
+    runs.calls.push({ op: 'spawn' });
+    captured = { cmd, args, opts };
+    return { outcome: 'ok', note: 'stubbed' };
+  };
+  // A stub registry naming a route for 'deepseek' as an anthropic-wire route (the shape a real
+  // registry would carry for a BYO-key provider reached through the claude-code/anthropic-wire
+  // harness) — only `route.wire` is read by the launcher's gating logic; the real upstream
+  // resolution happens server-side in the gateway itself, not here.
+  const registry = { tenant: 'pv', routes: { deepseek: { upstreamUrl: 'https://api.deepseek.com/anthropic', wire: 'anthropic', keyEnv: 'DEEPSEEK_KEY' } } };
+  const gwConfig = { enabled: true, url: 'http://127.0.0.1:1234', runs, registry };
+  const cfgWithGateway = { ...cfg, gateway: gwConfig };
+
+  const session = 'itest' + Math.random().toString(36).slice(2, 6);
+  const task = { id: 'ZZ-harness-itest-gw', title: 'gateway wiring', status: 'ready-for-impl' };
+  const hadKey = Object.prototype.hasOwnProperty.call(process.env, 'DEEPSEEK_KEY');
+  const prevKey = process.env.DEEPSEEK_KEY;
+  process.env.DEEPSEEK_KEY = 'sk-real-should-never-reach-spawn-env';
+  try {
+    await launchAgent({ agent: 'claude', task, session, provider: deepseek(), harness: 'claude-code', _spawn: fakeSpawn, config: cfgWithGateway });
+  } finally {
+    if (hadKey) process.env.DEEPSEEK_KEY = prevKey;
+    else delete process.env.DEEPSEEK_KEY;
+  }
+
+  // The spawn env talks to the gateway, not the real upstream, and carries a MINTED token, never
+  // the real key.
+  assert.equal(captured.opts.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:1234');
+  assert.notEqual(captured.opts.env.ANTHROPIC_API_KEY, 'sk-real-should-never-reach-spawn-env');
+  assert.equal(typeof captured.opts.env.ANTHROPIC_API_KEY, 'string');
+  assert.ok(captured.opts.env.ANTHROPIC_API_KEY.length > 0);
+  // Everything else the claude-code adapter set (model-tier remaps, --bare, etc.) is preserved.
+  assert.ok(captured.args.includes('--bare'));
+  assert.equal(captured.opts.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'deepseek-chat');
+  assert.equal(captured.opts.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+
+  // The run was registered BEFORE the spawn and unregistered AFTER it, with the same token both
+  // times — never leaked past this run.
+  assert.equal(runs.calls.length, 3);
+  assert.equal(runs.calls[0].op, 'register');
+  assert.equal(runs.calls[1].op, 'spawn');
+  assert.equal(runs.calls[2].op, 'unregister');
+  assert.equal(runs.calls[0].token, runs.calls[2].token);
+  assert.equal(runs.calls[0].token, captured.opts.env.ANTHROPIC_API_KEY);
+  // resolveRun no longer finds it post-run.
+  assert.equal(runs.resolveRun(runs.calls[0].token), null);
+});
+
+test('launchAgent leaves a provider with no route (native anthropic) alone even when the gateway is enabled', async () => {
+  let captured = null;
+  const runs = makeStubRuns();
+  const fakeSpawn = async (cmd, args, opts) => { captured = { cmd, args, opts }; return { outcome: 'ok', note: 'stubbed' }; };
+  // No 'anthropic' entry in routes — mirrors the real setup where the native CLI-login provider
+  // has no BYO key and so no gateway route is generated for it.
+  const registry = { tenant: 'pv', routes: {} };
+  const gwConfig = { enabled: true, url: 'http://127.0.0.1:1234', runs, registry };
+  const session = 'itest' + Math.random().toString(36).slice(2, 6);
+  const task = { id: 'ZZ-harness-itest-gw-native', title: 'gateway wiring native bypass', status: 'ready-for-impl' };
+
+  await launchAgent({ agent: 'claude', model: 'claude-opus-4-8', task, session, _spawn: fakeSpawn, config: { ...cfg, gateway: gwConfig } });
+
+  assert.deepEqual(captured.opts.env, agentEnv(process.env, {}, cfg));
+  assert.equal(runs.calls.length, 0, 'no route ⇒ no injection ⇒ nothing registered/unregistered');
+});
+
+test('launchAgent leaves an openai-wire route alone even when the gateway is enabled (openai/opencode follow-up, 3.2d-ii)', async () => {
+  let captured = null;
+  const runs = makeStubRuns();
+  const fakeSpawn = async (cmd, args, opts) => {
+    captured = { cmd, args, opts, configContent: readFileSync(join(opts.cwd, 'opencode.json'), 'utf8') };
+    return { outcome: 'ok', note: 'stubbed' };
+  };
+  const registry = { tenant: 'pv', routes: { deepseek: { upstreamUrl: 'https://api.deepseek.com', wire: 'openai', keyEnv: 'DEEPSEEK_KEY' } } };
+  const gwConfig = { enabled: true, url: 'http://127.0.0.1:1234', runs, registry };
+  const session = 'itest' + Math.random().toString(36).slice(2, 6);
+  const task = { id: 'ZZ-harness-itest-gw-openai', title: 'gateway wiring openai bypass', status: 'ready-for-impl' };
+  const hadKey = Object.prototype.hasOwnProperty.call(process.env, 'DEEPSEEK_KEY');
+  const prevKey = process.env.DEEPSEEK_KEY;
+  process.env.DEEPSEEK_KEY = 'sk-test-opencode-gw';
+  try {
+    await launchAgent({ agent: 'claude', task, session, provider: deepseek(), harness: 'opencode', _spawn: fakeSpawn, config: { ...cfg, gateway: gwConfig } });
+  } finally {
+    if (hadKey) process.env.DEEPSEEK_KEY = prevKey;
+    else delete process.env.DEEPSEEK_KEY;
+  }
+
+  assert.equal(runs.calls.length, 0, 'openai wire is out of scope for 3.2d — left untouched');
+  const config = JSON.parse(captured.configContent);
+  assert.equal(config.provider.deepseek.options.apiKey, '{env:DEEPSEEK_KEY}', 'opencode.json still references the real BYO key literally, unrewritten');
+});
+
+test('launchAgent is byte-identical to the no-gateway path when config.gateway is entirely absent', async () => {
+  let capturedWithout = null;
+  let capturedAbsent = null;
+  const spawnCapture = (slot) => async (cmd, args, opts) => { slot.value = { cmd, args, opts }; return { outcome: 'ok', note: 'stubbed' }; };
+
+  const withoutSlot = {}; const absentSlot = {};
+  const sessionA = 'itest' + Math.random().toString(36).slice(2, 6);
+  const sessionB = 'itest' + Math.random().toString(36).slice(2, 6);
+  const taskA = { id: 'ZZ-harness-itest-gw-absent-a', title: 'no gateway key at all', status: 'ready-for-impl' };
+  const taskB = { id: 'ZZ-harness-itest-gw-absent-b', title: 'gateway key present but disabled', status: 'ready-for-impl' };
+
+  // (a) config has no `gateway` key whatsoever.
+  await launchAgent({ agent: 'claude', model: 'claude-opus-4-8', task: taskA, session: sessionA, _spawn: spawnCapture(withoutSlot), config: cfg });
+  capturedWithout = withoutSlot.value;
+
+  // (b) config.gateway is present but enabled: false (with an otherwise-live-looking registry).
+  const runs = makeStubRuns();
+  const disabledGwConfig = { enabled: false, url: 'http://127.0.0.1:1234', runs, registry: { tenant: 'pv', routes: { anthropic: { upstreamUrl: 'https://x', wire: 'anthropic', keyEnv: null } } } };
+  await launchAgent({ agent: 'claude', model: 'claude-opus-4-8', task: taskB, session: sessionB, _spawn: spawnCapture(absentSlot), config: { ...cfg, gateway: disabledGwConfig } });
+  capturedAbsent = absentSlot.value;
+
+  const baselineEnv = agentEnv(process.env, {}, cfg);
+  assert.deepEqual(capturedWithout.opts.env, baselineEnv);
+  assert.deepEqual(capturedAbsent.opts.env, baselineEnv);
+  assert.deepEqual(capturedWithout.opts.env, capturedAbsent.opts.env);
+  assert.equal(runs.calls.length, 0, 'gateway disabled ⇒ no registration ever happens, even with a live-looking registry');
+});
+
 // ─── launchAgent post-hoc usage capture (1.6) ───────────────────────────────
 
 test('launchAgent attaches tokens=null/usage=null when the harness genuinely has no usage recorded yet (never fabricated)', async () => {
