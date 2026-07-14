@@ -104,6 +104,13 @@ function resolveDomain(domain) {
     // tagToCategory — OPTIONAL extra { [riskTag]: category } entries MERGED OVER core's generic
     // TAG_TO_CATEGORY defaults in model-router.mjs (e.g. PV's 'money-math'/'payments' tags).
     tagToCategory: domain.tagToCategory,
+    // mcpServers — OPTIONAL MCP server definitions for spec/designing agents. Written as a
+    // per-worktree `.mcp.json` before spawning so agents can call external tools (Confluence,
+    // GitHub, Figma, etc.) during context-gathering stages. Never used for impl stages.
+    // Shape: Array<{name, command, args?, env?}>  — same servers for all context stages.
+    //     OR Object<stageName, Array<...>>         — e.g. { spec: [...], designing: [...] }
+    //        '*' key is a fallback for any unspecified stage.
+    mcpServers: domain.mcpServers,
   };
 }
 

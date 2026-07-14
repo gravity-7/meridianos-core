@@ -20,6 +20,6 @@
     "url": "git+https://github.com/gravity-7/meridianos-core.git"
   },
   "scripts": {
-    "test": "node --disable-warning=ExperimentalWarning --test \"tests/*.test.mjs\""
+    "test": "node --disable-warning=ExperimentalWarning --test \"tests/*.test.mjs\" \"gateway/tests/*.test.mjs\""
   }
 }

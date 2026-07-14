@@ -181,11 +181,42 @@ export async function runWatchdogTick(deps) {
       if (pc.promoted.length) {
         logger.log('planner', `promoted: ${pc.promoted.map(p => `${p.id} (${p.from}→${p.to})`).join(', ')}`);
         info(db, 'planner', 'promote', { promoted: pc.promoted });
+
+        // G2: non-blocking spec/design-complete pings — piggybacked on the existing escalation
+        // webhook (Discord/Slack). The system keeps flowing regardless; founder can optionally
+        // open the dashboard and bounce a task back one stage if unhappy with the output.
+        const port = cfg.dashboardPort ?? 4317;
+        const dashUrl = `http://localhost:${port}/`;
+        const stageNotifications = [
+          ...pc.promoted
+            .filter(p => p.from === 'spec' && p.to === 'designing')
+            .map(p => ({
+              id: `spec-done-${p.id}-${Date.now()}`,
+              level: 'info',
+              message: `📋 Spec ready: **${p.id}** — pipeline continues to design. Open the dashboard to review or bounce it back.`,
+              detail: dashUrl,
+            })),
+          ...pc.promoted
+            .filter(p => p.from === 'designing' && p.to === 'ready-for-impl')
+            .map(p => ({
+              id: `design-done-${p.id}-${Date.now()}`,
+              level: 'info',
+              message: `🎨 Design ready: **${p.id}** — moving to implementation. Open the dashboard to review or bounce it back.`,
+              detail: dashUrl,
+            })),
+        ];
+        if (stageNotifications.length > 0) {
+          // Fire-and-forget — .catch swallows failures so pipeline is never blocked by webhook errors
+          _pushEscalations(stageNotifications, { policy, config: cfg }).catch((e) => {
+            logger.log('escalation', `stage-notify push error: ${e?.message ?? String(e)}`);
+          });
+        }
       }
     } catch (plannerErr) {
       logger.error('planner', `cycle-error: ${plannerErr?.message ?? String(plannerErr)}`, plannerErr);
       logError(db, 'planner', 'cycle-error', { error: plannerErr?.message ?? String(plannerErr) });
     }
+
 
     // Push escalations via webhook. `h` is undefined if the watchdog tick
     // above threw, so guard rather than skipping the rest of the cycle.
