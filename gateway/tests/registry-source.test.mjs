@@ -61,29 +61,16 @@ test('buildProviderRegistry routes an anthropic-wire BYO provider via anthropicB
   });
 });
 
-// ─── enforcement derivation ─────────────────────────────────────────────────
+// ─── enforcement ─────────────────────────────────────────────────────────────
 
-test('buildProviderRegistry derives enforcement.default from agent_budget.default caps', () => {
-  const policy = { agent_budget: { default: { per_5h_tokens: 100000, per_week_tokens: 1000000 } } };
-  const reg = buildProviderRegistry({ policy, now: NOW });
-  assert.deepEqual(reg.enforcement, { default: { per5hTokens: 100000, perWeekTokens: 1000000 } });
-});
-
-test('buildProviderRegistry fills a missing cap field with null rather than fabricating it', () => {
-  const policy = { agent_budget: { default: { per_5h_tokens: 100000 } } };
-  const reg = buildProviderRegistry({ policy, now: NOW });
-  assert.deepEqual(reg.enforcement, { default: { per5hTokens: 100000, perWeekTokens: null } });
-});
-
-test('buildProviderRegistry omits enforcement entirely when no agent_budget.default caps are set', () => {
-  const policy = { agent_budget: { claude: { per_5h_tokens: 800000 } } };
-  const reg = buildProviderRegistry({ policy, now: NOW });
-  assert.equal('enforcement' in reg, false);
-});
-
-test('buildProviderRegistry omits enforcement when policy has no agent_budget at all', () => {
-  const reg = buildProviderRegistry({ policy: {}, now: NOW });
-  assert.equal('enforcement' in reg, false);
+// 3.4a deliberately derives NO enforcement section: per-agent budget caps
+// (policy.agent_budget.<agent>) are a different axis from the registry envelope's per-provider
+// `enforcement` block, and 3.3b computes per-agent verdicts from the ledger directly. Whether/how
+// caps travel in the pushed registry for a remote sidecar is a 3.4b decision.
+test('buildProviderRegistry never derives an enforcement section (per-agent caps are 3.3b/3.4b)', () => {
+  const perAgent = { agent_budget: { claude: { per_5h_tokens: 800000 }, antigravity: { per_5h_tokens: 500000 } } };
+  assert.equal('enforcement' in buildProviderRegistry({ policy: perAgent, now: NOW }), false);
+  assert.equal('enforcement' in buildProviderRegistry({ policy: {}, now: NOW }), false);
 });
 
 // ─── keyEnv guarantee — both halves ─────────────────────────────────────────

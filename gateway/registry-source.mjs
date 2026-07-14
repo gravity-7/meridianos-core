@@ -71,15 +71,12 @@ export function buildProviderRegistry({ policy, config, tenant = 'pv', version =
     routes,
   };
 
-  const caps = policy?.agent_budget?.default;
-  if (caps && typeof caps === 'object' && ('per_5h_tokens' in caps || 'per_week_tokens' in caps)) {
-    reg.enforcement = {
-      default: {
-        per5hTokens: caps.per_5h_tokens ?? null,
-        perWeekTokens: caps.per_week_tokens ?? null,
-      },
-    };
-  }
+  // NOTE: no `enforcement` section is derived here. The primary budget lever is PER-AGENT
+  // (5h/weekly caps keyed by agent in policy.agent_budget.<agent>), which 3.3b computes from the
+  // ledger directly. The registry envelope's `enforcement` block is a distinct PER-PROVIDER lever
+  // (see provider-registry.mjs), so mapping per-agent caps onto it would be the wrong axis. How (or
+  // whether) per-agent caps travel in the pushed registry for a remote Model-B sidecar is decided in
+  // 3.4b, when the push/pull path is built — not guessed here.
 
   assertKeyEnvGuarantee(reg);
   validateProviderRegistry(reg);
