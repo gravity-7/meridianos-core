@@ -68,12 +68,15 @@ const TIER_TO_EFFORT = { simple: 'low', medium: 'medium', medium_high: 'high', c
  * live daemon's native-Anthropic behavior (and its byte-parity test) untouched — a separate,
  * deliberate decision if ever wanted there too.
  */
-function claudeCodeAdapter({ prompt, model, session, provider, tier }) {
+function claudeCodeAdapter({ prompt, model, session, provider, tier, mcpConfigPath }) {
   const isNativeAnthropic = provider?.baseUrl === null && provider?.keyEnv === null;
   const args = ['-p', prompt, '--permission-mode', 'auto'];
-  if (model) args.push('--model', model);
-  if (session) args.push('--session-id', session);
+  if (model)         args.push('--model', model);
+  if (session)       args.push('--session-id', session);
   if (!isNativeAnthropic) args.push('--bare');
+  // G3: MCP config is written into the worktree by launchAgent for spec/designing stages.
+  // Pass --mcp-config only when present so impl-stage runs are byte-identical to before.
+  if (mcpConfigPath) args.push('--mcp-config', mcpConfigPath);
   return { cmd: 'claude', args, env: claudeCodeEnv(provider, isNativeAnthropic, tier), files: [] };
 }
 
@@ -106,10 +109,12 @@ function claudeCodeEnv(provider, isNativeAnthropic, tier) {
  * branch (parity, no behavior change). Antigravity doesn't take a `--session-id` flag; it takes
  * `--conversation` instead.
  */
-function antigravityAdapter({ prompt, model, session }) {
+function antigravityAdapter({ prompt, model, session, mcpConfigPath }) {
   const args = ['-p', prompt, '--dangerously-skip-permissions', '--print-timeout', '30m'];
-  if (model) args.push('--model', model);
-  if (session) args.push('--conversation', session);
+  if (model)         args.push('--model', model);
+  if (session)       args.push('--conversation', session);
+  // G3: same MCP wiring as claude-code — agy also accepts --mcp-config for server connections.
+  if (mcpConfigPath) args.push('--mcp-config', mcpConfigPath);
   return { cmd: 'agy', args, env: {}, files: [] };
 }
 

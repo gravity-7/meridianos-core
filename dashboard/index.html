@@ -580,6 +580,10 @@ button:active { transform: translateY(0); box-shadow: none; }
     <div class="modal-foot">
       <button id="specSave">Save</button>
       <button id="specCancel">Close</button>
+      <!-- G2: Bounce — sends the task one stage back so the agent gets another pass.
+           The system re-picks it automatically; founder only needs to click this if
+           the spec/design output needs rework. -->
+      <button id="specBounce" style="background:transparent;color:var(--text-warning);border:1px solid rgba(237,161,0,.4);display:none" title="Send back one stage for the agent to redo">↩ Bounce</button>
       <span id="specStatus" style="font-size:12px;color:var(--text-muted)"></span>
     </div>
   </div>
@@ -1110,12 +1114,18 @@ let specDirty=false;
 // with "new file — type your spec and hit Save" (queue cards, which pass neither, are unchanged).
 async function openSpec(id, path, reason, taskStatus, taskOwner){
   const overlay=$('specOverlay'), ta=$('specTextarea'), status=$('specStatus'), summary=$('specSummary'), saveBtn=$('specSave');
+  const bounceBtn=$('specBounce');
   $('specTitle').textContent=id; $('specPath').textContent=path;
   const reasonEl=$('specReason'), reasonText=$('specReasonText');
   if(reason){ reasonText.textContent=reason; reasonEl.style.display='block'; } else { reasonEl.style.display='none'; }
   status.textContent=''; specDirty=false; overlay.style.display='flex';
   const hasTaskInfo = !!(taskStatus || taskOwner);
   summary.style.display='none'; ta.style.display=''; saveBtn.style.display='';
+  // G2: show Bounce button only for stages the agent can be re-run on
+  const bounceable = new Set(['spec','designing','ready-for-impl','in-review']);
+  if(bounceBtn) bounceBtn.style.display = (taskStatus && bounceable.has(taskStatus)) ? '' : 'none';
+  if(bounceBtn) bounceBtn.dataset.taskId = id;
+  if(bounceBtn) bounceBtn.dataset.taskStatus = taskStatus || '';
   ta.value='loading…'; ta.disabled=true;
   try{
     const r=await fetch('/api/spec?path='+encodeURIComponent(path));
@@ -1158,6 +1168,16 @@ $('specTextarea').addEventListener('input',()=>{ specDirty=true; });
 $('specClose').addEventListener('click',closeSpec);
 $('specCancel').addEventListener('click',closeSpec);
 $('specSave').addEventListener('click',saveSpec);
+// G2: Bounce button — sends the task one stage back for the agent to redo
+$('specBounce').addEventListener('click', async function() {
+  const id = this.dataset.taskId;
+  const status = this.dataset.taskStatus;
+  if (!id) return;
+  const reason = prompt(`Why bouncing ${id} (${status}) back? (optional — leave blank to skip)`) ?? '';
+  if (reason === null) return; // cancelled
+  const r = await postAction('/api/task', { id, action: 'bounce', reason: reason || undefined });
+  if (r && r.ok) { closeSpec(); } else { $('specStatus').textContent = 'bounce failed: ' + (r?.error || 'unknown'); }
+});
 $('specOverlay').addEventListener('click',(e)=>{ if(e.target.id==='specOverlay') closeSpec(); });
 document.addEventListener('keydown',(e)=>{ if(e.key==='Escape' && $('specOverlay').style.display==='flex') closeSpec(); });
 function renderRuns(runs){

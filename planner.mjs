@@ -8,10 +8,10 @@
  * acceptProposals() promotes them into the state machine (proposed → spec). plannerStatus()
  * emits the dashboard `planner` payload. Pure over an injected `db`.
  */
-import { listTasks, getTask, upsertTask, transition as stateTransition, parseJsonArray } from './state.mjs';
+import { getTask, upsertTask, listTasks, transition as stateTransition, parseJsonArray } from './state.mjs';
 import { loadPolicy } from './budget.mjs';
+import { meetsSpecEntry, meetsDefinitionOfReady } from './definition-of-ready.mjs';
 import { effectiveRiskTags, sensitiveBlock, describeBlocks, isFounderApproved } from './sensitive.mjs';
-import { meetsDefinitionOfReady } from './definition-of-ready.mjs';
 
 const sep = (childId, parentId) => childId !== parentId && (childId.startsWith(`${parentId}.`) || childId.startsWith(`${parentId}-`));
 
@@ -200,29 +200,39 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
       ).get(...deps).c;
       if (doneCount < deps.length) continue;
     }
-    // Definition of Ready gate: a thin/placeholder story is NOT auto-promoted. Leave it in
-    // `proposed`, tag it so the founder/decomposer can see WHY, and move on — the pipeline only
-    // ever works well-formed stories (see .ai/scrum.md).
+    // Tier-1 DoR gate: minimal check (title + owner). The spec agent is responsible for
+    // writing full ACs, user-story statement, and complexity back to the task DB row.
+    // A thin one-liner story now enters the pipeline so the spec agent can flesh it out.
+    const entry = meetsSpecEntry(t);
+    if (!entry.ready) {
+      const note = `not ready: ${entry.reasons.join('; ')}`.slice(0, 240);
+      if (t.note !== note) {
+        try { db.prepare('UPDATE tasks SET note=?, updated_at=? WHERE id=?').run(note, nowIso, t.id); } catch { /* skip */ }
+      }
+      skippedNotReady.push({ id: t.id, reasons: entry.reasons });
+      continue;
+    }
+    try {
+      stateTransition(db, { taskId: t.id, to: 'spec', actor: 'planner', note: 'auto-promoted (spec-entry met)', now: nowIso });
+      promoted.push({ id: t.id, from: 'proposed', to: 'spec' });
+    } catch { /* blocked or illegal — skip */ }
+  }
+
+  for (const t of tasks.filter(t => t.status === 'spec' && t.spec)) {
+    // Tier-2 DoR gate: full check before entering the design stage. By the time the spec file
+    // exists, the spec agent should have called `update-task` to write ACs + complexity back.
+    // If it hasn't, leave the task in `spec` (runner will retry the spec agent next cycle).
     const dor = meetsDefinitionOfReady(t);
     if (!dor.ready) {
-      const note = `not ready: ${dor.reasons.join('; ')}`.slice(0, 240);
+      const note = `spec needs work: ${dor.reasons.join('; ')}`.slice(0, 240);
       if (t.note !== note) {
-        // Surgical note-only update: upsertTask would rewrite risk_tags/resources/depends_on from
-        // the partial object and wipe them (they'd default to []). Only the note changes here.
         try { db.prepare('UPDATE tasks SET note=?, updated_at=? WHERE id=?').run(note, nowIso, t.id); } catch { /* skip */ }
       }
       skippedNotReady.push({ id: t.id, reasons: dor.reasons });
       continue;
     }
     try {
-      stateTransition(db, { taskId: t.id, to: 'spec', actor: 'planner', note: 'auto-promoted (DoR met)', now: nowIso });
-      promoted.push({ id: t.id, from: 'proposed', to: 'spec' });
-    } catch { /* blocked or illegal — skip */ }
-  }
-
-  for (const t of tasks.filter(t => t.status === 'spec' && t.spec)) {
-    try {
-      stateTransition(db, { taskId: t.id, to: 'designing', actor: 'planner', note: 'spec exists — fast-tracked', now: nowIso });
+      stateTransition(db, { taskId: t.id, to: 'designing', actor: 'planner', note: 'spec complete (DoR met) — fast-tracked', now: nowIso });
       promoted.push({ id: t.id, from: 'spec', to: 'designing' });
     } catch { /* skip */ }
   }

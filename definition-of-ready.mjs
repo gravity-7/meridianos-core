@@ -1,9 +1,17 @@
 /**
- * definition-of-ready — the DoR gate (see .ai/scrum.md). A user story may only enter the sprint
- * pipeline (proposed → spec) once it is well-formed: a real user-story statement plus enough
- * testable acceptance criteria for an agent to implement it unambiguously. This is what stops the
- * thin one-liner stories ("- Visual quota tracker in UI") from being auto-promoted and worked half-
- * understood. Pure — inspects a task row and returns a verdict.
+ * definition-of-ready — two-tier DoR gate (see .ai/scrum.md).
+ *
+ * Tier 1 — `meetsSpecEntry` (gates proposed → spec):
+ *   Minimal bar — just a real title and an assigned owner. The spec agent is responsible
+ *   for writing the full acceptance criteria, complexity, and user-story statement into the
+ *   task row (via `cli.mjs update-task`) as part of its spec work.
+ *
+ * Tier 2 — `meetsDefinitionOfReady` (gates spec → designing):
+ *   Full bar — by this point the spec agent has run, so the task must carry a real user-story
+ *   statement, ≥2 testable ACs, a complexity estimate, and an owner. If it still doesn't,
+ *   the planner leaves the task in `spec` with a note so the runner retries the spec agent.
+ *
+ * Pure — inspects a task row and returns a verdict.
  */
 import { parseJsonArray } from './state.mjs';
 
@@ -29,8 +37,25 @@ export function hasUserStoryStatement(task) {
 }
 
 /**
- * Evaluate a story against the Definition of Ready. Returns { ready, reasons[] }.
- * Non-story tasks (epics/features) are containers — they are always "ready" (not gated here).
+ * Tier 1 gate: is this story ready to ENTER the spec stage?
+ * Intentionally minimal — the spec agent will fill in the rest.
+ * Non-story tasks (epics/features) are containers — always ready.
+ */
+export function meetsSpecEntry(task) {
+  if (task.type && task.type !== 'story') return { ready: true, reasons: [] };
+  const reasons = [];
+  if (!task.title || PLACEHOLDER.test(task.title.trim()))
+    reasons.push('title is a placeholder — give it a real name before the spec agent can work it');
+  if (!task.owner)
+    reasons.push('no owner assigned (claude | antigravity | both)');
+  return { ready: reasons.length === 0, reasons };
+}
+
+/**
+ * Tier 2 gate: does this story meet the full Definition of Ready?
+ * Gates spec → designing. By this point the spec agent should have written
+ * proper ACs and complexity back to the task via `cli.mjs update-task`.
+ * Non-story tasks (epics/features) are containers — always ready.
  */
 export function meetsDefinitionOfReady(task, { minCriteria = 2 } = {}) {
   if (task.type && task.type !== 'story') return { ready: true, reasons: [] };
