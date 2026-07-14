@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openLedger, appendEvent } from '../ledger.mjs';
 import { makeTokenEvent } from '../token-event.mjs';
-import { agentBudgetVerdict, toEnforcementDecision } from '../windows.mjs';
+import { agentBudgetVerdict, toEnforcementDecision, makeCheckVerdict } from '../windows.mjs';
 
 const NOW = Date.parse('2026-01-10T12:00:00.000Z');
 const H5 = 5 * 60 * 60 * 1000;
@@ -150,4 +150,46 @@ test('toEnforcementDecision: end-to-end halt from agentBudgetVerdict maps throug
   const policy = policyWith({ per_5h_tokens: 1000, per_week_tokens: 5000 });
   const v = agentBudgetVerdict(ledger, { agent: 'claude', now: NOW, policy });
   assert.deepEqual(toEnforcementDecision(v), { decision: 'deny', capWindow: '5h' });
+});
+
+// ─── makeCheckVerdict ────────────────────────────────────────────────────────
+
+test('makeCheckVerdict: returns deny when the agent is over its cap in a seeded ledger', () => {
+  const ledger = openLedger(':memory:');
+  appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 1000 }));
+  const policy = policyWith({ per_5h_tokens: 1000, per_week_tokens: 5000 });
+  const checkVerdict = makeCheckVerdict({ ledger, policy, now: () => NOW });
+  const result = checkVerdict({ tenant: 'pv', agent: 'claude' });
+  assert.deepEqual(result, { decision: 'deny', capWindow: '5h' });
+});
+
+test('makeCheckVerdict: returns allow when the agent is under its cap in a seeded ledger', () => {
+  const ledger = openLedger(':memory:');
+  appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 100 }));
+  const policy = policyWith({ per_5h_tokens: 1000, per_week_tokens: 5000 });
+  const checkVerdict = makeCheckVerdict({ ledger, policy, now: () => NOW });
+  const result = checkVerdict({ tenant: 'pv', agent: 'claude' });
+  assert.deepEqual(result, { decision: 'allow', capWindow: null });
+});
+
+test('makeCheckVerdict: re-evaluates now() on every call (fresh spend each request)', () => {
+  const ledger = openLedger(':memory:');
+  // Event is fresh relative to NOW, but will have aged out of the 5h window by NOW + 6h.
+  appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 1000 }));
+  const policy = policyWith({ per_5h_tokens: 1000, per_week_tokens: 5000 });
+  let clock = NOW;
+  const checkVerdict = makeCheckVerdict({ ledger, policy, now: () => clock });
+
+  assert.deepEqual(checkVerdict({ tenant: 'pv', agent: 'claude' }), { decision: 'deny', capWindow: '5h' });
+
+  clock = NOW + 6 * 60 * 60 * 1000; // 6h later: event has aged out of the 5h window
+  assert.deepEqual(checkVerdict({ tenant: 'pv', agent: 'claude' }), { decision: 'allow', capWindow: null });
+});
+
+test('makeCheckVerdict: scopes by ctx.agent (a different agent with no events gets allow)', () => {
+  const ledger = openLedger(':memory:');
+  appendEvent(ledger, evt({ agent: 'claude', ts: new Date(NOW - 60_000).toISOString(), totalTokens: 1000 }));
+  const policy = { agent_budget: { claude: { per_5h_tokens: 1000, per_week_tokens: 5000 }, other: { per_5h_tokens: 1000, per_week_tokens: 5000 } } };
+  const checkVerdict = makeCheckVerdict({ ledger, policy, now: () => NOW });
+  assert.deepEqual(checkVerdict({ tenant: 'pv', agent: 'other' }), { decision: 'allow', capWindow: null });
 });

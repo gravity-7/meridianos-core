@@ -14,6 +14,13 @@ let gateway;
 let runs;
 let events;
 
+// ─── Enforcement (bite 3.2c): a SECOND gateway sharing the same registry/runs, but with a
+// controllable `checkVerdict` stub (the main `gateway` above keeps the always-allow default, so
+// every test above this comment is unaffected by anything below it). ───────────────────────────
+let gatewayEnf;
+let eventsEnf;
+let verdictMode = { decision: 'allow', capWindow: null };
+
 const KEYS = { TEST_ANTHROPIC_KEY: 'sk-ant-test', TEST_DEEPSEEK_KEY: 'sk-openai-test' };
 
 function readBody(req) {
@@ -100,10 +107,22 @@ before(async () => {
     resolveKey: (k) => (k ? KEYS[k] : undefined),
     now: () => Date.now(),
   });
+
+  eventsEnf = [];
+  gatewayEnf = await startGateway({
+    port: 0,
+    registry,
+    runs, // shared with `gateway` — the runs map is just data, not bound to one gateway instance
+    onTokenEvent: (evt) => eventsEnf.push(evt),
+    resolveKey: (k) => (k ? KEYS[k] : undefined),
+    now: () => Date.now(),
+    checkVerdict: (ctx) => verdictMode,
+  });
 });
 
 after(async () => {
   await gateway.close();
+  await gatewayEnf.close();
   await new Promise((resolve) => stub.close(resolve));
 });
 
@@ -302,4 +321,130 @@ test('502 + a null-usage token-event when the upstream response body cannot be p
   assert.equal(evt.upstreamStatus, 200);
   assert.equal(evt.inputTokens, null);
   assert.equal(evt.totalTokens, null);
+});
+
+// ─── Enforcement (bite 3.2c) ────────────────────────────────────────────────
+// Uses `gatewayEnf`, the second gateway instance whose `checkVerdict` reads the mutable
+// `verdictMode` set in each test below. `gateway` (the always-allow default) is untouched by any
+// of this, proving the default stays permissive.
+
+test('deny verdict: anthropic wire gets a 429 in anthropic error-shape, upstream never hit, null-usage event emitted', async () => {
+  verdictMode = { decision: 'deny', capWindow: '5h' };
+  const startCount = eventsEnf.length;
+  const res = await fetch(`${gatewayEnf.url}/anthropic`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+  });
+  assert.equal(res.status, 429);
+  const body = await res.json();
+  assert.deepEqual(body, { type: 'error', error: { type: 'rate_limit_error', message: 'gateway: over budget (5h)' } });
+
+  assert.equal(eventsEnf.length, startCount + 1);
+  const evt = eventsEnf.at(-1);
+  assert.equal(evt.enforcementDecision, 'deny');
+  assert.equal(evt.capWindow, '5h');
+  assert.equal(evt.upstreamStatus, null);
+  assert.equal(evt.inputTokens, null);
+  assert.equal(evt.outputTokens, null);
+  assert.equal(evt.cacheReadTokens, null);
+  assert.equal(evt.cacheWriteTokens, null);
+  assert.equal(evt.totalTokens, null);
+  assert.equal(typeof evt.latencyMs, 'number');
+  verdictMode = { decision: 'allow', capWindow: null };
+});
+
+test('deny verdict: openai wire gets a 429 in openai error-shape, upstream never hit, null-usage event emitted', async () => {
+  verdictMode = { decision: 'deny', capWindow: 'week' };
+  const startCount = eventsEnf.length;
+  const res = await fetch(`${gatewayEnf.url}/openai`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-deepseek' },
+    body: '{}',
+  });
+  assert.equal(res.status, 429);
+  const body = await res.json();
+  assert.deepEqual(body, {
+    error: { message: 'gateway: over budget (week)', type: 'rate_limit_exceeded', code: 'over_budget' },
+  });
+
+  assert.equal(eventsEnf.length, startCount + 1);
+  const evt = eventsEnf.at(-1);
+  assert.equal(evt.enforcementDecision, 'deny');
+  assert.equal(evt.capWindow, 'week');
+  assert.equal(evt.upstreamStatus, null);
+  assert.equal(evt.totalTokens, null);
+  verdictMode = { decision: 'allow', capWindow: null };
+});
+
+test('deny verdict: the upstream is genuinely never contacted (a deny on a dead-address route still returns 429, not 502)', async () => {
+  verdictMode = { decision: 'deny', capWindow: '5h' };
+  // 'tok-network-fail' points at the 'deadroute' route, whose upstreamUrl is an address nothing
+  // listens on (http://127.0.0.1:1). If the gateway forwarded despite the deny, the connection
+  // failure would surface as a 502 (see the "upstream network failure" test above) — a 429 here
+  // is only possible if the request never left the gateway.
+  const res = await fetch(`${gatewayEnf.url}/anything`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-network-fail' },
+    body: '{}',
+  });
+  assert.equal(res.status, 429);
+  const body = await res.json();
+  assert.equal(body.error.type, 'rate_limit_exceeded');
+  verdictMode = { decision: 'allow', capWindow: null };
+});
+
+test('allow verdict: forwards normally and stamps the event with the real decision', async () => {
+  verdictMode = { decision: 'allow', capWindow: null };
+  const startCount = eventsEnf.length;
+  const res = await fetch(`${gatewayEnf.url}/anthropic`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.id, 'msg_1');
+
+  assert.equal(eventsEnf.length, startCount + 1);
+  const evt = eventsEnf.at(-1);
+  assert.equal(evt.enforcementDecision, 'allow');
+  assert.equal(evt.capWindow, null);
+  assert.equal(evt.upstreamStatus, 200);
+  assert.equal(evt.inputTokens, 10);
+});
+
+test('checkVerdict is called exactly once per request (no double ledger query)', async () => {
+  let calls = 0;
+  const runsOnce = createRunRegistry();
+  runsOnce.registerRun('tok-once', { tenant: 'pv', agent: 'claude', session: 'sOnce', task: null, runId: null, provider: 'anthropic', model: 'claude-sonnet-5', tier: 'medium' });
+  const gatewayOnce = await startGateway({
+    port: 0,
+    registry: {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      tenant: 'pv',
+      providers: { anthropic: PROVIDERS.anthropic },
+      routes: { anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' } },
+    },
+    runs: runsOnce,
+    onTokenEvent: () => {},
+    resolveKey: (k) => (k ? KEYS[k] : undefined),
+    now: () => Date.now(),
+    checkVerdict: () => {
+      calls += 1;
+      return { decision: 'allow', capWindow: null };
+    },
+  });
+  try {
+    const res = await fetch(`${gatewayOnce.url}/anthropic`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': 'tok-once', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(calls, 1);
+  } finally {
+    await gatewayOnce.close();
+  }
 });
