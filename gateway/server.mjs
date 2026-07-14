@@ -24,9 +24,15 @@ import { makeTokenEvent, validateTokenEvent } from './token-event.mjs';
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 const HOP_BY_HOP_HEADERS = ['host', 'connection', 'authorization', 'x-api-key', 'x-gateway-token', 'content-length', 'transfer-encoding'];
 
+// Order: x-gateway-token, then x-api-key, then Authorization: Bearer. The x-api-key path exists
+// because a claude-code (anthropic-wire) run's gateway token rides on the SAME header the
+// Anthropic client already sends its API key on (see harness-adapters.mjs's claudeCodeEnv +
+// gateway/inject.mjs's applyGatewayInjection, which sets ANTHROPIC_API_KEY to the minted token).
 function extractToken(req) {
   const direct = req.headers['x-gateway-token'];
   if (typeof direct === 'string' && direct.length > 0) return direct;
+  const apiKey = req.headers['x-api-key'];
+  if (typeof apiKey === 'string' && apiKey.length > 0) return apiKey;
   const auth = req.headers['authorization'];
   if (typeof auth === 'string') {
     const m = /^Bearer\s+(.+)$/i.exec(auth);

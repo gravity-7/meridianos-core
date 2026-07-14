@@ -23,6 +23,8 @@ import { resolveProvider } from './providers.mjs';
 import { buildSpawnPlan, resolveOpencodeCmd } from './harness-adapters.mjs';
 import { readUsage } from './usage-readers.mjs';
 import { classifyExit } from './exit-classify.mjs';
+import { resolveRoute } from './gateway/provider-registry.mjs';
+import { applyGatewayInjection } from './gateway/inject.mjs';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 min — matches default lease TTL
 
@@ -206,6 +208,17 @@ export function spawnAndWait(cmd, args, { config, cwd = config.repoRoot, timeout
  * agent opened but forgot to record ("exited ok but did not transition").
  * `config` is the injected AiosConfig (REQUIRED), threaded to buildPrompt's domain-governance
  * "Rules" section.
+ *
+ * Gateway wiring (3.2d, OPT-IN, locked decision D4): `config.gateway` is an OPTIONAL
+ * `{ enabled, url, runs, registry }`. Absent, or `enabled !== true`, means do NOTHING — the spawn
+ * env is byte-identical to before the gateway existed. When enabled, a run is only ever rewritten
+ * to talk to the gateway when its provider ALSO resolves to a route in `config.gateway.registry`
+ * (`resolveRoute`) AND that route's wire is `'anthropic'` — a native-anthropic provider has no
+ * route (nothing in `registry.routes` names it) and so correctly bypasses the gateway, keeping
+ * today's CLI-login path; a BYO-key openai-wire provider (opencode) has a route but the wrong
+ * wire, and is left alone too (documented follow-up, 3.2d-ii — see gateway/inject.mjs). The
+ * gateway token is registered in `config.gateway.runs` BEFORE the spawn and unregistered in a
+ * `finally` AFTER it, so a token never outlives its run.
  * Returns a Promise<{outcome, note, reason, tokens, usage, branch}>.
  */
 export async function launchAgent({ agent, model, task, session, provider, harness, tier, _spawn = spawnAndWait, config }) {
@@ -230,11 +243,41 @@ export async function launchAgent({ agent, model, task, session, provider, harne
     }
 
     const plan = buildSpawnPlan(harnessName, { prompt, model, session, provider: resolvedProvider, worktreePath: wt.path, tier, mcpConfigPath });
-    for (const file of plan.files ?? []) writePlanFile(wt.path, file);
-    const env = { ...agentEnv(process.env, {}, config), ...plan.env };
-    const result = await _spawn(plan.cmd, plan.args, { cwd: wt.path, env });
-    const usage = readUsage(harnessName, { agent, model, task, session, provider: resolvedProvider, harness: harnessName, worktreePath: wt.path }, result);
-    return { ...result, tokens: usage?.totalTokens ?? null, usage, branch: wt.branch };
+
+    // Gateway wiring (3.2d) — opt-in only; see the doc comment above. `gwConfig` absent or
+    // `enabled !== true` means `finalPlan === plan` and `gatewayToken` stays null, so the rest of
+    // this function runs byte-identical to before the gateway existed.
+    const gwConfig = config.gateway;
+    let finalPlan = plan;
+    let gatewayToken = null;
+    if (gwConfig?.enabled === true) {
+      const route = resolveRoute(gwConfig.registry, resolvedProvider?.name);
+      if (route?.wire === 'anthropic') {
+        const ctx = {
+          tenant: gwConfig.registry?.tenant,
+          agent,
+          session,
+          task: task.id,
+          runId: session ?? null,
+          provider: resolvedProvider.name,
+          model,
+          tier,
+        };
+        const injected = applyGatewayInjection({ plan, route, ctx, gatewayUrl: gwConfig.url, runs: gwConfig.runs });
+        finalPlan = injected.plan;
+        gatewayToken = injected.token;
+      }
+    }
+
+    for (const file of finalPlan.files ?? []) writePlanFile(wt.path, file);
+    const env = { ...agentEnv(process.env, {}, config), ...finalPlan.env };
+    try {
+      const result = await _spawn(finalPlan.cmd, finalPlan.args, { cwd: wt.path, env });
+      const usage = readUsage(harnessName, { agent, model, task, session, provider: resolvedProvider, harness: harnessName, worktreePath: wt.path }, result);
+      return { ...result, tokens: usage?.totalTokens ?? null, usage, branch: wt.branch };
+    } finally {
+      if (gatewayToken) gwConfig.runs.unregisterRun(gatewayToken);
+    }
   } finally {
     try { wt.cleanup(); } catch { /* best-effort */ }
   }
