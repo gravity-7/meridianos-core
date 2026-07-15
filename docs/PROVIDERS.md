@@ -84,21 +84,23 @@ gateway (a real call metered exactly: 9 in / 1 out / 10 total). Cheap, Anthropic
   `Authorization: Bearer`. For a dogfood, put `DEEPSEEK_KEY=sk-...` in the gitignored PV `.env`.
 - **Harness fit:** `claude-code` (via `anthropicBaseUrl`) **and** `opencode` (via `baseUrl`, OpenAI
   wire + a generated `opencode.json`).
-- **Models & tiers** (`providers.mjs`, **legacy names — see migration below**): `simple`/`medium`/
-  `medium_high` = `deepseek-chat`, `complex`/`critical` = `deepseek-reasoner`.
-- **⚠️ Model migration (ACTION NEEDED).** As of DeepSeek's docs (July 2026) the lineup is now
-  **`deepseek-v4-flash`** and **`deepseek-v4-pro`**; the legacy **`deepseek-chat` / `deepseek-reasoner`
-  names are deprecated (per docs, ~July 24 2026)** and map to v4-flash's non-thinking / thinking
-  modes. MeridianOS still registers the legacy names in `providers.mjs` + `pricing.json`. **Before
-  the deprecation date, update both** (`deepseek-chat`→`deepseek-v4-flash`, add `deepseek-v4-pro`).
-  Verify against https://api-docs.deepseek.com/quick_start/pricing before changing.
+- **Models & tiers** (`providers.mjs`): `simple`/`medium`/`medium_high` = `deepseek-v4-flash`,
+  `complex`/`critical` = `deepseek-v4-pro`.
+- **Model migration (completed 2026-07-15).** DeepSeek deprecated the legacy `deepseek-chat` /
+  `deepseek-reasoner` model IDs (per docs, ~July 24 2026) in favor of **`deepseek-v4-flash`** and
+  **`deepseek-v4-pro`**; in v4, "thinking mode" is a request parameter rather than a distinct model
+  ID, so there's no 1:1 rename for the old reasoner tiers. The founder decided a capability-tiered
+  mapping: `simple`/`medium`/`medium_high` → `deepseek-v4-flash` (the three lower tiers), `complex`/
+  `critical` → `deepseek-v4-pro`. `providers.mjs` was updated accordingly.
+  Verify against https://api-docs.deepseek.com/quick_start/pricing before changing further.
 - **Pricing** (USD / 1M tokens):
   | Model | Input | Output | Context | Max out |
   |---|---|---|---|---|
-  | deepseek-v4-flash (= legacy deepseek-chat) | 0.14 | 0.28 | 1M | 384K |
+  | deepseek-v4-flash | 0.14 | 0.28 | 1M | 384K |
   | deepseek-v4-pro | 0.435 | 0.87 | 1M | 384K |
-  `pricing.json` currently tracks the legacy names at 0.14 / 0.28 (cached-input 0.0028) — accurate
-  for v4-flash. Sourced via **models.dev** (see [PRICING.md](./PRICING.md)).
+  `pricing.json` now tracks `deepseek-v4-flash` at 0.14 / 0.28 (cached-input 0.0028) and
+  `deepseek-v4-pro` at 0.435 / 0.87 (cached-input 0.003625). Sourced via **models.dev** (see
+  [PRICING.md](./PRICING.md)).
 - **Streaming & keep-alive:** OpenAI-wire streaming puts `usage` in the terminal chunk (when the
   client sends `stream_options: {include_usage: true}`); Anthropic-wire uses standard Anthropic SSE.
   DeepSeek sends **SSE `: keep-alive` comment lines** during long inference — our SSE tracker

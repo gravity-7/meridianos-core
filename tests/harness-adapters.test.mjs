@@ -97,9 +97,9 @@ test('claude-code + deepseek: resolves the /anthropic endpoint, reads the BYO ke
 test('claude-code + deepseek: remaps all three model tiers so internal Claude Code calls never fall back to paid Anthropic', () => {
   withEnv('DEEPSEEK_KEY', 'sk-test-123', () => {
     const plan = buildSpawnPlan('claude-code', { prompt: 'x', provider: deepseek() });
-    assert.equal(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'deepseek-chat');
-    assert.equal(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'deepseek-chat');
-    assert.equal(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'deepseek-reasoner');
+    assert.equal(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'deepseek-v4-flash');
+    assert.equal(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'deepseek-v4-flash');
+    assert.equal(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'deepseek-v4-pro');
   });
 });
 
@@ -210,7 +210,7 @@ test('opencode + openrouter: writes opencode.json for the openrouter endpoint', 
 
 test('opencode falls back to the provider\'s medium-tier model when none is given', () => {
   const plan = buildSpawnPlan('opencode', { prompt: 'x', provider: deepseek() });
-  assert.ok(plan.args.includes('deepseek/deepseek-chat'));
+  assert.ok(plan.args.includes('deepseek/deepseek-v4-flash'));
 });
 
 test('opencode pins env.PWD to worktreePath when given (opencode trusts inherited PWD over its real cwd)', () => {
@@ -303,9 +303,9 @@ test('launchAgent wires a third-party provider through an explicit harness', asy
   assert.equal(captured.opts.env.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
   assert.equal(captured.opts.env.ANTHROPIC_API_KEY, 'sk-test-456');
   assert.ok(captured.args.includes('--bare'));
-  assert.equal(captured.opts.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'deepseek-chat');
-  assert.equal(captured.opts.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'deepseek-chat');
-  assert.equal(captured.opts.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'deepseek-reasoner');
+  assert.equal(captured.opts.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'deepseek-v4-flash');
+  assert.equal(captured.opts.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'deepseek-v4-flash');
+  assert.equal(captured.opts.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'deepseek-v4-pro');
   assert.equal(captured.opts.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
   assert.equal(captured.opts.env.CLAUDE_CODE_EFFORT_LEVEL, 'xhigh', "tier 'complex' -> effort 'xhigh'");
 });
@@ -401,7 +401,7 @@ test('launchAgent injects the gateway when config.gateway.enabled=true and the p
   assert.ok(captured.opts.env.ANTHROPIC_API_KEY.length > 0);
   // Everything else the claude-code adapter set (model-tier remaps, --bare, etc.) is preserved.
   assert.ok(captured.args.includes('--bare'));
-  assert.equal(captured.opts.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'deepseek-chat');
+  assert.equal(captured.opts.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'deepseek-v4-flash');
   assert.equal(captured.opts.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
 
   // The run was registered BEFORE the spawn and unregistered AFTER it, with the same token both

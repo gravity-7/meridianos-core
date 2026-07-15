@@ -20,7 +20,7 @@ models.dev unit). Example:
 ```json
 {
   "deepseek": {
-    "deepseek-chat": { "inputPerM": 0.14, "outputPerM": 0.28, "cachedInputPerM": 0.0028 }
+    "deepseek-v4-flash": { "inputPerM": 0.14, "outputPerM": 0.28, "cachedInputPerM": 0.0028 }
   }
 }
 ```
@@ -86,8 +86,9 @@ Behavior of `refresh()` (`pricing-refresh.mjs`):
 
 ## When to refresh (operational triggers)
 - A provider announces a price change (e.g. a DeepSeek pricing-page update).
-- You add/rename models (e.g. the **DeepSeek `deepseek-chat` → `deepseek-v4-flash` migration** — see
-  [PROVIDERS.md](./PROVIDERS.md)): update `providers.mjs`, then refresh so the catalog re-keys.
+- You add/rename models (e.g. the **DeepSeek `deepseek-chat`/`deepseek-reasoner` → `deepseek-v4-flash`/
+  `deepseek-v4-pro` migration**, completed 2026-07-15 — see [PROVIDERS.md](./PROVIDERS.md)): update
+  `providers.mjs`, then refresh so the catalog re-keys.
 - Periodically (low-effort): run it, eyeball the diff, commit if non-empty.
 
 ## Future refinement (noted, not built)

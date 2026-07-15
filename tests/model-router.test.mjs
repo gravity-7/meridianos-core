@@ -231,7 +231,7 @@ test('object-form routing defaults model via modelForTier when omitted', () => {
   const p = { model_routing: { claude: { simple: { provider: 'deepseek' } } } };
   const r = routeModel('claude', { complexity: 1, risk_tags: '[]' }, p, 'ok');
   assert.equal(r.provider, 'deepseek');
-  assert.equal(r.model, 'deepseek-chat'); // deepseek's own simple-tier model
+  assert.equal(r.model, 'deepseek-v4-flash'); // deepseek's own simple-tier model
 });
 
 test('object-form routing defaults harness: anthropic → claude-code, third-party → opencode', () => {
