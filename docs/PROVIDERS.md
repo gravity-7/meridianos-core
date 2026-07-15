@@ -93,6 +93,11 @@ gateway (a real call metered exactly: 9 in / 1 out / 10 total). Cheap, Anthropic
   mapping: `simple`/`medium`/`medium_high` → `deepseek-v4-flash` (the three lower tiers), `complex`/
   `critical` → `deepseek-v4-pro`. `providers.mjs` was updated accordingly.
   Verify against https://api-docs.deepseek.com/quick_start/pricing before changing further.
+- **Enabling thinking mode:** since v4's thinking mode is that request-body parameter (not a
+  separate model), it is turned on per-provider via policy — `policy.providers.deepseek.thinking`
+  (`true`, or `{ effort: 'low'|'medium'|'high' }`) — and injected by the **gateway**, off by
+  default. See [GATEWAY.md § Thinking / reasoning mode](./GATEWAY.md#thinking--reasoning-mode) for
+  the full mechanics (both wires, client-override rule, never-throws guarantee).
 - **Pricing** (USD / 1M tokens):
   | Model | Input | Output | Context | Max out |
   |---|---|---|---|---|

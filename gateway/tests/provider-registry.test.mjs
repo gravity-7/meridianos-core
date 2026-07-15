@@ -150,3 +150,52 @@ test('resolveRoute returns null on an empty/absent routes map', () => {
   assert.equal(resolveRoute({}, 'anthropic'), null);
   assert.equal(resolveRoute(null, 'anthropic'), null);
 });
+
+// ─── resolveRoute — thinking (off-by-default, per-provider) ────────────────
+
+test('resolveRoute returns thinking when the registry route carries it', () => {
+  const reg = fullRegistry();
+  reg.routes.deepseek.thinking = { effort: 'high' };
+  assert.deepEqual(resolveRoute(reg, 'deepseek').thinking, { effort: 'high' });
+});
+
+test('resolveRoute returns undefined (falsy, treated as "off") for thinking when the route has no thinking config', () => {
+  const reg = fullRegistry();
+  assert.equal(resolveRoute(reg, 'deepseek').thinking, undefined);
+  assert.ok(!resolveRoute(reg, 'deepseek').thinking);
+});
+
+test('resolveRoute keeps the exact 3-key shape when no thinking config is present (byte-identical to before)', () => {
+  const reg = fullRegistry();
+  assert.deepEqual(resolveRoute(reg, 'deepseek'), { upstreamUrl: 'https://api.deepseek.com', wire: 'openai', keyEnv: 'DEEPSEEK_KEY' });
+});
+
+// ─── validateProviderRegistry — route.thinking (light validation) ─────────
+
+test('validateProviderRegistry passes when a route has no thinking field at all', () => {
+  assert.equal(validateProviderRegistry(fullRegistry()), true);
+});
+
+test('validateProviderRegistry passes when a route.thinking is `true`', () => {
+  const reg = fullRegistry();
+  reg.routes.deepseek.thinking = true;
+  assert.equal(validateProviderRegistry(reg), true);
+});
+
+test('validateProviderRegistry passes when a route.thinking is a plain object', () => {
+  const reg = fullRegistry();
+  reg.routes.deepseek.thinking = { effort: 'high' };
+  assert.equal(validateProviderRegistry(reg), true);
+});
+
+test('validateProviderRegistry throws when a route.thinking is a string', () => {
+  const reg = fullRegistry();
+  reg.routes.deepseek.thinking = 'enabled';
+  assert.throws(() => validateProviderRegistry(reg), /thinking/);
+});
+
+test('validateProviderRegistry throws when a route.thinking is an array', () => {
+  const reg = fullRegistry();
+  reg.routes.deepseek.thinking = ['enabled'];
+  assert.throws(() => validateProviderRegistry(reg), /thinking/);
+});
