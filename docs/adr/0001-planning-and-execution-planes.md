@@ -121,7 +121,24 @@ Two evolutions:
    from the commercialization plan.
 
 Per-project isolation invariants: own state store, own worktree root, own policy, own budget window,
-own tenant label in the ledger. Zero shared mutable module state (config.mjs already guarantees this).
+own tenant label in the ledger. Zero shared mutable module state (`config.mjs` already guarantees this).
+
+#### Tenant-isolation ladder
+
+Isolation is a **deployment/topology choice, not a core rewrite** — `config.mjs` guarantees zero shared
+module state and the gateway ledger is tenant-labeled, so the core supports any of these unchanged:
+
+| Level | What's isolated | Shares | Use |
+|---|---|---|---|
+| **L1 — logical (same machine)** | process · clone/root · `.ai/` state+DB · policy · ports · own gateway sidecar+ledger · own `.env`/keys | kernel + raw machine resources (no CPU/mem limit; a runaway tenant can starve the box; each can read the other's files by path) | dogfood / trusted single-operator |
+| **L2 — container-per-tenant** | + filesystem, network, process namespace, **CPU/mem cgroup limits**, secrets | kernel only | **real production isolation; the sellable unit** |
+| **L3 — separate hosts/cloud + control plane** | + physical/host boundary; control plane pushes registry/policy, pulls ledgers | nothing | full multi-region SaaS |
+
+**Decision (2026-07-16): L1 now → L2 (containers) as a deliberate later phase.** Rationale: prove the
+autonomous loop + gateway metering + budget enforcement under L1 (cheap, fast) before wrapping it in
+containers — otherwise a first run debugs Docker, the loop, the provider, and the gateway all at once.
+L1 is sufficient for a trusted operator; L2's resource + filesystem isolation is **required** before
+any *untrusted* multi-tenant use. L2 is the natural artifact for the Model-A/Docker packaging phase.
 
 ### D4 — Intake sources are a pluggable registry
 
