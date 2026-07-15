@@ -5,9 +5,9 @@ MeridianOS can **meter and enforce spend inline** — the enforcement boundary t
 the silent-fallback bug class and replaces the fragile per-harness usage scrapers. It is the core of
 the "cost governance + control plane for heterogeneous agent fleets" wedge.
 
-Status: **built, tested, and proven live** (a real DeepSeek call metered exactly end-to-end). It is
-**opt-in and NOT yet auto-started by the daemon** — assembling and running it live is a deliberate
-step (see *Running it*).
+Status: **built, tested, and proven live** (a real DeepSeek call metered exactly end-to-end). The
+daemon can now assemble and run it inline via a policy flag — **opt-in, off by default** (see
+*Running the gateway inside the daemon*).
 
 ---
 
@@ -130,7 +130,34 @@ surfaced the `accept-encoding` fix.
 **Launcher wiring (opt-in):** `launchAgent` routes through the gateway only when
 `config.gateway.enabled === true` AND the run's provider resolves to an anthropic-wire route
 (`inject.mjs`); otherwise it's byte-identical to before. Native-Anthropic providers have no route and
-correctly bypass. The live daemon does **not** set `config.gateway` today.
+correctly bypass.
+
+---
+
+## Running the gateway inside the daemon
+
+The daemon (`scheduler.mjs` `start()`) can assemble and run the gateway sidecar itself, wiring
+`config.gateway` before the runner ever fires an agent — no code change needed per project.
+
+- **Enable via policy:** set `policy.gateway.enabled: true`. Optional knobs: `policy.gateway.port`
+  (default `0` — ephemeral, OS-assigned) and `policy.gateway.tenant` (default `'pv'`). An
+  `AIOS_GATEWAY_PORT` env var overrides the policy port if set.
+- **What happens:** at boot, after the dashboard listener comes up and before the watchdog/runner are
+  scheduled, the daemon calls the exported `maybeStartGateway({ config, policy, port, tenant })`
+  helper. When enabled, it assembles the sidecar (`assembleGateway`) and sets `config.gateway = {
+  enabled, url, runs, registry }` — the exact shape `launcher.mjs`'s opt-in injection already
+  consumes. From that point on, `launchAgent` routes anthropic-wire BYO-key providers (e.g. DeepSeek
+  via `/anthropic`) through the gateway: metered, budget-enforced, and thinking-injected, per the
+  request lifecycle above.
+- **Off by default:** a tenant with no `policy.gateway` block (or `enabled` not `=== true`) is
+  **completely unaffected** — the daemon never calls `assembleGateway`, `config.gateway` is never
+  set, and `launchAgent` runs byte-identical to before the gateway existed.
+- **Fail hard, not silent:** if `policy.gateway.enabled === true` and assembly throws, `start()`
+  rejects and the process exits rather than continuing unmetered — the scheduled task (restart-on-
+  failure) relaunches a clean process. Running agents unmetered when a hard cap was explicitly
+  requested is worse than a restart.
+- **Shutdown:** the sidecar is closed (best-effort) alongside the rest of the daemon's graceful
+  shutdown (`SIGINT`/`SIGTERM`).
 
 ---
 

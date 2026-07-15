@@ -354,3 +354,90 @@ test('createRotatingLogger: never throws even if logDir is unwritable', () => {
   assert.doesNotThrow(() => logger.error('test', 'should not throw', new Error('x')));
   assert.doesNotThrow(() => logger.close());
 });
+
+// ---------------------------------------------------------------------------
+// 5. maybeStartGateway — opt-in gateway wiring (config.gateway assembly)
+// ---------------------------------------------------------------------------
+
+test('maybeStartGateway: policy.gateway absent — no-op, assembleGateway never called', async () => {
+  const { maybeStartGateway } = await import('../scheduler.mjs');
+  let called = false;
+  const _assembleGateway = async () => { called = true; return {}; };
+
+  const result = await maybeStartGateway({ config: {}, policy: {}, _assembleGateway });
+
+  assert.equal(result.gatewayConfig, undefined);
+  assert.equal(called, false, '_assembleGateway must not be called when policy.gateway is absent');
+  assert.equal(typeof result.close, 'function');
+  assert.doesNotThrow(() => result.close());
+});
+
+test('maybeStartGateway: policy.gateway.enabled === false — no-op, assembleGateway never called', async () => {
+  const { maybeStartGateway } = await import('../scheduler.mjs');
+  let called = false;
+  const _assembleGateway = async () => { called = true; return {}; };
+
+  const result = await maybeStartGateway({ config: {}, policy: { gateway: { enabled: false } }, _assembleGateway });
+
+  assert.equal(result.gatewayConfig, undefined);
+  assert.equal(called, false, '_assembleGateway must not be called when policy.gateway.enabled is false');
+});
+
+test('maybeStartGateway: policy.gateway.enabled === true — assembles and returns launcher-shaped config', async () => {
+  const { maybeStartGateway } = await import('../scheduler.mjs');
+  const fakeRuns = { unregisterRun() {} };
+  const fakeRegistry = { tenant: 'dev', routes: {} };
+  const fakeClose = () => {};
+  let callArgs = null;
+  const _assembleGateway = async (args) => {
+    callArgs = args;
+    return {
+      url: 'http://localhost:9999',
+      runs: fakeRuns,
+      store: { get: () => fakeRegistry },
+      close: fakeClose,
+    };
+  };
+
+  const config = { some: 'config' };
+  const policy = { gateway: { enabled: true } };
+  const result = await maybeStartGateway({ config, policy, _assembleGateway });
+
+  assert.deepEqual(result.gatewayConfig, {
+    enabled: true,
+    url: 'http://localhost:9999',
+    runs: fakeRuns,
+    registry: fakeRegistry,
+  });
+  assert.equal(result.close, fakeClose);
+
+  assert.equal(callArgs.config, config);
+  assert.equal(callArgs.policy, policy);
+  assert.equal(callArgs.port, 0, 'default port should be 0 (ephemeral)');
+  assert.equal(callArgs.tenant, 'pv', 'default tenant should be pv');
+});
+
+test('maybeStartGateway: passes port/tenant through to assembleGateway', async () => {
+  const { maybeStartGateway } = await import('../scheduler.mjs');
+  let callArgs = null;
+  const _assembleGateway = async (args) => {
+    callArgs = args;
+    return {
+      url: 'http://localhost:4318',
+      runs: { unregisterRun() {} },
+      store: { get: () => ({}) },
+      close: () => {},
+    };
+  };
+
+  await maybeStartGateway({
+    config: {},
+    policy: { gateway: { enabled: true } },
+    port: 4318,
+    tenant: 'devx',
+    _assembleGateway,
+  });
+
+  assert.equal(callArgs.port, 4318);
+  assert.equal(callArgs.tenant, 'devx');
+});

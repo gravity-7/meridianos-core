@@ -48,6 +48,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAios } from './config.mjs';
+import { assembleGateway } from './gateway/index.mjs';
 
 // Composition root: as of ★③.2 Part B, a DomainPlugin is a REQUIRED, explicitly-injected
 // dependency (there is no baked-in default tenant) — so the AIOS config can no longer be
@@ -395,13 +396,29 @@ function startPolicyWatcher() {
 }
 
 /**
+ * Opt-in gateway wiring: when policy.gateway.enabled === true, assemble a gateway sidecar and
+ * return the `config.gateway` shape launcher.mjs consumes ({ enabled, url, runs, registry }) plus a
+ * close(). When not enabled, returns { gatewayConfig: undefined, close: a no-op } and does NOT call
+ * assembleGateway at all (byte-identical to pre-gateway behavior). `_assembleGateway` is injected
+ * for tests.
+ */
+export async function maybeStartGateway({ config, policy, port = 0, tenant = 'pv', _assembleGateway = assembleGateway }) {
+  if (policy?.gateway?.enabled !== true) return { gatewayConfig: undefined, close: () => {} };
+  const asm = await _assembleGateway({ config, policy, port, tenant });
+  return {
+    gatewayConfig: { enabled: true, url: asm.url, runs: asm.runs, registry: asm.store.get() },
+    close: asm.close,
+  };
+}
+
+/**
  * Start the AIOS daemon.
  * @param {object} [opts]
  * @param {object} [opts.domain]  the tenant's DomainPlugin (REQUIRED — see config.mjs). The PV
  *                                launcher (`tools/aios/scheduler.mjs`) passes `PV_DOMAIN`; there is
  *                                no default here, so calling `start()` with no domain throws.
  */
-export function start({ domain } = {}) {
+export async function start({ domain } = {}) {
   // Composition root: construct the AIOS config ONCE at daemon startup, from the caller's injected
   // domain, and upgrade the console-only fallback logger to the real config-backed rotating one.
   // This must be the very first thing start() does — everything below (and every module-scope
@@ -450,6 +467,20 @@ export function start({ domain } = {}) {
     logger.log('dashboard', `http://localhost:${port}`);
   });
 
+  // Opt-in metering/enforcement gateway (config.gateway drives launcher.mjs's injection). Off by
+  // default — a tenant with no policy.gateway block is byte-identical to before.
+  const gwPolicy = loadPolicy(undefined, config);
+  const gwPort = Number(process.env.AIOS_GATEWAY_PORT) || (gwPolicy?.gateway?.port ?? 0);
+  const gwTenant = gwPolicy?.gateway?.tenant ?? 'pv';
+  let closeGateway = () => {};
+  const gw = await maybeStartGateway({ config, policy: gwPolicy, port: gwPort, tenant: gwTenant });
+  if (gw.gatewayConfig) {
+    config.gateway = gw.gatewayConfig;
+    closeGateway = gw.close;
+    logger.log('gateway', `sidecar ${config.gateway.url} (tenant ${gwTenant})`);
+    info(db, 'gateway', 'start', { url: config.gateway.url, tenant: gwTenant });
+  }
+
   // 2. Watchdog
   setInterval(watchdogTick, WATCHDOG_INTERVAL_MS);
   watchdogTick(); // first tick immediately
@@ -473,6 +504,7 @@ export function start({ domain } = {}) {
     info(db, 'scheduler', 'shutdown');
     logger.log('scheduler', 'shutting down...');
     if (runnerTimer) clearInterval(runnerTimer);
+    try { closeGateway(); } catch { /* best-effort — never block shutdown */ }
     logger.close();
     db?.close?.();
     process.exit(0);
@@ -485,4 +517,4 @@ export function start({ domain } = {}) {
 // imported by the test runner (or any other module), we export the tick
 // functions for unit testing without starting the server or scheduling timers.
 const _isMain = fileURLToPath(import.meta.url) === process.argv[1];
-if (_isMain) start();
+if (_isMain) start().catch((e) => { console.error('[aios:scheduler] start failed', e); process.exit(1); });
