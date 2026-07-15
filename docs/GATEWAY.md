@@ -1,0 +1,124 @@
+# MeridianOS — Gateway Sidecar
+
+The gateway is a **local forward-proxy that every agent→provider LLM call routes through**, so
+MeridianOS can **meter and enforce spend inline** — the enforcement boundary that structurally kills
+the silent-fallback bug class and replaces the fragile per-harness usage scrapers. It is the core of
+the "cost governance + control plane for heterogeneous agent fleets" wedge.
+
+Status: **built, tested, and proven live** (a real DeepSeek call metered exactly end-to-end). It is
+**opt-in and NOT yet auto-started by the daemon** — assembling and running it live is a deliberate
+step (see *Running it*).
+
+---
+
+## The loop, in one line
+
+```
+harness ──(gateway token)──▶ GATEWAY ──(real key, server-side)──▶ provider
+                               │  meter every call → ledger
+                               │  check budget verdict → allow / DENY(429)
+```
+
+Three payoffs, all on-strategy: (1) silent-fallback is *impossible* (no traffic reaches a provider
+except through the meter); (2) the per-harness usage-readers can be retired; (3) **keys leave the
+worker** — the harness only ever holds a short-lived gateway token; the real key is injected
+server-side.
+
+---
+
+## Modules (all under `gateway/`)
+
+| Module | Role |
+|---|---|
+| `token-event.mjs` | the authoritative per-call usage record (up). `makeTokenEvent`/`validateTokenEvent`/`tokenEventToUsage`. Every usage field is `number\|null`; **null = unknown, never fabricated as 0**. |
+| `provider-registry.mjs` | the pushed registry envelope (down): `{ version, generatedAt, tenant, providers, routes, enforcement? }`. `validateProviderRegistry`/`resolveRoute`. `route.keyEnv` must be a NAME, never a literal secret. |
+| `run-registry.mjs` | in-memory token→run-context map (`registerRun`/`resolveRun`/`unregisterRun`). Tokens are ephemeral per run. |
+| `server.mjs` | `startGateway(...)` — the HTTP proxy: auth token → resolve route → **verdict (once)** → forward with server-side key → **meter** → return. Handles buffered *and* SSE-streaming responses. |
+| `ledger.mjs` | the gateway-OWNED append-only token-event store (its **own** SQLite file, `.ai/gateway/ledger.db` — never the board DB). `openLedger`/`appendEvent`/`queryWindow`/`listEvents`/`pruneEvents`. |
+| `windows.mjs` | ledger-backed 5h/weekly budget verdict, **reusing `budget.mjs`'s `verdictFor`**. `agentBudgetVerdict` → `toEnforcementDecision` (halt→deny). `makeCheckVerdict(...)` = the real `checkVerdict` for `startGateway`. |
+| `registry-source.mjs` | builds the registry envelope from `providers.mjs` + policy (in-process, tenant #0). `buildProviderRegistry`/`serializeRegistry`. Guarantees `keyEnv` is a NAME on both halves. |
+| `registry-pull.mjs` | the sidecar's active-registry store + pull loop. `createRegistryStore` (validate-before-swap, strict version monotonicity), `pullOnce`, `startRegistryPoll`. Transport-agnostic (`source` injected). |
+| `index.mjs` | **the assembly** — `assembleGateway({ config, policy, ... })` wires all of the above into one runnable sidecar; `refreshRegistry(store, ...)` pushes a newer envelope live. |
+| `inject.mjs` | launcher-side: rewrites a harness spawn plan to point at the gateway + a per-run token (opt-in; anthropic wire; see *Launcher wiring*). |
+
+---
+
+## Request lifecycle (`server.mjs handleRequest`)
+
+1. **Auth:** read the per-run token from `x-gateway-token`, then `x-api-key` (Anthropic-wire harness
+   sends its token here), then `Authorization: Bearer` (OpenAI-wire). Unknown token → 401.
+2. **Route:** `resolveRoute(activeRegistry, ctx.provider)` — `registry` may be a plain envelope OR a
+   `() => store.get()` function resolved per request (live registry swaps). No route → 502.
+3. **Verdict (exactly once):** `checkVerdict(ctx)`. `deny` → emit a deny token-event (null usage) +
+   **429 in the client's wire format** (`rate_limit_error` / `rate_limit_exceeded`), never forwarded.
+   Any other decision → forward. (`degrade` = documented follow-up, currently forwards.)
+4. **Forward:** to `route.upstreamUrl` (**base path preserved** — e.g. DeepSeek's `/anthropic`),
+   injecting the real key server-side (`x-api-key` for anthropic, `Authorization: Bearer` for
+   openai), and forcing **`accept-encoding: identity`** so the metering parse never hits compressed
+   bytes.
+5. **Meter:**
+   - **Buffered** (JSON response): parse the `usage` block per wire (anthropic
+     `input_tokens`/`output_tokens`/`cache_*`; openai `prompt_tokens`/`completion_tokens`/
+     `prompt_tokens_details.cached_tokens`).
+   - **Streaming** (`content-type: text/event-stream`): pipe bytes to the client live while a
+     `createSseUsageTracker` reads the terminal usage from the SSE events (anthropic `message_start`
+     input/cache + cumulative `message_delta` output; openai final usage chunk). Meters **once** at
+     stream end/error. SSE `:` comment lines (keep-alives) are ignored.
+6. **Emit:** exactly one `token-event` per request (success *or* failure — metering is never silently
+   skipped; a forward/parse failure emits with null usage).
+
+---
+
+## Enforcement semantics
+
+- The verdict is computed **before** forwarding, from the ledger's rolling trailing 5h/week windows
+  vs the agent's caps in `policy.agent_budget.<agent>` (`verdictFor`: `ok`/`warn`/`halt`; `warn` is
+  advisory, `halt` → deny).
+- **Trip-wire, not guillotine:** the call that crosses the line completes; the *next* call is denied.
+  You never cut off an in-flight response.
+- Denies are **inline** — the actual spender is gated (no way around the limit) and the numbers are
+  real-time (the previous call was metered a millisecond ago).
+
+---
+
+## Key custody (the Model-B story)
+
+- The pushed registry carries **routing config + `keyEnv` names only** — never secrets. Keys stay
+  worker-side in `process.env`.
+- The gateway reads `process.env[route.keyEnv]` at forward-time and injects it server-side. The
+  harness/worker only ever holds the gateway token. This is what lets the crown-jewel governance +
+  keys live on the operator's side in the connected (Model B) deployment.
+
+---
+
+## Running it (assembly + dogfood)
+
+```js
+import { assembleGateway } from './gateway/index.mjs';
+const { gateway, ledger, runs, store, url, close } = await assembleGateway({ config, policy, port });
+// register a run's token → ctx, point a harness's ANTHROPIC_BASE_URL at `url`, done.
+```
+A minimal live dogfood (one real DeepSeek call, key read from a gitignored `.env`, never printed) is
+the reference for wiring it end-to-end — it proved metering (9 in / 1 out / 10 total) and is what
+surfaced the `accept-encoding` fix.
+
+**Launcher wiring (opt-in):** `launchAgent` routes through the gateway only when
+`config.gateway.enabled === true` AND the run's provider resolves to an anthropic-wire route
+(`inject.mjs`); otherwise it's byte-identical to before. Native-Anthropic providers have no route and
+correctly bypass. The live daemon does **not** set `config.gateway` today.
+
+---
+
+## Known follow-ups (not yet built)
+- **Cross-wire translation** (anthropic-in → openai-out) — deliberately deferred; v1 is a
+  same-wire transparent metering proxy.
+- **OpenAI/opencode launcher injection** — `inject.mjs` covers the anthropic wire; opencode's
+  file-based `opencode.json` baseURL rewrite is a follow-up (3.2d-ii).
+- **`degrade` enforcement** — reroute to a cheaper provider instead of a hard deny.
+- **Upstream request timeout** — the gateway relies on the provider closing idle connections (e.g.
+  DeepSeek's 10-min cap); an explicit timeout would be more robust.
+- **Streaming multi-byte safety** — the SSE tracker decodes chunks with `toString('utf8')`; a
+  `StringDecoder` would handle a multi-byte char split across chunks (harmless today — usage events
+  are ASCII and the client gets raw bytes).
+- **Retire the per-harness usage-readers (3.3c)** — gated on the daemon actually routing through the
+  gateway so the ledger is populated; retiring them before that would break live budget metering.
