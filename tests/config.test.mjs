@@ -199,6 +199,17 @@ test('an explicit {domain:{prompts}} option is honored — no env var for multi-
   assert.deepEqual(p.domain.prompts.reviewCriteria, ['- Custom criterion']);
 });
 
+// ---- cliPath (configurable tenant runner CLI) -------------------------------------------------
+
+test('resolvePaths({domain}) defaults domain.cliPath to \'tools/aios/cli.mjs\' when the plugin omits it', () => {
+  assert.equal(resolvePaths({ domain: FIXTURE_DOMAIN }).domain.cliPath, 'tools/aios/cli.mjs');
+});
+
+test('an explicit {domain:{cliPath}} option overrides the default', () => {
+  const p = resolvePaths({ domain: { ...FIXTURE_DOMAIN, cliPath: '/abs/dev-runner/cli.mjs' } });
+  assert.equal(p.domain.cliPath, '/abs/dev-runner/cli.mjs');
+});
+
 // ---- guardrail check-runner (2.1d) ------------------------------------------------------------
 
 test('resolvePaths({domain}) resolves guardrailCheck from the injected plugin verbatim', () => {
