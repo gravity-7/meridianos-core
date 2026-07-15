@@ -113,6 +113,69 @@ function defaultHarnessForProvider(providerName) {
 }
 
 /**
+ * Map a task's status to a routing ROLE (the stage/role axis, separate from the complexity
+ * tier). `policy.model_routing.<agent>.roles.<role>` takes precedence over the tier route when
+ * present — see routeModel. Unknown/null/undefined status is treated as implementation work
+ * (the safe default: most tasks in flight are being implemented, not spec'd or designed).
+ *
+ * @param {string|null|undefined} status - the task's board status (e.g. 'spec', 'designing',
+ *   'ready-for-impl', 'in-progress')
+ * @returns {'spec'|'design'|'impl'}
+ */
+export function roleForStatus(status) {
+  switch (status) {
+    case 'spec': return 'spec';
+    case 'designing': return 'design';
+    case 'ready-for-impl': return 'impl';
+    case 'in-progress': return 'impl';
+    default: return 'impl';
+  }
+}
+
+/**
+ * Resolve a routing entry (the value found at `model_routing.<agent>.<tier>` or
+ * `model_routing.<agent>.roles.<role>`) into a concrete {providerName, model, harness}. Shared by
+ * both the tier route and the role route in routeModel — see each call site for the form
+ * conventions of `rawEntry` at that call site (the role call site pre-normalizes a bare string
+ * into `{ provider: <string> }` before calling this, since a role's bare string names a
+ * PROVIDER, not a literal legacy model id — unlike the tier route's bare-string form).
+ *
+ * Two forms of `rawEntry` are handled here:
+ *   - object form `{ provider, model?, harness? }` → the named provider; `model` defaults to
+ *     that provider's `effectiveTier` model (modelForTier) when omitted; `harness` defaults via
+ *     defaultHarnessForProvider when omitted.
+ *   - legacy string form: a bare model-id string → provider 'anthropic' (native), that model,
+ *     the agent's usual harness (`domain.agentHarness[agent] ?? 'claude-code'`).
+ *   - anything else (no entry) → falls back to `defaults[effectiveTier] ?? defaults.medium`.
+ *
+ * `label` is the dotted policy path this entry came from (e.g. `model_routing.claude.complex` or
+ * `model_routing.claude.roles.spec`) — used only to keep thrown error messages diagnosable.
+ *
+ * @throws {Error} if the object form names an unknown provider, or resolves to no model.
+ */
+function resolveRoutingEntry(rawEntry, effectiveTier, agent, policy, domain, defaults, label) {
+  let providerName, model, harness;
+
+  if (rawEntry && typeof rawEntry === 'object') {
+    providerName = rawEntry.provider ?? 'anthropic';
+    if (!resolveProvider(providerName, policy)) {
+      throw new Error(`${label} references unknown provider '${providerName}'`);
+    }
+    model = rawEntry.model ?? modelForTier(providerName, effectiveTier, policy) ?? null;
+    if (!model) {
+      throw new Error(`${label} (provider '${providerName}') resolved to no model for tier '${effectiveTier}'`);
+    }
+    harness = rawEntry.harness ?? defaultHarnessForProvider(providerName);
+  } else {
+    providerName = 'anthropic';
+    model = (typeof rawEntry === 'string' && rawEntry) ? rawEntry : (defaults[effectiveTier] ?? defaults.medium ?? null);
+    harness = domain?.agentHarness?.[agent] ?? 'claude-code';
+  }
+
+  return { providerName, model, harness };
+}
+
+/**
  * Infer the task category from its risk_tags. Returns the highest-tier category found,
  * or null if no tags match.
  *
@@ -189,6 +252,16 @@ export function complexityTier(task, domain) {
  * When a tier has no entry at all, `domain.defaultModels[agent]` is the fallback (still native
  * anthropic).
  *
+ * **Stage/role axis.** `model_routing.<agent>.roles.<role>` — where `role` is derived from the
+ * task's status via `roleForStatus` (spec/design/impl) — takes PRECEDENCE over the tier route
+ * above when present for the task's role. This lets a founder route spec/design work to a premium
+ * model while implementation stays on the cheap tier route, independent of task complexity. It
+ * accepts the same object form as a tier entry; its bare-string form is different, though — a
+ * bare string names a PROVIDER (e.g. `roles.spec: 'deepseek'`), with the model resolved via
+ * `modelForTier(provider, effectiveTier, policy)`, not a literal model id. When there's no
+ * `roles.<role>` entry for the task's role, routing falls through to the tier route unchanged.
+ * See `docs/PROVIDERS.md` for the founder-facing writeup.
+ *
  * @param {string} agent - the agent id, e.g. one entry of the injected domain's roster
  * @param {object} task - the task record (needs complexity, risk_tags)
  * @param {object} policy - parsed policy
@@ -220,24 +293,37 @@ export function routeModel(agent, task, policy, budgetState = 'ok', domain) {
     effectiveTier = TIERS[Math.max(0, idx - 1)] ?? tier;
   }
 
-  const rawEntry = routing[effectiveTier];
-  let providerName, model, harness;
+  // Role route (stage axis): model_routing.<agent>.roles.<role> takes PRECEDENCE over the tier
+  // route when present. `role` is derived from the task's status (spec/design/impl). A role
+  // entry's bare-string form names a PROVIDER (unlike the tier route's bare-string form, which
+  // names a literal legacy model id) — so it's normalized into `{ provider: <string> }` before
+  // going through the same object-form resolution as a tier entry.
+  const role = roleForStatus(task.status);
+  const rawRoleEntry = routing.roles?.[role];
 
-  if (rawEntry && typeof rawEntry === 'object') {
-    providerName = rawEntry.provider ?? 'anthropic';
-    if (!resolveProvider(providerName, policy)) {
-      throw new Error(`model_routing.${agent}.${effectiveTier} references unknown provider '${providerName}'`);
-    }
-    model = rawEntry.model ?? modelForTier(providerName, effectiveTier, policy) ?? null;
-    if (!model) {
-      throw new Error(`model_routing.${agent}.${effectiveTier} (provider '${providerName}') resolved to no model for tier '${effectiveTier}'`);
-    }
-    harness = rawEntry.harness ?? defaultHarnessForProvider(providerName);
-  } else {
-    providerName = 'anthropic';
-    model = (typeof rawEntry === 'string' && rawEntry) ? rawEntry : (defaults[effectiveTier] ?? defaults.medium ?? null);
-    harness = domain?.agentHarness?.[agent] ?? 'claude-code';
+  if (rawRoleEntry !== undefined) {
+    const normalizedRoleEntry = typeof rawRoleEntry === 'string' ? { provider: rawRoleEntry } : rawRoleEntry;
+    const { providerName, model, harness } = resolveRoutingEntry(
+      normalizedRoleEntry, effectiveTier, agent, policy, domain, defaults,
+      `model_routing.${agent}.roles.${role}`,
+    );
+
+    return {
+      provider: providerName,
+      model,
+      harness,
+      tier: effectiveTier,
+      baseTier: tier,
+      category,
+      reason: `role:${role} → ${providerName}${effectiveTier !== tier ? ` → downgraded to ${effectiveTier} (budget warn)` : ''}`,
+    };
   }
+
+  const rawEntry = routing[effectiveTier];
+  const { providerName, model, harness } = resolveRoutingEntry(
+    rawEntry, effectiveTier, agent, policy, domain, defaults,
+    `model_routing.${agent}.${effectiveTier}`,
+  );
 
   return {
     provider: providerName,
