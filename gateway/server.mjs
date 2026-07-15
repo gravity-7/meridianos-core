@@ -80,6 +80,14 @@ function buildForwardHeaders(req, route, resolveKey) {
   const headers = { ...req.headers };
   for (const name of HOP_BY_HOP_HEADERS) delete headers[name];
 
+  // Force an uncompressed upstream response. The gateway reads the raw response bytes to meter the
+  // `usage` block (see handleRequest); if it forwarded the client's `accept-encoding: gzip, br`, the
+  // provider would compress and JSON.parse would fail on the compressed bytes (real DeepSeek does
+  // exactly this — offline stubs never compress, so it only surfaced in a live dogfood). `identity`
+  // guarantees plaintext to meter AND to forward. FOLLOW-UP: if a provider ever ignores this and
+  // compresses anyway, add a gunzip/brotli decode on the parse path.
+  headers['accept-encoding'] = 'identity';
+
   if (route.wire === 'anthropic') {
     const key = resolveKey(route.keyEnv);
     if (key) headers['x-api-key'] = key;
