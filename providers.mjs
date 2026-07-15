@@ -42,11 +42,11 @@ export const PROVIDERS = {
     keyEnv: 'DEEPSEEK_KEY',
     anthropicBaseUrl: 'https://api.deepseek.com/anthropic',
     models: {
-      simple:      'deepseek-chat',
-      medium:      'deepseek-chat',
-      medium_high: 'deepseek-chat',
-      complex:     'deepseek-reasoner',
-      critical:    'deepseek-reasoner',
+      simple:      'deepseek-v4-flash',
+      medium:      'deepseek-v4-flash',
+      medium_high: 'deepseek-v4-flash',
+      complex:     'deepseek-v4-pro',
+      critical:    'deepseek-v4-pro',
     },
   },
   openrouter: {
