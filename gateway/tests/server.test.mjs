@@ -4,7 +4,7 @@ import http from 'node:http';
 import { PROVIDERS } from '../../providers.mjs';
 import { validateProviderRegistry } from '../provider-registry.mjs';
 import { createRunRegistry } from '../run-registry.mjs';
-import { startGateway } from '../server.mjs';
+import { startGateway, applyThinkingToBody } from '../server.mjs';
 
 // ─── Offline stub upstream: canned anthropic + openai responses, no real provider ever hit ────
 
@@ -33,7 +33,7 @@ function readBody(req) {
 
 before(async () => {
   stub = http.createServer(async (req, res) => {
-    await readBody(req);
+    const receivedRawBody = await readBody(req);
     const send = (status, obj) => {
       const payload = Buffer.from(JSON.stringify(obj));
       res.writeHead(status, { 'content-type': 'application/json' });
@@ -62,6 +62,12 @@ before(async () => {
     }
     if (req.url === '/openai-no-usage') {
       send(200, { id: 'chatcmpl_2' });
+      return;
+    }
+    // ─── Thinking-mode injection (echoes the RAW forwarded body back so tests can assert on
+    // exactly what the gateway sent upstream, not just what it received from the client).
+    if (req.url === '/echo-body') {
+      send(200, { id: 'echo_1', receivedBodyRaw: receivedRawBody.toString('utf8') });
       return;
     }
     // Base-path preservation: an upstream mounted under '/prefix' must still receive the client's
@@ -130,12 +136,28 @@ before(async () => {
   registry.providers.deadroute = { ...PROVIDERS.deepseek, name: 'deadroute' };
   registry.routes.deadroute = { upstreamUrl: 'http://127.0.0.1:1', wire: 'openai', keyEnv: null };
 
+  // ─── Thinking-mode injection fixtures (gateway/server.mjs's applyThinkingToBody) — all point at
+  // the '/echo-body' stub route so tests can assert on exactly what body reached the upstream.
+  registry.providers['deepseek-think-openai'] = { ...PROVIDERS.deepseek, name: 'deepseek-think-openai' };
+  registry.routes['deepseek-think-openai'] = { upstreamUrl: stubUrl, wire: 'openai', keyEnv: 'TEST_DEEPSEEK_KEY', thinking: { effort: 'high' } };
+  registry.providers['deepseek-think-bool'] = { ...PROVIDERS.deepseek, name: 'deepseek-think-bool' };
+  registry.routes['deepseek-think-bool'] = { upstreamUrl: stubUrl, wire: 'openai', keyEnv: 'TEST_DEEPSEEK_KEY', thinking: true };
+  registry.providers['deepseek-think-anthropic'] = { ...PROVIDERS.deepseek, name: 'deepseek-think-anthropic' };
+  registry.routes['deepseek-think-anthropic'] = { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY', thinking: { effort: 'high' } };
+  registry.providers['echo-plain'] = { ...PROVIDERS.deepseek, name: 'echo-plain' };
+  registry.routes['echo-plain'] = { upstreamUrl: stubUrl, wire: 'openai', keyEnv: 'TEST_DEEPSEEK_KEY' };
+  assert.equal(validateProviderRegistry(registry), true);
+
   runs = createRunRegistry();
   runs.registerRun('tok-anthropic', { tenant: 'pv', agent: 'claude', session: 's1', task: 't1', runId: 'r1', provider: 'anthropic', model: 'claude-sonnet-5', tier: 'medium' });
   runs.registerRun('tok-deepseek', { tenant: 'pv', agent: 'claude', session: 's2', task: 't2', runId: 'r2', provider: 'deepseek', model: 'deepseek-chat', tier: 'medium' });
   runs.registerRun('tok-unknown-provider', { tenant: 'pv', agent: 'claude', session: 's3', task: null, runId: null, provider: 'nope', model: 'nope-model', tier: 'medium' });
   runs.registerRun('tok-network-fail', { tenant: 'pv', agent: 'claude', session: 's4', task: null, runId: null, provider: 'deadroute', model: 'deepseek-chat', tier: 'medium' });
   runs.registerRun('tok-basepath', { tenant: 'pv', agent: 'claude', session: 's5', task: null, runId: null, provider: 'basepath', model: 'claude-sonnet-5', tier: 'medium' });
+  runs.registerRun('tok-think-openai', { tenant: 'pv', agent: 'claude', session: 's6', task: null, runId: null, provider: 'deepseek-think-openai', model: 'deepseek-v4-flash', tier: 'medium' });
+  runs.registerRun('tok-think-bool', { tenant: 'pv', agent: 'claude', session: 's7', task: null, runId: null, provider: 'deepseek-think-bool', model: 'deepseek-v4-flash', tier: 'medium' });
+  runs.registerRun('tok-think-anthropic', { tenant: 'pv', agent: 'claude', session: 's8', task: null, runId: null, provider: 'deepseek-think-anthropic', model: 'deepseek-v4-flash', tier: 'medium' });
+  runs.registerRun('tok-echo-plain', { tenant: 'pv', agent: 'claude', session: 's9', task: null, runId: null, provider: 'echo-plain', model: 'deepseek-v4-flash', tier: 'medium' });
 
   events = [];
   gateway = await startGateway({
@@ -695,4 +717,145 @@ test('registry as a plain object still works UNCHANGED (backward compatibility)'
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.receivedHeaders.xApiKey, KEYS.TEST_ANTHROPIC_KEY);
+});
+
+// ─── Thinking-mode injection (policy-driven, per-provider, off-by-default) ─────────────────────
+// applyThinkingToBody's unit-level contract, plus end-to-end proof (via the '/echo-body' stub
+// route) that the injected body is what actually reaches the upstream.
+
+// ─── applyThinkingToBody — unit level ──────────────────────────────────────
+
+test('applyThinkingToBody: off by default — no route.thinking leaves the body byte-identical', () => {
+  const body = Buffer.from(JSON.stringify({ model: 'x', messages: [] }));
+  const out = applyThinkingToBody(body, { wire: 'openai' });
+  assert.strictEqual(out, body); // same Buffer instance, not just equal bytes
+});
+
+test('applyThinkingToBody: openai wire + thinking:true injects {type:"enabled"}, no reasoning_effort', () => {
+  const body = Buffer.from(JSON.stringify({ model: 'x' }));
+  const out = applyThinkingToBody(body, { wire: 'openai', thinking: true });
+  const parsed = JSON.parse(out.toString('utf8'));
+  assert.deepEqual(parsed.thinking, { type: 'enabled' });
+  assert.equal('reasoning_effort' in parsed, false);
+});
+
+test('applyThinkingToBody: openai wire + thinking:{effort} injects both thinking and reasoning_effort', () => {
+  const body = Buffer.from(JSON.stringify({ model: 'x' }));
+  const out = applyThinkingToBody(body, { wire: 'openai', thinking: { effort: 'high' } });
+  const parsed = JSON.parse(out.toString('utf8'));
+  assert.deepEqual(parsed.thinking, { type: 'enabled' });
+  assert.equal(parsed.reasoning_effort, 'high');
+});
+
+test('applyThinkingToBody: anthropic wire + thinking:{effort} injects thinking but NEVER reasoning_effort or budget_tokens', () => {
+  const body = Buffer.from(JSON.stringify({ model: 'x' }));
+  const out = applyThinkingToBody(body, { wire: 'anthropic', thinking: { effort: 'high' } });
+  const parsed = JSON.parse(out.toString('utf8'));
+  assert.deepEqual(parsed.thinking, { type: 'enabled' });
+  assert.equal('reasoning_effort' in parsed, false);
+  assert.equal('budget_tokens' in parsed, false);
+});
+
+test('applyThinkingToBody: a client-set thinking key is never overridden', () => {
+  const body = Buffer.from(JSON.stringify({ model: 'x', thinking: { type: 'custom' } }));
+  const out = applyThinkingToBody(body, { wire: 'openai', thinking: { effort: 'high' } });
+  assert.strictEqual(out, body);
+  const parsed = JSON.parse(out.toString('utf8'));
+  assert.deepEqual(parsed.thinking, { type: 'custom' });
+  assert.equal('reasoning_effort' in parsed, false);
+});
+
+test('applyThinkingToBody: non-JSON body is forwarded unchanged, never throws', () => {
+  const body = Buffer.from('not-json{');
+  assert.doesNotThrow(() => applyThinkingToBody(body, { wire: 'openai', thinking: true }));
+  const out = applyThinkingToBody(body, { wire: 'openai', thinking: true });
+  assert.strictEqual(out, body);
+});
+
+test('applyThinkingToBody: empty body is forwarded unchanged, never throws', () => {
+  const body = Buffer.alloc(0);
+  assert.doesNotThrow(() => applyThinkingToBody(body, { wire: 'openai', thinking: true }));
+  const out = applyThinkingToBody(body, { wire: 'openai', thinking: true });
+  assert.strictEqual(out, body);
+});
+
+test('applyThinkingToBody: a JSON array body (not an object) is forwarded unchanged, never throws', () => {
+  const body = Buffer.from(JSON.stringify([1, 2, 3]));
+  const out = applyThinkingToBody(body, { wire: 'openai', thinking: true });
+  assert.strictEqual(out, body);
+});
+
+test('applyThinkingToBody: a route with no `thinking` key at all is the fast off path', () => {
+  const body = Buffer.from(JSON.stringify({ model: 'x' }));
+  const out = applyThinkingToBody(body, {});
+  assert.strictEqual(out, body);
+  const out2 = applyThinkingToBody(body, undefined);
+  assert.strictEqual(out2, body);
+});
+
+// ─── end-to-end through the gateway (proves what actually reaches the upstream) ────────────────
+
+test('e2e: thinking off by default — a plain route forwards the body byte-identical', async () => {
+  const sentBody = JSON.stringify({ model: 'deepseek-v4-flash', messages: [] });
+  const res = await fetch(`${gateway.url}/echo-body`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-echo-plain', 'content-type': 'application/json' },
+    body: sentBody,
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.receivedBodyRaw, sentBody);
+});
+
+test('e2e: openai-wire thinking:{effort} route injects thinking + reasoning_effort into the forwarded body', async () => {
+  const res = await fetch(`${gateway.url}/echo-body`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-think-openai', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek-v4-flash', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const forwarded = JSON.parse(body.receivedBodyRaw);
+  assert.deepEqual(forwarded.thinking, { type: 'enabled' });
+  assert.equal(forwarded.reasoning_effort, 'high');
+});
+
+test('e2e: openai-wire thinking:true route injects thinking with no reasoning_effort', async () => {
+  const res = await fetch(`${gateway.url}/echo-body`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-think-bool', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek-v4-flash', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const forwarded = JSON.parse(body.receivedBodyRaw);
+  assert.deepEqual(forwarded.thinking, { type: 'enabled' });
+  assert.equal('reasoning_effort' in forwarded, false);
+});
+
+test('e2e: anthropic-wire thinking:{effort} route injects thinking but never reasoning_effort or budget_tokens', async () => {
+  const res = await fetch(`${gateway.url}/echo-body`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-think-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const forwarded = JSON.parse(body.receivedBodyRaw);
+  assert.deepEqual(forwarded.thinking, { type: 'enabled' });
+  assert.equal('reasoning_effort' in forwarded, false);
+  assert.equal('budget_tokens' in forwarded, false);
+});
+
+test('e2e: a client-set thinking value survives untouched even on a thinking-enabled route', async () => {
+  const res = await fetch(`${gateway.url}/echo-body`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-think-openai', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek-v4-flash', messages: [], thinking: { type: 'client-chosen' } }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const forwarded = JSON.parse(body.receivedBodyRaw);
+  assert.deepEqual(forwarded.thinking, { type: 'client-chosen' });
+  assert.equal('reasoning_effort' in forwarded, false);
 });

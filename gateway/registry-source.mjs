@@ -52,14 +52,21 @@ export function buildProviderRegistry({ policy, config, tenant = 'pv', version =
     const isNativeAnthropic = descriptor.baseUrl === null && descriptor.keyEnv === null;
     if (isNativeAnthropic) continue;
 
+    // `descriptor.thinking` flows in from `policy.providers.<name>.thinking` via resolveProvider's
+    // `...overlay` spread (providers.mjs) — an off-by-default, per-provider opt-in for DeepSeek's
+    // (or any provider's) thinking/reasoning mode, injected into the forwarded request body by the
+    // gateway (server.mjs's applyThinkingToBody). Routes without it stay byte-identical to before.
+    const thinkingField = descriptor.thinking != null ? { thinking: descriptor.thinking } : {};
+
     if (descriptor.wire === 'anthropic') {
       routes[name] = {
         upstreamUrl: descriptor.anthropicBaseUrl ?? descriptor.baseUrl,
         wire: 'anthropic',
         keyEnv: descriptor.keyEnv,
+        ...thinkingField,
       };
     } else if (descriptor.wire === 'openai') {
-      routes[name] = { upstreamUrl: descriptor.baseUrl, wire: 'openai', keyEnv: descriptor.keyEnv };
+      routes[name] = { upstreamUrl: descriptor.baseUrl, wire: 'openai', keyEnv: descriptor.keyEnv, ...thinkingField };
     }
   }
 
