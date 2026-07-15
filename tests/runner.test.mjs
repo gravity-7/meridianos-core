@@ -102,6 +102,10 @@ test('executeRun with a launcher claims the task and logs the run', async () => 
   assert.equal(r.fired, true);
   assert.equal(launched.length, 1);
   assert.equal(launched[0].model, 'claude-opus-4-8');
+  // Regression: executeRun MUST forward `config` to the launch callback — launchAgent needs it for
+  // createWorktree (config.worktreeRoot), buildPrompt, the spawn env, and gateway injection. Without
+  // it a real daemon launch throws `Cannot read properties of undefined (reading 'worktreeRoot')`.
+  assert.equal(launched[0].config, config, 'launch payload must carry the injected config');
   assert.equal(getTask(db, 'F-impl').lease_owner, 'claude'); // claimed + still leased after transition
   const log = readRuns({ path: runsPath });
   assert.equal(log.length, 1);
