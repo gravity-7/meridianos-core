@@ -48,29 +48,35 @@ function authorized(req) {
   return req.headers['x-aios-token'] === AUTH_TOKEN;
 }
 
-const EXEC_COMMANDS = {
-  validate:     ['node', ['tools/aios/cli.mjs', 'validate']],
-  list:         ['node', ['tools/aios/cli.mjs', 'list']],
-  'run --dry':  ['node', ['tools/aios/cli.mjs', 'run', '--dry']],
-  tick:         ['node', ['tools/aios/cli.mjs', 'tick']],
-  plan:         ['node', ['tools/aios/cli.mjs', 'plan']],
-  render:       ['node', ['tools/aios/cli.mjs', 'render']],
-  'verify --dry': ['node', ['tools/aios/cli.mjs', 'verify', '--dry']],
-  reap:         ['node', ['tools/aios/cli.mjs', 'reap']],
-  seed:         ['node', ['tools/aios/cli.mjs', 'seed']],
-};
+/** Build the exec-command map for a given tenant CLI path. `cliPath` defaults to
+ *  'tools/aios/cli.mjs' (PV's runner) via config.mjs's resolveDomain, so the default map here is
+ *  byte-identical to the old module-level constant. */
+function buildExecCommands(cliPath) {
+  return {
+    validate:     ['node', [cliPath, 'validate']],
+    list:         ['node', [cliPath, 'list']],
+    'run --dry':  ['node', [cliPath, 'run', '--dry']],
+    tick:         ['node', [cliPath, 'tick']],
+    plan:         ['node', [cliPath, 'plan']],
+    render:       ['node', [cliPath, 'render']],
+    'verify --dry': ['node', [cliPath, 'verify', '--dry']],
+    reap:         ['node', [cliPath, 'reap']],
+    seed:         ['node', [cliPath, 'seed']],
+  };
+}
 
 /** `config` is the injected AiosConfig (REQUIRED) — its `repoRoot` is the cwd the CLI subcommand
- *  runs in. */
+ *  runs in, and its `domain.cliPath` (default 'tools/aios/cli.mjs') is the tenant runner CLI. */
 function execCommand(name, config) {
-  const entry = EXEC_COMMANDS[name];
+  const cliPath = config.domain?.cliPath ?? 'tools/aios/cli.mjs';
+  const entry = buildExecCommands(cliPath)[name];
   if (!entry) return Promise.resolve({ ok: false, error: `unknown command: ${name}` });
   const [cmd, args] = entry;
   return new Promise((resolve) => {
     execFile(cmd, args, { cwd: config.repoRoot, timeout: 30_000, maxBuffer: 1024 * 512 }, (err, stdout, stderr) => {
       resolve({
         ok: !err || err.code === 0,
-        command: `node tools/aios/cli.mjs ${args.slice(1).join(' ')}`,
+        command: `node ${cliPath} ${args.slice(1).join(' ')}`,
         stdout: stdout || '',
         stderr: stderr || '',
         exitCode: err ? (err.code ?? 1) : 0,
@@ -187,7 +193,8 @@ export function createDashboardServer(config) {
         return send(res, 200, JSON.stringify(restartDaemon(config)));
       }
       if (req.method === 'GET' && url.pathname === '/api/commands') {
-        return send(res, 200, JSON.stringify({ ok: true, commands: Object.keys(EXEC_COMMANDS) }));
+        const cliPath = config.domain?.cliPath ?? 'tools/aios/cli.mjs';
+        return send(res, 200, JSON.stringify({ ok: true, commands: Object.keys(buildExecCommands(cliPath)) }));
       }
       if (req.method === 'POST' && url.pathname === '/api/exec') {
         const { command } = JSON.parse((await readBody(req)) || '{}');

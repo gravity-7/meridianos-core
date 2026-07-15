@@ -71,8 +71,9 @@ columns, not note substrings.
 
 ### 7. Multi-tenancy via `DomainPlugin`
 `createAios`/`config.mjs` take a `DomainPlugin` supplying: agents, prompts, guardrailCheck, board
-title, risk taxonomy, budget meter, default models, agent harness, task categories, MCP servers.
-PropertyVerdict is tenant #0; the core has zero product defaults.
+title, risk taxonomy, budget meter, default models, agent harness, task categories, MCP servers,
+CLI path (`cliPath`, defaults to `'tools/aios/cli.mjs'`). PropertyVerdict is tenant #0; the core has
+zero product defaults.
 
 ---
 

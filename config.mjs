@@ -42,6 +42,10 @@
  *   - `budgetMeter`    — OPTIONAL `{ [agent]: 'transcript'|'protobuf' }` map (§1.4 budget
  *                        simplification): which local usage store budget.mjs reads for each
  *                        roster agent. Omitted/unset agent ⇒ 'transcript'.
+ *   - `cliPath`        — the tenant runner CLI agents invoke for transition/update-task
+ *                        (launcher.mjs's buildPrompt) and the dashboard's action map
+ *                        (dashboard/server.mjs). Defaults to `'tools/aios/cli.mjs'` (PV's runner),
+ *                        so every existing tenant/test is byte-identical.
  *
  * Resolution: the caller supplies the WHOLE plugin — there is no baked default to field-fallback
  * onto anymore, so an omitted field on the passed-in `domain` resolves to `undefined`, not some
@@ -111,6 +115,10 @@ function resolveDomain(domain) {
     //     OR Object<stageName, Array<...>>         — e.g. { spec: [...], designing: [...] }
     //        '*' key is a fallback for any unspecified stage.
     mcpServers: domain.mcpServers,
+    // cliPath — the tenant runner CLI the agent invokes for transition/update-task (buildPrompt) and
+    // the dashboard action map. Default 'tools/aios/cli.mjs' (PV's runner) so existing tenants are
+    // unchanged; a non-PV tenant sets an absolute path to its own runner CLI.
+    cliPath: domain.cliPath ?? 'tools/aios/cli.mjs',
   };
 }
 
