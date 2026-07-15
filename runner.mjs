@@ -160,8 +160,13 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
     }
     let outcome = 'ok', note = 'launched', tokens = null, usage = null, reason = 'ok', resetAt = null;
     try {
-      const providerDescriptor = resolveProvider(d.provider, policy);
-      const r = (await launch({ agent: d.agent, model: d.model, task: d.task, session, provider: providerDescriptor, harness: d.harness, tier: d.modelTier })) || {};
+      const providerDescriptor = resolveProvider(d.provider, policy, config);
+      // `config` MUST be forwarded to the launch callback — launchAgent needs it for createWorktree
+      // (config.worktreeRoot), buildPrompt (config.domain), the spawn env (agentEnv), and the
+      // opt-in gateway injection (config.gateway). Omitting it makes a real daemon launch throw
+      // `Cannot read properties of undefined (reading 'worktreeRoot')` — latent until an agent is
+      // actually launched through the daemon (unit tests inject a mock launch that ignores config).
+      const r = (await launch({ agent: d.agent, model: d.model, task: d.task, session, provider: providerDescriptor, harness: d.harness, tier: d.modelTier, config })) || {};
       outcome = r.outcome ?? 'ok';
       note = r.note ?? note;
       tokens = r.tokens ?? null;
