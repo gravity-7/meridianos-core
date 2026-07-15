@@ -76,6 +76,23 @@ test('buildPrompt honors a non-default config passed via the `config` option', (
   assert.ok(config.domain.prompts.implRules.some((l) => l.includes('fixture handbook')));
 });
 
+// ---- configurable cliPath ---------------------------------------------------------------------
+// buildPrompt sources the tenant runner CLI from config.domain.cliPath (config.mjs defaults it to
+// 'tools/aios/cli.mjs') instead of hardcoding a PV-specific path — so a non-PV tenant that sets its
+// own cliPath gets that path in the prompt, and the default tenant stays byte-identical.
+
+test('buildPrompt uses a custom domain.cliPath in the transition/update-task commands, not the default', () => {
+  const customConfig = resolvePaths({ domain: { ...FIXTURE_DOMAIN, cliPath: '/abs/cli.mjs' } });
+  const prompt = buildPrompt({ id: 'F-9', title: 'Custom cli path task', status: 'ready-for-impl' }, { config: customConfig });
+  assert.ok(prompt.includes('node /abs/cli.mjs transition'));
+  assert.ok(!prompt.includes('tools/aios/cli.mjs'));
+});
+
+test('buildPrompt still uses the default tools/aios/cli.mjs path when the domain omits cliPath', () => {
+  const prompt = buildPrompt({ id: 'F-10', title: 'Default cli path task', status: 'ready-for-impl' }, { config });
+  assert.ok(prompt.includes('node tools/aios/cli.mjs transition'));
+});
+
 // CLI-flag-building tests moved to harness-adapters.test.mjs (buildArgs → per-harness adapters,
 // 1.2). launchAgent's default-path parity (agent → harness → identical cmd/args/env) is also
 // covered there, alongside worktree creation.

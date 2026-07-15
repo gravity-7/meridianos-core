@@ -39,7 +39,7 @@ const STAGE = {
   'in-progress':    { target: 'in-review',       verb: 'Implement it' },
 };
 
-function stageInstructions(status, taskId) {
+function stageInstructions(status, taskId, cliPath) {
   const s = STAGE[status] ?? STAGE['ready-for-impl'];
   if (status === 'spec') return [
     'Write a detailed spec for this task. Create/update the spec file at `.ai/features/<feature>/spec.md`.',
@@ -47,7 +47,7 @@ function stageInstructions(status, taskId) {
     // G1: agent is responsible for writing ACs + complexity back to the DB so the Tier-2 DoR
     // check in planner.mjs can promote the task to `designing` without founder intervention.
     `After writing the spec, update the task with proper acceptance criteria and complexity score:`,
-    `\`node tools/aios/cli.mjs update-task --id ${taskId} --acceptance-criteria "<AC text>" --complexity <1-5>\``,
+    `\`node ${cliPath} update-task --id ${taskId} --acceptance-criteria "<AC text>" --complexity <1-5>\``,
     `Then transition the task to \`${s.target}\`:`,
   ];
   if (status === 'designing') return [
@@ -73,16 +73,20 @@ function stageInstructions(status, taskId) {
 export function buildPrompt(task, { branch, config } = {}) {
   const status = task.status ?? 'ready-for-impl';
   const s = STAGE[status] ?? STAGE['ready-for-impl'];
+  // The tenant runner CLI agents invoke for transition/update-task — configurable via the injected
+  // DomainPlugin's `cliPath` (config.mjs already defaults it to 'tools/aios/cli.mjs'; the `??` here
+  // is belt-and-suspenders for a bare/partial config).
+  const cliPath = config.domain.cliPath ?? 'tools/aios/cli.mjs';
   // The implement stage lands the task in `in-review`, which the verifier can only merge once a PR
   // is recorded — so the implement transition MUST carry --pr. Spec/design stages carry no PR.
   const transitionCmd = s.target === 'in-review'
-    ? `node tools/aios/cli.mjs transition --task ${task.id} --to in-review --actor <your-agent-name> --pr <PR_NUMBER>`
-    : `node tools/aios/cli.mjs transition --task ${task.id} --to ${s.target} --actor <your-agent-name>`;
+    ? `node ${cliPath} transition --task ${task.id} --to in-review --actor <your-agent-name> --pr <PR_NUMBER>`
+    : `node ${cliPath} transition --task ${task.id} --to ${s.target} --actor <your-agent-name>`;
   const parts = [
     `## Task: ${task.id} — ${task.title}`,
     '',
     'You are an autonomous agent executing a task from the AIOS task board.',
-    ...stageInstructions(status, task.id),
+    ...stageInstructions(status, task.id, cliPath),
     '`' + transitionCmd + '`',
     '',
     'A task can only be merged once its PR number is recorded — do NOT move to in-review without --pr.',
