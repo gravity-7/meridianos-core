@@ -156,8 +156,11 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstre
 }
 
 /**
- * Starts the gateway's HTTP proxy. `registry` is a validated provider-registry envelope (built
- * elsewhere — 3.4a wires the real control-plane fetch). `runs` is a run-registry instance (see
+ * Starts the gateway's HTTP proxy. `registry` is EITHER a validated provider-registry envelope
+ * (built elsewhere — 3.4a wires the real control-plane fetch), OR a zero-arg function returning
+ * one — the latter lets a live registry-store (registry-pull.mjs's `createRegistryStore`) drive
+ * per-request updates without restarting the gateway (e.g. `registry: () => store.get()`). Every
+ * existing caller passes a plain object, which behaves exactly as before. `runs` is a run-registry instance (see
  * run-registry.mjs). `onTokenEvent` is a sink callback for every emitted token-event (the ledger
  * is 3.3; defaults to a no-op so this module has no storage dependency). `resolveKey` and `now`
  * are test seams (default `process.env` lookup and `Date.now`). `checkVerdict` is the
@@ -203,7 +206,11 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   const ctx = runs.resolveRun(token);
   if (!ctx) return sendJson(res, 401, { error: 'gateway: unknown token' });
 
-  const route = resolveRoute(registry, ctx.provider);
+  // `registry` may be a plain envelope or a zero-arg provider function (see startGateway's doc
+  // comment) — resolved fresh on EVERY request so a live registry-store's updates take effect
+  // immediately, without needing to restart the gateway or re-resolve per-connection.
+  const activeRegistry = typeof registry === 'function' ? registry() : registry;
+  const route = resolveRoute(activeRegistry, ctx.provider);
   if (!route) {
     // No wire is known yet at this point (routing failed before any wire could be resolved), and
     // token-event.wire has no "unknown" value to fall back to — so unlike the post-routing

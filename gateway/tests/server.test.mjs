@@ -448,3 +448,63 @@ test('checkVerdict is called exactly once per request (no double ledger query)',
     await gatewayOnce.close();
   }
 });
+
+// ─── registry as a function (gateway/index.mjs's assembly wires a live registry-store here) ────
+
+test('registry as a zero-arg function is resolved FRESH on every request (a live registry-store)', async () => {
+  let registryValue = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    tenant: 'pv',
+    providers: { anthropic: PROVIDERS.anthropic },
+    routes: { anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' } },
+  };
+  const runsFn = createRunRegistry();
+  runsFn.registerRun('tok-fn', { tenant: 'pv', agent: 'claude', session: 'sFn', task: null, runId: null, provider: 'anthropic', model: 'claude-sonnet-5', tier: 'medium' });
+  const gatewayFn = await startGateway({
+    port: 0,
+    registry: () => registryValue,
+    runs: runsFn,
+    onTokenEvent: () => {},
+    resolveKey: (k) => (k ? KEYS[k] : undefined),
+    now: () => Date.now(),
+  });
+  try {
+    const res1 = await fetch(`${gatewayFn.url}/anthropic`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': 'tok-fn', 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(res1.status, 200);
+
+    // Swap the underlying registry object (simulating a registry-store update) — no gateway
+    // restart, no re-call to startGateway. The new route points at a dead address.
+    registryValue = {
+      ...registryValue,
+      version: 2,
+      routes: { anthropic: { upstreamUrl: 'http://127.0.0.1:1', wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' } },
+    };
+    const res2 = await fetch(`${gatewayFn.url}/anthropic`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': 'tok-fn', 'content-type': 'application/json' },
+      body: '{}',
+    });
+    // A 502 here (upstream connection failure) is only possible if handleRequest re-called the
+    // registry function and picked up the NEW dead-address route — proving it isn't cached from
+    // the first request (which would have returned 200 again against the still-live stub route).
+    assert.equal(res2.status, 502);
+  } finally {
+    await gatewayFn.close();
+  }
+});
+
+test('registry as a plain object still works UNCHANGED (backward compatibility)', async () => {
+  const res = await fetch(`${gateway.url}/anthropic`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.receivedHeaders.xApiKey, KEYS.TEST_ANTHROPIC_KEY);
+});
