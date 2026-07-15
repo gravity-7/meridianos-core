@@ -140,6 +140,64 @@ the **cheap multi-model eval** lane (test many models against one key), not a pr
 
 ---
 
+## The stage/role axis (`model_routing.<agent>.roles.<role>`)
+
+Tiers route on task *complexity*; roles route on task *stage*. Both live under the same
+`model_routing.<agent>` block, but roles are a second, independent axis that — when present —
+**takes precedence over the tier route**, regardless of the task's complexity:
+
+```yaml
+model_routing:
+  claude:
+    simple: claude-haiku-4-5-20251001
+    medium: claude-sonnet-5
+    medium_high: claude-sonnet-5
+    complex: claude-opus-4-8
+    critical: claude-fable-5
+    roles:
+      spec: { provider: anthropic, model: claude-opus-4-8 }   # premium: spec quality matters
+      design: { provider: anthropic, model: claude-opus-4-8 }
+      impl: { provider: deepseek }                             # cheap: mechanical execution
+```
+
+**Role derivation.** `model-router.mjs`'s `roleForStatus(task.status)` maps the task's board
+status to a role:
+
+| Status | Role |
+|---|---|
+| `spec` | `spec` |
+| `designing` | `design` |
+| `ready-for-impl` | `impl` |
+| `in-progress` | `impl` |
+| anything else / null / undefined | `impl` (safe default) |
+
+**Precedence.** `routeModel` checks `model_routing.<agent>.roles.<role>` first. If an entry exists
+for the task's role, it resolves the route and returns immediately — the tier lookup never runs.
+If there's no entry for that role (including when there's no `roles` block at all), routing falls
+through to the ordinary tier route, unchanged. A `routeModel` result from a role route is
+distinguishable in `reason`, which starts with `role:<role>` (e.g. `role:spec`) instead of the
+usual `<category> (<tier>) → <provider>` / `complexity=<n> → <tier> → <provider>` shape.
+
+**Entry forms.** A `roles.<role>` entry accepts the same object form as a tier entry —
+`{ provider, model?, harness? }`, with `model` defaulting via `modelForTier(provider,
+effectiveTier, policy)` and `harness` defaulting via the usual anthropic→`claude-code` /
+third-party→`opencode` rule when omitted. Its **bare-string form differs from a tier entry's**,
+though: a bare string under `roles.<role>` (e.g. `roles.spec: deepseek`) names a **provider**, not
+a literal model id — it's shorthand for `{ provider: deepseek }`, with the model resolved via
+`modelForTier`. (A tier entry's bare string is the legacy literal-model-id form, kept for
+pre-1.4 back-compat.)
+
+Budget-aware downgrade (`agent_budget.auto_downgrade_at_warn`) still applies before role
+resolution — a role route resolves its model against the (possibly downgraded) `effectiveTier`,
+so `roles.spec` at `warn` still steps down one complexity tier same as the ordinary route would.
+
+**Intended default pattern:** point `roles.spec`/`roles.design` at a premium model (spec quality
+compounds — a bad spec is expensive to build against) and `roles.impl` at a cheap model
+(implementation is comparatively mechanical once the spec is good). Omitting the `roles` block
+entirely preserves today's pure complexity-tier routing — this is purely additive.
+
+---
+
 ## Adding a new provider (checklist)
 
 1. Add a descriptor to `PROVIDERS` in `providers.mjs` (name, baseUrl/anthropicBaseUrl, wire, keyEnv,
