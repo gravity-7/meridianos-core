@@ -133,6 +133,126 @@ function computeTotal({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTo
   return inputTokens + outputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
 }
 
+/**
+ * Incremental SSE (Server-Sent-Events) usage tracker (bite 3.2b). Fed raw upstream bytes as they
+ * arrive; parses complete `\n\n`-delimited events out of a small rolling buffer (never the whole
+ * transcript) and updates a running `usage` object per wire's terminal-usage shape. Every field
+ * stays `null` (unknown) until an event actually reports it — same null-is-unknown contract as
+ * `extractUsage`, just accumulated incrementally instead of parsed once from a full body.
+ */
+function createSseUsageTracker(wire) {
+  let buf = '';
+  const usage = { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null };
+
+  function applyAnthropicEvent(evt) {
+    if (evt?.type === 'message_start' && evt.message?.usage && typeof evt.message.usage === 'object') {
+      const u = evt.message.usage;
+      if (u.input_tokens !== undefined) usage.inputTokens = u.input_tokens;
+      if (u.cache_creation_input_tokens !== undefined) usage.cacheWriteTokens = u.cache_creation_input_tokens;
+      if (u.cache_read_input_tokens !== undefined) usage.cacheReadTokens = u.cache_read_input_tokens;
+    } else if (evt?.type === 'message_delta' && evt.usage && typeof evt.usage.output_tokens === 'number') {
+      // Cumulative per the anthropic streaming wire — the LAST value seen wins.
+      usage.outputTokens = evt.usage.output_tokens;
+    }
+  }
+
+  function applyOpenaiEvent(evt) {
+    const u = evt?.usage;
+    if (!u || typeof u !== 'object') return;
+    if (u.prompt_tokens !== undefined) usage.inputTokens = u.prompt_tokens;
+    if (u.completion_tokens !== undefined) usage.outputTokens = u.completion_tokens;
+    if (u.prompt_tokens_details?.cached_tokens !== undefined) usage.cacheReadTokens = u.prompt_tokens_details.cached_tokens;
+  }
+
+  function processEvent(rawEvent) {
+    const dataLines = [];
+    for (const line of rawEvent.split('\n')) {
+      const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line;
+      if (trimmed.startsWith('data:')) dataLines.push(trimmed.slice(5).replace(/^ /, ''));
+    }
+    if (dataLines.length === 0) return;
+    const dataStr = dataLines.join('\n');
+    if (dataStr === '[DONE]') return;
+    let parsed;
+    try {
+      parsed = JSON.parse(dataStr);
+    } catch {
+      return; // ignore non-JSON pings/comments
+    }
+    if (wire === 'anthropic') applyAnthropicEvent(parsed);
+    else applyOpenaiEvent(parsed);
+  }
+
+  function feed(chunkStr) {
+    buf += chunkStr;
+    let idx;
+    // SSE events are separated by a blank line; tolerate both \n\n and \r\n\r\n.
+    while ((idx = buf.search(/\r?\n\r?\n/)) !== -1) {
+      const match = /\r?\n\r?\n/.exec(buf);
+      const rawEvent = buf.slice(0, idx);
+      buf = buf.slice(idx + match[0].length);
+      processEvent(rawEvent);
+    }
+  }
+
+  return { feed, usage };
+}
+
+/**
+ * Streaming response path (bite 3.2b): the upstream is SSE (`text/event-stream`). Pipes bytes to
+ * the client as they arrive (no whole-body buffering) while incrementally parsing the same bytes
+ * for the terminal usage block, then meters exactly once at stream-end (or on stream error, with
+ * whatever usage was captured — best-effort, never silently skipped). Status/headers are written
+ * up front so the client starts receiving bytes immediately, mirroring the buffered path's header
+ * handling (drop content-length/transfer-encoding; keep the upstream content-type).
+ */
+function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestId, provider, model, wire, verdict, start, now }) {
+  const responseHeaders = { ...upstreamRes.headers };
+  delete responseHeaders['content-length'];
+  delete responseHeaders['transfer-encoding'];
+  res.writeHead(upstreamRes.statusCode, {
+    ...responseHeaders,
+    'content-type': upstreamRes.headers['content-type'] ?? 'text/event-stream',
+  });
+
+  const tracker = createSseUsageTracker(wire);
+  let emitted = false;
+  const emitOnce = () => {
+    if (emitted) return;
+    emitted = true;
+    emitEvent({
+      onTokenEvent,
+      ctx,
+      requestId,
+      provider,
+      model,
+      wire,
+      upstreamStatus: upstreamRes.statusCode ?? null,
+      latencyMs: now() - start,
+      usage: tracker.usage,
+      verdict,
+    });
+  };
+
+  return new Promise((resolve) => {
+    upstreamRes.on('data', (chunk) => {
+      res.write(chunk);
+      tracker.feed(chunk.toString('utf8'));
+    });
+    upstreamRes.on('end', () => {
+      res.end();
+      emitOnce();
+      resolve();
+    });
+    upstreamRes.on('error', () => {
+      // Best-effort: meter with whatever was captured (possibly all-null) rather than skip.
+      emitOnce();
+      if (!res.writableEnded) res.end();
+      resolve();
+    });
+  });
+}
+
 function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstreamStatus, latencyMs, usage, verdict }) {
   const usageFields = usage ?? { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null };
   const v = verdict ?? {};
@@ -286,6 +406,25 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       verdict,
     });
     return sendJson(res, 502, { error: 'gateway: upstream request failed', detail: String(err?.message ?? err) });
+  }
+
+  // Streaming path (bite 3.2b): detected from the UPSTREAM's own content-type, not the client's
+  // request — a streaming request whose upstream fails before it can respond (or an upstream that
+  // ignores `stream: true`) is metered on the buffered path exactly as before.
+  const upstreamContentType = (upstreamRes.headers['content-type'] || '').toLowerCase();
+  if (upstreamContentType.startsWith('text/event-stream')) {
+    await handleStreamingResponse(upstreamRes, res, {
+      onTokenEvent,
+      ctx,
+      requestId,
+      provider: ctx.provider,
+      model: ctx.model,
+      wire: route.wire,
+      verdict,
+      start,
+      now,
+    });
+    return;
   }
 
   const responseBody = await readBody(upstreamRes);

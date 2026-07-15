@@ -70,6 +70,45 @@ before(async () => {
       send(200, { id: 'msg_bp', usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } });
       return;
     }
+    // ─── SSE streaming stubs (bite 3.2b) — flush a couple of chunks with small delays to genuinely
+    // simulate an incrementally-arriving stream, never buffering the whole body upstream-side either.
+    const sseWrite = (event) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    if (req.url === '/anthropic-stream') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      sseWrite({ type: 'message_start', message: { id: 'msg_stream1', usage: { input_tokens: 10, cache_read_input_tokens: 3, cache_creation_input_tokens: 1, output_tokens: 1 } } });
+      await delay(20);
+      sseWrite({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hel' } });
+      sseWrite({ type: 'message_delta', delta: {}, usage: { output_tokens: 10 } });
+      await delay(20);
+      sseWrite({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'lo' } });
+      sseWrite({ type: 'message_delta', delta: {}, usage: { output_tokens: 20 } });
+      sseWrite({ type: 'message_stop' });
+      res.end();
+      return;
+    }
+    if (req.url === '/openai-stream') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      sseWrite({ id: 'chatcmpl_stream1', choices: [{ delta: { content: 'Hel' } }] });
+      await delay(20);
+      sseWrite({ id: 'chatcmpl_stream1', choices: [{ delta: { content: 'lo' } }] });
+      await delay(20);
+      sseWrite({ id: 'chatcmpl_stream1', choices: [], usage: { prompt_tokens: 5, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 2 } } });
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+    if (req.url === '/anthropic-stream-no-usage') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      sseWrite({ type: 'ping' });
+      await delay(20);
+      sseWrite({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } });
+      sseWrite({ type: 'message_stop' });
+      res.end();
+      return;
+    }
     send(404, { error: 'not found' });
   });
   await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
@@ -331,6 +370,145 @@ test('502 + a null-usage token-event when the upstream response body cannot be p
   assert.equal(evt.upstreamStatus, 200);
   assert.equal(evt.inputTokens, null);
   assert.equal(evt.totalTokens, null);
+});
+
+// ─── Streaming (bite 3.2b) ──────────────────────────────────────────────────
+// The stub SSE routes above simulate a real streaming upstream: multiple chunks separated by a
+// few ms of delay, `text/event-stream` content-type. These tests prove (a) the client receives
+// the full SSE body byte-for-byte, (b) usage is parsed from the terminal event(s) per wire and
+// metered EXACTLY once, and (c) bytes genuinely arrive incrementally rather than being buffered
+// upstream-side and flushed as one write.
+
+async function readStreamChunks(res) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push({ t: Date.now(), text: decoder.decode(value, { stream: true }) });
+  }
+  return chunks;
+}
+
+test('anthropic SSE streaming: client gets the full stream, usage (input/output/cache) metered exactly once', async () => {
+  const startCount = events.length;
+  const res = await fetch(`${gateway.url}/anthropic-stream`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [], stream: true }),
+  });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/);
+
+  const chunks = await readStreamChunks(res);
+  const fullBody = chunks.map((c) => c.text).join('');
+  assert.match(fullBody, /message_start/);
+  assert.match(fullBody, /message_delta/);
+  assert.match(fullBody, /message_stop/);
+
+  assert.equal(events.length, startCount + 1);
+  const evt = events.at(-1);
+  assert.equal(evt.wire, 'anthropic');
+  assert.equal(evt.upstreamStatus, 200);
+  assert.equal(evt.inputTokens, 10);
+  assert.equal(evt.outputTokens, 20);
+  assert.equal(evt.cacheReadTokens, 3);
+  assert.equal(evt.cacheWriteTokens, 1);
+  assert.equal(evt.totalTokens, 34);
+});
+
+test('openai SSE streaming: client gets the full stream, usage metered exactly once', async () => {
+  const startCount = events.length;
+  const res = await fetch(`${gateway.url}/openai-stream`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-deepseek', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek-chat', messages: [], stream: true }),
+  });
+  assert.equal(res.status, 200);
+  const chunks = await readStreamChunks(res);
+  const fullBody = chunks.map((c) => c.text).join('');
+  assert.match(fullBody, /\[DONE\]/);
+
+  assert.equal(events.length, startCount + 1);
+  const evt = events.at(-1);
+  assert.equal(evt.wire, 'openai');
+  assert.equal(evt.inputTokens, 5);
+  assert.equal(evt.outputTokens, 7);
+  assert.equal(evt.cacheReadTokens, 2);
+  assert.equal(evt.cacheWriteTokens, null);
+  assert.equal(evt.totalTokens, 14);
+});
+
+test('streaming with no usage event: all usage fields null, exactly one token-event still emitted', async () => {
+  const startCount = events.length;
+  const res = await fetch(`${gateway.url}/anthropic-stream-no-usage`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [], stream: true }),
+  });
+  assert.equal(res.status, 200);
+  const chunks = await readStreamChunks(res);
+  assert.match(chunks.map((c) => c.text).join(''), /message_stop/);
+
+  assert.equal(events.length, startCount + 1);
+  const evt = events.at(-1);
+  assert.equal(evt.inputTokens, null);
+  assert.equal(evt.outputTokens, null);
+  assert.equal(evt.cacheReadTokens, null);
+  assert.equal(evt.cacheWriteTokens, null);
+  assert.equal(evt.totalTokens, null);
+});
+
+test('streaming truly streams: the client receives bytes incrementally, not as one buffered flush', async () => {
+  const reqStart = Date.now();
+  const res = await fetch(`${gateway.url}/anthropic-stream`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [], stream: true }),
+  });
+  const chunks = await readStreamChunks(res);
+  assert.ok(chunks.length >= 2, `expected multiple discrete reads, got ${chunks.length}`);
+  const firstT = chunks[0].t - reqStart;
+  const lastT = chunks.at(-1).t - reqStart;
+  // The stub spaces its writes with 20ms delays before its final write. If the gateway buffered
+  // the whole upstream body before forwarding (like the non-streaming path), the client couldn't
+  // start reading until the upstream had already finished — collapsing this gap to ~0. Streaming
+  // means the FIRST chunk (message_start) arrives well before the LAST (message_stop).
+  assert.ok(lastT - firstT >= 10, `expected a streaming gap, first=${firstT}ms last=${lastT}ms`);
+});
+
+test('non-streaming still works unchanged: a plain-JSON route still buffers+parses (regression guard)', async () => {
+  const res = await fetch(`${gateway.url}/anthropic`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/json');
+  const body = await res.json();
+  assert.equal(body.id, 'msg_1');
+});
+
+test('enforcement over streaming: a deny verdict still 429s before any streaming/forward', async () => {
+  verdictMode = { decision: 'deny', capWindow: '5h' };
+  const startCount = eventsEnf.length;
+  const res = await fetch(`${gatewayEnf.url}/anthropic-stream`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [], stream: true }),
+  });
+  assert.equal(res.status, 429);
+  assert.equal(res.headers.get('content-type'), 'application/json');
+  const body = await res.json();
+  assert.equal(body.error.type, 'rate_limit_error');
+
+  assert.equal(eventsEnf.length, startCount + 1);
+  const evt = eventsEnf.at(-1);
+  assert.equal(evt.enforcementDecision, 'deny');
+  assert.equal(evt.upstreamStatus, null);
+  assert.equal(evt.totalTokens, null);
+  verdictMode = { decision: 'allow', capWindow: null };
 });
 
 // ─── Enforcement (bite 3.2c) ────────────────────────────────────────────────
