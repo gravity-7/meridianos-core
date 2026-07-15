@@ -81,6 +81,31 @@ server-side.
 
 ---
 
+## Thinking / reasoning mode
+
+DeepSeek's v4 models support a "thinking" (reasoning) mode enabled by a request-body parameter,
+identical on both wires: `"thinking": {"type": "enabled"}`. Because harness CLIs (claude-code,
+opencode) build that request body themselves, the gateway — which already buffers the full body
+before forwarding — is the clean, harness-agnostic place to inject it. No agent or harness code
+needs to change.
+
+- **Enable via policy:** `.ai/policy.yaml`'s `providers.<name>.thinking` — either `true` (enable,
+  no effort hint) or `{ effort: 'low' | 'medium' | 'high' }`. It flows through
+  `resolveProvider`'s policy overlay → `registry-source.mjs`'s `buildProviderRegistry` →
+  `provider-registry.mjs`'s `resolveRoute` → `server.mjs`'s `applyThinkingToBody`, which injects
+  it into the buffered request body right before forwarding.
+- **Off by default:** a route with no `thinking` config is untouched — the forwarded body is
+  byte-identical to today.
+- **Both wires get `{"type":"enabled"}`.** The OpenAI wire additionally gets `reasoning_effort`
+  set from `thinking.effort` when present. The Anthropic wire never gets `reasoning_effort` or
+  `budget_tokens` — DeepSeek ignores `budget_tokens` on that wire, so it's deliberately never sent.
+- **Client wins:** if the request body already has a top-level `thinking` key, the gateway leaves
+  it untouched rather than overriding the caller's explicit choice.
+- **Never breaks a request:** a non-JSON, empty, or unparseable body is forwarded unchanged rather
+  than throwing — thinking injection is best-effort and never the reason a call fails.
+
+---
+
 ## Key custody (the Model-B story)
 
 - The pushed registry carries **routing config + `keyEnv` names only** — never secrets. Keys stay

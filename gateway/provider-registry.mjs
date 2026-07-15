@@ -75,6 +75,16 @@ export function validateProviderRegistry(reg) {
     if (!(name in reg.providers)) {
       throw new Error(`provider-registry.routes.${name} references a provider not present in providers`);
     }
+    // `thinking` is an OPTIONAL, off-by-default route field (gateway/server.mjs's
+    // applyThinkingToBody reads it) — light validation only: when present it must be a boolean
+    // (enable, no effort) or a plain object (e.g. `{ effort: 'high' }`). Not required.
+    if ('thinking' in route && route.thinking !== undefined) {
+      const t = route.thinking;
+      const isPlainObject = t !== null && typeof t === 'object' && !Array.isArray(t);
+      if (typeof t !== 'boolean' && !isPlainObject) {
+        throw new Error(`provider-registry.routes.${name}.thinking must be a boolean or a plain object (got ${typeof t})`);
+      }
+    }
   }
 
   if (reg.enforcement !== undefined && reg.enforcement !== null) {
@@ -95,9 +105,17 @@ export function validateProviderRegistry(reg) {
   return true;
 }
 
-/** The route's `{ upstreamUrl, wire, keyEnv }` for `providerName`, or null if absent. */
+/** The route's `{ upstreamUrl, wire, keyEnv, thinking? }` for `providerName`, or null if absent.
+ * `thinking` is only present on the returned object when the underlying route carries it — a
+ * route without a thinking config yields the exact same 3-key shape as before (byte-identical),
+ * and `route.thinking` reads as `undefined` (falsy — the off-by-default case) rather than `null`. */
 export function resolveRoute(reg, providerName) {
   const route = reg?.routes?.[providerName];
   if (!route) return null;
-  return { upstreamUrl: route.upstreamUrl, wire: route.wire, keyEnv: route.keyEnv };
+  return {
+    upstreamUrl: route.upstreamUrl,
+    wire: route.wire,
+    keyEnv: route.keyEnv,
+    ...(route.thinking != null ? { thinking: route.thinking } : {}),
+  };
 }

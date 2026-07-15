@@ -29,6 +29,8 @@ import { randomUUID } from 'node:crypto';
 import { resolveRoute } from './provider-registry.mjs';
 import { makeTokenEvent, validateTokenEvent } from './token-event.mjs';
 
+export { applyThinkingToBody };
+
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 const HOP_BY_HOP_HEADERS = ['host', 'connection', 'authorization', 'x-api-key', 'x-gateway-token', 'content-length', 'transfer-encoding'];
 
@@ -74,6 +76,43 @@ function denyBody(wire, capWindow) {
   }
   // openai
   return { error: { message, type: 'rate_limit_exceeded', code: 'over_budget' } };
+}
+
+/**
+ * Thinking/reasoning-mode injection (policy-driven, per-provider, off-by-default — see
+ * `route.thinking` in provider-registry.mjs / registry-source.mjs). The gateway is the clean,
+ * harness-agnostic injection point because it already buffers the full request body before
+ * forwarding it (harness CLIs like claude-code/opencode build that body themselves, so neither
+ * agent nor harness code needs to change).
+ *
+ * `body` is a Buffer in, Buffer out — this must NEVER throw and must NEVER silently corrupt a
+ * request: any body that isn't parseable JSON, or isn't a JSON object, is forwarded byte-for-byte
+ * unchanged, exactly as if thinking weren't configured at all.
+ */
+function applyThinkingToBody(body, route) {
+  if (!route?.thinking) return body;
+
+  let parsed;
+  try {
+    if (!body || body.length === 0) return body;
+    parsed = JSON.parse(body.toString('utf8'));
+  } catch {
+    return body;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return body;
+
+  // Respect an explicit client-set `thinking` — never override the caller's own choice.
+  if ('thinking' in parsed) return body;
+
+  parsed.thinking = { type: 'enabled' };
+
+  // `reasoning_effort` is an OpenAI-wire-only knob; DeepSeek ignores `budget_tokens` on the
+  // anthropic wire, so it is deliberately never set here on either wire.
+  if (route.wire === 'openai' && typeof route.thinking === 'object' && route.thinking.effort) {
+    parsed.reasoning_effort = route.thinking.effort;
+  }
+
+  return Buffer.from(JSON.stringify(parsed), 'utf8');
 }
 
 function buildForwardHeaders(req, route, resolveKey) {
@@ -373,6 +412,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   }
 
   const body = await readBody(req);
+  const forwardBody = applyThinkingToBody(body, route);
   const headers = buildForwardHeaders(req, route, resolveKey);
   // Preserve the upstream base path: an upstreamUrl like 'https://api.deepseek.com/anthropic' must
   // become '…/anthropic/v1/messages', NOT '…/v1/messages'. `new URL(req.url, base)` would drop the
@@ -386,11 +426,11 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     upstreamRes = await new Promise((resolvePromise, rejectPromise) => {
       const outReq = transport.request(
         target,
-        { method: req.method, headers: { ...headers, 'content-length': Buffer.byteLength(body) } },
+        { method: req.method, headers: { ...headers, 'content-length': Buffer.byteLength(forwardBody) } },
         (r) => resolvePromise(r),
       );
       outReq.on('error', rejectPromise);
-      outReq.end(body);
+      outReq.end(forwardBody);
     });
   } catch (err) {
     emitEvent({

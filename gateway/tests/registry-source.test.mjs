@@ -61,6 +61,41 @@ test('buildProviderRegistry routes an anthropic-wire BYO provider via anthropicB
   });
 });
 
+// ─── thinking (off-by-default, per-provider, policy-driven) ────────────────
+
+test('buildProviderRegistry carries policy.providers.<name>.thinking through into routes.<name>.thinking', () => {
+  const policy = { providers: { deepseek: { thinking: { effort: 'high' } } } };
+  const reg = buildProviderRegistry({ policy, now: NOW });
+  assert.deepEqual(reg.routes.deepseek.thinking, { effort: 'high' });
+});
+
+test('buildProviderRegistry carries a boolean thinking overlay through unchanged', () => {
+  const policy = { providers: { deepseek: { thinking: true } } };
+  const reg = buildProviderRegistry({ policy, now: NOW });
+  assert.equal(reg.routes.deepseek.thinking, true);
+});
+
+test('buildProviderRegistry omits thinking from the route when no policy overlay sets it (byte-identical to before)', () => {
+  const reg = buildProviderRegistry({ policy: {}, now: NOW });
+  assert.equal('thinking' in reg.routes.deepseek, false);
+  assert.deepEqual(reg.routes.deepseek, {
+    upstreamUrl: 'https://api.deepseek.com',
+    wire: 'openai',
+    keyEnv: 'DEEPSEEK_KEY',
+  });
+});
+
+test('buildProviderRegistry carries thinking through on the anthropic-wire route branch too', () => {
+  const policy = { providers: { deepseek: { wire: 'anthropic', thinking: { effort: 'medium' } } } };
+  const reg = buildProviderRegistry({ policy, now: NOW });
+  assert.deepEqual(reg.routes.deepseek, {
+    upstreamUrl: 'https://api.deepseek.com/anthropic',
+    wire: 'anthropic',
+    keyEnv: 'DEEPSEEK_KEY',
+    thinking: { effort: 'medium' },
+  });
+});
+
 // ─── enforcement ─────────────────────────────────────────────────────────────
 
 // 3.4a deliberately derives NO enforcement section: per-agent budget caps
