@@ -47,7 +47,7 @@ before(async () => {
     if (req.url === '/anthropic') {
       send(200, {
         id: 'msg_1',
-        receivedHeaders: { xApiKey: req.headers['x-api-key'], anthropicVersion: req.headers['anthropic-version'] },
+        receivedHeaders: { xApiKey: req.headers['x-api-key'], anthropicVersion: req.headers['anthropic-version'], acceptEncoding: req.headers['accept-encoding'] },
         usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 3, cache_creation_input_tokens: 1 },
       });
       return;
@@ -218,6 +218,16 @@ test('anthropic wire: defaults anthropic-version to 2023-06-01 when the client o
   });
   const body = await res.json();
   assert.equal(body.receivedHeaders.anthropicVersion, '2023-06-01');
+});
+
+test('forces accept-encoding: identity upstream even when the client asks for gzip (so the metering parse never hits compressed bytes)', async () => {
+  const res = await fetch(`${gateway.url}/anthropic`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'accept-encoding': 'gzip, deflate, br' },
+    body: '{}',
+  });
+  const body = await res.json();
+  assert.equal(body.receivedHeaders.acceptEncoding, 'identity');
 });
 
 // ─── OpenAI wire ────────────────────────────────────────────────────────────
