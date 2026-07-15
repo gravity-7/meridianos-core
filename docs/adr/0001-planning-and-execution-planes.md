@@ -62,16 +62,50 @@ the task's stage (`spec`/`designing` → `spec`/`design`; `ready-for-impl`/`in-p
 This is a small extension of a mechanism that already exists (`model_routing` +
 `DomainPlugin.defaultModels`), not new infrastructure. It is **Bite #1** (spec appendix below).
 
-### D2 — Planning is a module behind a `ProjectStore`; `.ai/` becomes one backing implementation
+### D2 — Planning is a module behind a `ProjectStore` facade over two canonical stores
 
 Draw a module boundary around **Planning** (`intake → refine → card → DoR`) distinct from Execution,
-and put board/spec/intake persistence behind a **`ProjectStore` interface**. The current
-`.ai/`-on-filesystem layout becomes the *default* `ProjectStore` implementation, not the only one; a
-client project may back it with a database or a different layout. `config.mjs`'s hardcoded `.ai/*`
-paths and the `pricingPath` runner-leak move behind this seam.
+and put persistence behind a **`ProjectStore` facade** so the planning module never imports `.ai/`
+paths directly. That kills the `config.mjs` `.ai/*` hardcoding (and the `pricingPath` runner-leak).
 
-The existing `.ai/inbox/` directory is demoted from a privileged special case to "the filesystem
-`IntakeSource`" (sets up D4).
+**Two canonical stores for two kinds of data — not one deriving the other.** This is the load-bearing
+decision. MeridianOS already splits its data correctly today; D2 only names the seam:
+
+- **`StateStore` — the DB, canonical for structured lifecycle state (ALREADY EXISTS).** Tasks are
+  rows in `aios.db` (`state.mjs`/`db.mjs`): `id, status, owner, complexity, acceptance_criteria,
+  lane, sprint, risk_tags, task_type`, governance/park state. Transitions are **ACID** DB writes.
+  `.ai/state/board.json` and `.ai/board.md` are **generated, git-committed projections** of this
+  store (`render.mjs`), so `git blame board.json` *is* the audit trail for state — the DB does not
+  cost us git history. `validate --drift` re-renders and diffs to catch tampering.
+- **`DocStore` — files, canonical for document BODIES (the D2 build).** The prose spec
+  (`features/<id>/spec.md`), `contracts/`, and handoffs stay as git-tracked files, human-readable at
+  rest, reviewed in PRs alongside code. A task references its body by path: `task.spec = <path>`.
+
+The two stores are **linked by that path, and do NOT sync into each other.** The only place they
+meet is deliberate: a spec agent writes `spec.md` **and** calls
+`cli.mjs update-task --acceptance-criteria … --complexity …` to set the structured fields — the
+agent writes both, explicitly.
+
+**`ProjectStore`** composes `StateStore` + `DocStore`; the planning module talks only to the facade.
+SQLite backs `StateStore` now; the interface is what lets a hosted multi-tenant deployment (D3) swap
+in Postgres later. `DocStore` is a filesystem implementation now (rooted at the project repo); a
+hosted deployment could back bodies with an object store — but bodies stay **documents**, never
+relational columns.
+
+The existing `.ai/inbox/` directory is demoted from a privileged special case to `InboxSource`, the
+first `IntakeSource` (hands off to D4).
+
+**Already done vs. the D2 gap.** The DB state store + generated, git-committed board render is *done*
+(~75%). The narrow, migration-free D2 work: (a) wrap the existing state store in a `StateStore`
+interface (no behavior change), (b) build the `DocStore`/`FilesystemStore` for bodies, (c) route the
+planning module through the `ProjectStore` facade, (d) refactor the inbox into `InboxSource`.
+
+**Rejected alternative — "files canonical, DB a derived index, one-way `files → DB` sync."** Making
+`spec.md` frontmatter the source of truth for `status`/`owner`/`complexity` and deriving the DB from
+it *relocates* the two real weaknesses of a files-only design — parse-fragility and loss of ACID
+transitions — rather than removing them: a status change would become "write a file, re-parse
+frontmatter, hope it's well-formed" instead of one atomic DB update. The DB is already canonical for
+state and stays so; frontmatter is never parsed back into state.
 
 ### D3 — A project is data, and a control plane supervises many of them
 
