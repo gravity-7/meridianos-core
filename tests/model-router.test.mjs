@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TIERS, TASK_CATEGORIES,
-  inferCategory, complexityTier, routeModel, categoryIndex,
+  inferCategory, complexityTier, routeModel, categoryIndex, roleForStatus,
 } from '../model-router.mjs';
 import { openDb } from '../db.mjs';
 import { upsertTask, getTask, listTasks } from '../state.mjs';
@@ -350,4 +350,106 @@ test('a task with no task_type keeps falling back to inferCategory / numeric com
 
   const routed = routeModel('claude', task, undefined, 'ok');
   assert.equal(routed.category, 'security');
+});
+
+// ─── roleForStatus ─────────────────────────────────────────────────────────
+
+test('roleForStatus maps spec → spec', () => {
+  assert.equal(roleForStatus('spec'), 'spec');
+});
+
+test('roleForStatus maps designing → design', () => {
+  assert.equal(roleForStatus('designing'), 'design');
+});
+
+test('roleForStatus maps ready-for-impl → impl', () => {
+  assert.equal(roleForStatus('ready-for-impl'), 'impl');
+});
+
+test('roleForStatus maps in-progress → impl', () => {
+  assert.equal(roleForStatus('in-progress'), 'impl');
+});
+
+test('roleForStatus falls back to impl for unknown/null/undefined status', () => {
+  assert.equal(roleForStatus('some-unknown-status'), 'impl');
+  assert.equal(roleForStatus(null), 'impl');
+  assert.equal(roleForStatus(undefined), 'impl');
+});
+
+// ─── stage/role axis routing (model_routing.<agent>.roles.<role>) ──────────
+
+test('a roles.spec entry wins over the tier route for a status:"spec" task, regardless of complexity', () => {
+  const p = {
+    model_routing: {
+      claude: {
+        ...DEFAULT_MODELS.claude,
+        roles: { spec: { provider: 'anthropic', model: 'claude-opus-4-8' } },
+      },
+    },
+  };
+  // complexity=1 would normally route to Haiku (simple tier) — the role route must override it.
+  const r = routeModel('claude', { complexity: 1, risk_tags: '[]', status: 'spec' }, p, 'ok', FIXTURE_DOMAIN);
+  assert.equal(r.provider, 'anthropic');
+  assert.equal(r.model, 'claude-opus-4-8');
+  assert.match(r.reason, /^role:spec/);
+});
+
+test('a roles.spec entry is ignored for a status:"ready-for-impl" task — falls through to the tier route', () => {
+  const p = {
+    model_routing: {
+      claude: {
+        ...DEFAULT_MODELS.claude,
+        roles: { spec: { provider: 'anthropic', model: 'claude-opus-4-8' } },
+      },
+    },
+  };
+  const r = routeModel('claude', { complexity: 1, risk_tags: '[]', status: 'ready-for-impl' }, p, 'ok', FIXTURE_DOMAIN);
+  assert.equal(r.model, 'claude-haiku-4-5-20251001'); // ordinary simple-tier route, unaffected
+  assert.equal(r.tier, 'simple');
+  assert.ok(!r.reason.startsWith('role:'));
+});
+
+test('a policy with no roles block routes byte-identical to today for every stage (no regression)', () => {
+  for (const status of ['spec', 'designing', 'ready-for-impl', 'in-progress', undefined, 'some-other-status']) {
+    const withStatus = routeModel('claude', { complexity: 3, risk_tags: '[]', status }, policy, 'ok', FIXTURE_DOMAIN);
+    const withoutStatus = routeModel('claude', { complexity: 3, risk_tags: '[]' }, policy, 'ok', FIXTURE_DOMAIN);
+    assert.deepEqual(withStatus, withoutStatus, `status=${status} must route identically to no status when policy has no roles block`);
+  }
+});
+
+test('bare-string role form names a PROVIDER (not a literal model id) — model resolves via modelForTier', () => {
+  const p = { model_routing: { claude: { simple: { provider: 'anthropic' }, roles: { spec: 'deepseek' } } } };
+  const r = routeModel('claude', { complexity: 1, risk_tags: '[]', status: 'spec' }, p, 'ok');
+  assert.equal(r.provider, 'deepseek');
+  assert.equal(r.model, 'deepseek-v4-flash'); // deepseek's own tier model, via modelForTier
+  assert.match(r.reason, /^role:spec/);
+});
+
+test('object role form omitting model defaults it via modelForTier, same as a tier entry would', () => {
+  const p = { model_routing: { claude: { simple: { provider: 'anthropic' }, roles: { spec: { provider: 'deepseek' } } } } };
+  const r = routeModel('claude', { complexity: 1, risk_tags: '[]', status: 'spec' }, p, 'ok');
+  assert.equal(r.provider, 'deepseek');
+  assert.equal(r.model, 'deepseek-v4-flash');
+  assert.match(r.reason, /^role:spec/);
+});
+
+test('role route with an unknown provider throws, referencing the roles.<role> path', () => {
+  const p = { model_routing: { claude: { roles: { spec: { provider: 'not-a-real-provider' } } } } };
+  assert.throws(
+    () => routeModel('claude', { complexity: 1, risk_tags: '[]', status: 'spec' }, p, 'ok'),
+    /model_routing\.claude\.roles\.spec references unknown provider/,
+  );
+});
+
+test('role route respects budget-warn downgrade for the model default, same as the tier route', () => {
+  const p = {
+    model_routing: { claude: { roles: { spec: { provider: 'deepseek' } } } },
+    agent_budget: { auto_downgrade_at_warn: true },
+  };
+  const r = routeModel('claude', { complexity: 5, risk_tags: '[]', status: 'spec' }, p, 'warn', FIXTURE_DOMAIN);
+  assert.equal(r.baseTier, 'complex');
+  assert.equal(r.tier, 'medium_high'); // downgraded one tier from complex
+  assert.equal(r.model, 'deepseek-v4-flash'); // deepseek's medium_high-tier model
+  assert.match(r.reason, /^role:spec/);
+  assert.match(r.reason, /downgraded to medium_high/);
 });
