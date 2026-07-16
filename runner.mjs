@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { loadPolicy, budgetStatus } from './budget.mjs';
 import { decide } from './router.mjs';
 import { resolveProvider } from './providers.mjs';
-import { claimTask, releaseLease, forceReleaseLease, getTask, transition } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
 import { appendRun, readRuns, newRunId } from './runlog.mjs';
 import { isQuotaText, parseResetAt, resetInstant } from './exit-classify.mjs';
 import { warn as logWarn } from './event-log.mjs';
@@ -131,6 +131,7 @@ export function planRun({ db, config, policy = loadPolicy(undefined, config), bu
  * `config` is the injected AiosConfig (REQUIRED), threaded to planRun.
  */
 export async function executeRun({ db, config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents, runs, launch, runsPath = undefined, sessionFor, findPr } = {}) {
+  const store = createStateStore(db);
   const plan = planRun({ db, policy, budget, now, agents, runs, config });
 
   // Missing-key skips (router.decide()'s cost-safety guard) are denials, not claimable — but the
@@ -153,7 +154,7 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
   const results = [];
   for (const d of plan.decisions.filter((x) => x.mayClaim)) {
     const session = sessionFor ? sessionFor(d) : randomUUID();
-    const claimed = claimTask(db, { taskId: d.task.id, agent: d.agent, session, ttlMs: d.ttlMs, now: nowIso });
+    const claimed = store.claimTask({ taskId: d.task.id, agent: d.agent, session, ttlMs: d.ttlMs, now: nowIso });
     if (!claimed.won) {
       results.push(appendRun({ agent: d.agent, model: d.model, provider: d.provider, harness: d.harness, session, task: d.task.id, outcome: 'skipped', reason: 'lost_claim', note: `lost claim: ${claimed.reason}` }, { path: runsPath, now, config }));
       continue;
@@ -174,7 +175,7 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
       reason = r.reason ?? (outcome === 'ok' ? 'ok' : 'nonzero');
       resetAt = r.resetAt ?? null;
       if (outcome === 'ok') {
-        const taskAfter = getTask(db, d.task.id);
+        const taskAfter = store.getTask(d.task.id);
         if (taskAfter && taskAfter.status === d.task.status) {
           // RCA-3: the agent finished but never transitioned the task. Before treating this as lost
           // work, try to RECOVER a PR it opened but forgot to record — the honor-system gap must not
@@ -196,9 +197,9 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
     }
     if (outcome === 'failed') {
       try {
-        const rel = releaseLease(db, { taskId: d.task.id, session });
+        const rel = store.releaseLease({ taskId: d.task.id, session });
         // Fallback: if session UUID doesn't match (instant exit race), force-release by agent name
-        if (!rel.ok) forceReleaseLease(db, { taskId: d.task.id, agent: d.agent });
+        if (!rel.ok) store.forceReleaseLease({ taskId: d.task.id, agent: d.agent });
       } catch { /* best-effort */ }
     }
     // Post-hoc per_task_tokens actuator (RCA-5): the lever finally does something — a run that
@@ -220,6 +221,7 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
  * returns { ok:false, reason } when there is no branch, no gh, or no open PR (caller then fails).
  */
 function recoverPr(db, { task, branch, actor, now = new Date().toISOString(), findPr } = {}) {
+  const store = createStateStore(db);
   if (task.status !== 'ready-for-impl' && task.status !== 'in-progress') return { ok: false, reason: 'not an implement stage' };
   if (!branch) return { ok: false, reason: 'no branch to inspect' };
   const lookup = findPr ?? ((b) => {
@@ -234,9 +236,9 @@ function recoverPr(db, { task, branch, actor, now = new Date().toISOString(), fi
   if (pr == null) return { ok: false, reason: 'no open PR on branch' };
   try {
     if (task.status === 'ready-for-impl') {
-      transition(db, { taskId: task.id, to: 'in-progress', actor, note: 'auto: PR recovery (agent skipped transition)', now });
+      store.transition({ taskId: task.id, to: 'in-progress', actor, note: 'auto: PR recovery (agent skipped transition)', now });
     }
-    transition(db, { taskId: task.id, to: 'in-review', actor, pr: String(pr), note: 'auto-recovered PR — agent skipped its own transition', now });
+    store.transition({ taskId: task.id, to: 'in-review', actor, pr: String(pr), note: 'auto-recovered PR — agent skipped its own transition', now });
     return { ok: true, pr };
   } catch (e) {
     return { ok: false, reason: String((e && e.message) || e) };
