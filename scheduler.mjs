@@ -34,7 +34,7 @@ import { executeRun, cadenceMs, runnerStatus } from './runner.mjs';
 import { tick } from './watchdog.mjs';
 import { render } from './render.mjs';
 import { launchAgent } from './launcher.mjs';
-import { releaseAllLeases, pruneHistory } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
 import { createDashboardServer } from './dashboard/server.mjs';
 import { verifyCycle } from './verify-loop.mjs';
 import { pushEscalations } from './escalation-push.mjs';
@@ -150,7 +150,7 @@ export async function runWatchdogTick(deps) {
     _loadMeta       = loadMeta,
     _loadPolicy     = loadPolicy,
     _pruneEvents    = pruneEvents,
-    _pruneHistory   = pruneHistory,
+    _pruneHistory   = createStateStore(db).pruneHistory,
   } = deps;
 
   try {
@@ -168,7 +168,7 @@ export async function runWatchdogTick(deps) {
       if (tickCount % 10 === 0) {
         info(db, 'scheduler', 'heartbeat', { tick: tickCount, uptimeMin: Math.round((Date.now() - startedAt) / 60_000) });
         _pruneEvents(db);
-        try { _pruneHistory(db); } catch { /* best-effort */ }
+        try { _pruneHistory(); } catch { /* best-effort */ }
       }
     } catch (tickErr) {
       logger.error('watchdog', `tick-error: ${tickErr?.message ?? String(tickErr)}`, tickErr);
@@ -468,7 +468,7 @@ export async function start({ domain } = {}) {
   // Boot lease recovery (RCA-4): any agent a previous daemon launched died with it, so its lease is
   // an orphan. Free every live lease now — the TTL reaper would otherwise sit on non-expired ones
   // for up to lease_ttl_min, wedging a max_parallel slot after every crash/restart.
-  try { const r = releaseAllLeases(db); if (r.freed.length) logger.log('boot', `freed ${r.freed.length} orphaned lease(s): ${r.freed.join(', ')}`); } catch (e) { warn(db, 'scheduler', 'boot-lease-recovery-fail', { error: e.message }); }
+  try { const r = createStateStore(db).releaseAllLeases(); if (r.freed.length) logger.log('boot', `freed ${r.freed.length} orphaned lease(s): ${r.freed.join(', ')}`); } catch (e) { warn(db, 'scheduler', 'boot-lease-recovery-fail', { error: e.message }); }
 
   // Opt-in metering/enforcement gateway (config.gateway drives launcher.mjs's injection). Off by
   // default — a tenant with no policy.gateway block is byte-identical to before.

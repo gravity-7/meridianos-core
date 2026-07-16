@@ -11,7 +11,8 @@
  * the decision and calls bus.claim. (quiet_hours + schedule cadence are the runner's concern.)
  */
 import { budgetStatus, loadPolicy } from './budget.mjs';
-import { nextEligibleTask, listTasks, parseJsonArray } from './state.mjs';
+import { parseJsonArray } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
 import { CLAIMABLE_STATUSES } from './machine.mjs';
 import { routeModel } from './model-router.mjs';
 import { resolveProvider, providerKeyPresent, modelForTier } from './providers.mjs';
@@ -111,6 +112,7 @@ export function composeFilters(a, b) {
  *   hard-stop check.
  */
 export function decide(db, { config, agent, now = Date.now(), policy = loadPolicy(undefined, config), budget, claimable = CLAIMABLE_STATUSES, excludeTasks = null } = {}) {
+  const store = createStateStore(db);
   const nowIso = new Date(now).toISOString();
   const deny = (reason) => ({ mayClaim: false, reason, agent, task: null, model: null, ttlMs: null });
 
@@ -121,7 +123,7 @@ export function decide(db, { config, agent, now = Date.now(), policy = loadPolic
   if (!mayClaim) return deny('budget_halt');
 
   const work = policy?.work ?? {};
-  const active = listTasks(db).filter((t) => leaseLive(t, nowIso));
+  const active = store.listTasks().filter((t) => leaseLive(t, nowIso));
   if (work.max_parallel != null && active.length >= work.max_parallel) return deny('max_parallel');
   if (work.wip_per_agent != null && active.filter((t) => t.lease_owner === agent).length >= work.wip_per_agent) return deny('wip_per_agent');
 
@@ -132,7 +134,7 @@ export function decide(db, { config, agent, now = Date.now(), policy = loadPolic
     ? (t) => !excludeTasks.has(t.id)
     : null;
   const filter = composeFilters(composeFilters(buildCapabilityFilter(agent, policy), buildSprintFilter(db)), excludeFilter);
-  const t = nextEligibleTask(db, { agent, now: nowIso, claimable, filter });
+  const t = store.nextEligibleTask({ agent, now: nowIso, claimable, filter });
   if (!t) return deny('no_eligible_task');
   const floor = work.priority_floor ?? 999;
   if (t.priority > floor) return deny('below_priority_floor');

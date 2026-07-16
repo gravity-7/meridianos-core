@@ -4,7 +4,7 @@
  * Pure read: it opens the state DB, the usage meters, and the run log, and never mutates state.
  */
 import { openDb } from './db.mjs';
-import { listTasks } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
 import { budgetStatus, loadPolicy } from './budget.mjs';
 import { readRuns } from './runlog.mjs';
 import { CLAIMABLE_STATUSES } from './machine.mjs';
@@ -61,7 +61,8 @@ export function buildStatus({ config, db, dbPath, now = Date.now(), policy = loa
   const owns = !db;
   db = db || openDb(dbPath, config);
   try {
-    const tasks = listTasks(db);
+    const store = createStateStore(db);
+    const tasks = store.listTasks();
     const models = policy?.agent_models ?? {};
 
     const activeFor = (agent) => {

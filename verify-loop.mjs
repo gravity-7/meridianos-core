@@ -11,7 +11,7 @@
  * peer reviews are spawned asynchronously and tracked as Promises. Each tick checks
  * if pending reviews have resolved.
  */
-import { listTasks, transition as stateTransition } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
 import { loadPolicy } from './budget.mjs';
 import { reviewerFor } from './config.mjs';
 import {
@@ -60,6 +60,7 @@ function clearAttempts(db, taskId) {
  * surfaces to the founder). Returns the disposition for the results payload.
  */
 function handleFailure(db, task, detail, results, { dryRun = false } = {}) {
+  const store = createStateStore(db);
   if (dryRun) {
     // Report the disposition WITHOUT mutating state or the attempt counter.
     const projected = readAttempts(db, task.id) + 1;
@@ -71,10 +72,10 @@ function handleFailure(db, task, detail, results, { dryRun = false } = {}) {
   verifyState.delete(task.id);
   try {
     if (n >= MAX_VERIFY_ATTEMPTS) {
-      stateTransition(db, { taskId: task.id, to: 'blocked', actor: 'verifier', note: `needs founder review — ${note}` });
+      store.transition({ taskId: task.id, to: 'blocked', actor: 'verifier', note: `needs founder review — ${note}` });
       results.failed.push({ task: task.id, disposition: 'blocked', detail });
     } else {
-      stateTransition(db, { taskId: task.id, to: 'in-progress', actor: 'verifier', note });
+      store.transition({ taskId: task.id, to: 'in-progress', actor: 'verifier', note });
       results.failed.push({ task: task.id, disposition: 'bounced', detail });
     }
   } catch (e) {
@@ -220,10 +221,11 @@ async function mergePr(prNumber) {
  * @returns {object} { checked: number, merged: [], failed: [], pending: [] }
  */
 export async function verifyCycle(db, { policy, selectModel, dryRun = false, checkRunners, fetchPr, config } = {}) {
+  const store = createStateStore(db);
   const opts = { fetchPr };
   policy = policy ?? loadPolicy(undefined, config);
   const mode = policy?.auto_merge ?? 'founder_only';
-  const tasks = listTasks(db).filter(t => t.status === 'in-review');
+  const tasks = store.listTasks().filter(t => t.status === 'in-review');
   const results = { checked: tasks.length, merged: [], failed: [], pending: [] };
 
   if (tasks.length === 0) return results;

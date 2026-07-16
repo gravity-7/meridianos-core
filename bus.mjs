@@ -17,7 +17,9 @@
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import * as state from './state.mjs';
+import { parseJsonArray } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
+import { createDocStore } from './doc-store.mjs';
 import { STATES } from './machine.mjs';
 import { scanInbound } from './bus-guard.mjs';
 
@@ -110,28 +112,32 @@ export { scanInbound };
 // ---- handlers (db-injected; pure over state.mjs) -----------------------------------------
 const brief = (t) => t && {
   id: t.id, title: t.title, status: t.status, owner: t.owner, priority: t.priority,
-  resources: state.parseJsonArray(t.resources), depends_on: state.parseJsonArray(t.depends_on),
-  contracts: state.parseJsonArray(t.contracts), spec: t.spec ?? null, pr: t.pr ?? null,
+  resources: parseJsonArray(t.resources), depends_on: parseJsonArray(t.depends_on),
+  contracts: parseJsonArray(t.contracts), spec: t.spec ?? null, pr: t.pr ?? null,
 };
 
 export function nextTask(db, { agent }) {
-  const t = state.nextEligibleTask(db, { agent });
+  const store = createStateStore(db);
+  const t = store.nextEligibleTask({ agent });
   return t ? { ok: true, task: brief(t) } : { ok: true, task: null, message: `no eligible task for ${agent}` };
 }
 
 export function claim(db, { agent, taskId, session, ttlMs }) {
-  const r = state.claimTask(db, { taskId, agent, session, ...(ttlMs ? { ttlMs } : {}) });
+  const store = createStateStore(db);
+  const r = store.claimTask({ taskId, agent, session, ...(ttlMs ? { ttlMs } : {}) });
   return r.won ? { ok: true, task: brief(r.task) } : { ok: false, error: r.reason, by: r.by };
 }
 
 export function heartbeat(db, { taskId, session, ttlMs }) {
-  const r = state.heartbeat(db, { taskId, session, ...(ttlMs ? { ttlMs } : {}) });
+  const store = createStateStore(db);
+  const r = store.heartbeat({ taskId, session, ...(ttlMs ? { ttlMs } : {}) });
   return r.ok ? { ok: true } : { ok: false, error: 'not-lease-holder' };
 }
 
 export function transition(db, { taskId, to, session, note, pr }) {
+  const store = createStateStore(db);
   try {
-    const r = state.transition(db, { taskId, to, actor: session || 'agent', note, requireSession: session || null, pr });
+    const r = store.transition({ taskId, to, actor: session || 'agent', note, requireSession: session || null, pr });
     return r && r.ok === false ? { ok: false, error: r.reason } : { ok: true, task: brief(r.task) };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -139,13 +145,15 @@ export function transition(db, { taskId, to, session, note, pr }) {
 }
 
 export function release(db, { taskId, session }) {
-  const r = state.releaseLease(db, { taskId, session });
+  const store = createStateStore(db);
+  const r = store.releaseLease({ taskId, session });
   return r.ok ? { ok: true } : { ok: false, error: r.reason };
 }
 
 export function blockTask(db, { taskId, reason, session }) {
+  const store = createStateStore(db);
   try {
-    const r = state.blockTask(db, { taskId, actor: session || 'agent', reason });
+    const r = store.blockTask({ taskId, actor: session || 'agent', reason });
     return r && r.ok === false ? { ok: false, error: r.reason } : { ok: true, task: brief(r.task) };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -153,30 +161,41 @@ export function blockTask(db, { taskId, reason, session }) {
 }
 
 export function list(db) {
-  return { ok: true, tasks: state.listTasks(db).map(brief) };
+  const store = createStateStore(db);
+  return { ok: true, tasks: store.listTasks().map(brief) };
 }
 
-export function submitHandoff(db, { feature, markdown, session }, { config, inbox = undefined, scan = scanInbound } = {}) {
-  inbox = inbox ?? config.inboxDir;
+export function submitHandoff(db, { feature, markdown, session }, { config, inbox = undefined, scan = scanInbound, docs = createDocStore(config) } = {}) {
+  const store = createStateStore(db);
   const flagged = scan(markdown);
   if (flagged) return { ok: false, error: `quarantined: ${flagged}` };
   const safe = String(feature).replace(/[^\w.-]/g, '_');
-  if (!existsSync(inbox)) mkdirSync(inbox, { recursive: true });
-  const outPath = join(inbox, `${safe}.handoff.md`);
   // `from`/`to` are fixed prose describing the design→impl contract (nothing parses them back —
   // see REPO-AUDIT.md §1.3), not a roster lookup, so they don't need generalizing for 2.1b. TODO:
   // if a non-default roster ever adds a second design or impl role, key these off config.domain.agents.
-  writeFileSync(outPath, `---\nfeature: ${feature}\nfrom: antigravity\nto: claude-code\nstatus: ready-for-impl\n---\n\n${markdown}`, 'utf8');
+  const body = `---\nfeature: ${feature}\nfrom: antigravity\nto: claude-code\nstatus: ready-for-impl\n---\n\n${markdown}`;
+  let handoffPath;
+  if (inbox !== undefined) {
+    // Test override: preserve today's exact behavior — write directly to the given absolute dir,
+    // bypassing the DocStore (which is scoped to config.repoRoot, not an arbitrary temp dir).
+    if (!existsSync(inbox)) mkdirSync(inbox, { recursive: true });
+    const outPath = join(inbox, `${safe}.handoff.md`);
+    writeFileSync(outPath, body, 'utf8');
+    handoffPath = `.ai/inbox/${safe}.handoff.md`;
+  } else {
+    docs.write(join('.ai', 'inbox', `${safe}.handoff.md`), body);
+    handoffPath = `.ai/inbox/${safe}.handoff.md`;
+  }
 
   let advanced = false;
-  const t = state.getTask(db, feature);
+  const t = store.getTask(feature);
   if (t && t.status === 'designing') {
     try {
-      state.transition(db, { taskId: feature, to: 'ready-for-impl', actor: session || 'antigravity', note: 'design handoff submitted', requireSession: session || null, releaseLease: !!session });
+      store.transition({ taskId: feature, to: 'ready-for-impl', actor: session || 'antigravity', note: 'design handoff submitted', requireSession: session || null, releaseLease: !!session });
       advanced = true;
     } catch { /* not a legal/owned advance — leave the task as-is, handoff is still written */ }
   }
-  return { ok: true, handoff: `.ai/inbox/${safe}.handoff.md`, advanced };
+  return { ok: true, handoff: handoffPath, advanced };
 }
 
 // ---- dispatcher --------------------------------------------------------------------------

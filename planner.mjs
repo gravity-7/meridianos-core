@@ -8,7 +8,8 @@
  * acceptProposals() promotes them into the state machine (proposed → spec). plannerStatus()
  * emits the dashboard `planner` payload. Pure over an injected `db`.
  */
-import { getTask, upsertTask, listTasks, transition as stateTransition, parseJsonArray } from './state.mjs';
+import { parseJsonArray } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
 import { loadPolicy } from './budget.mjs';
 import { meetsSpecEntry, meetsDefinitionOfReady } from './definition-of-ready.mjs';
 import { effectiveRiskTags, sensitiveBlock, describeBlocks, isFounderApproved } from './sensitive.mjs';
@@ -37,12 +38,13 @@ export function epicsOf(tasks) {
 
 /** Materialize a decomposition into child tasks (status `proposed` by default). */
 export function proposeTasks(db, { parentId = null, children = [], now = Date.now() } = {}) {
-  const parent = parentId ? getTask(db, parentId) : null;
+  const store = createStateStore(db);
+  const parent = parentId ? store.getTask(parentId) : null;
   const nowIso = new Date(now).toISOString();
   const created = [];
   children.forEach((c, i) => {
     const id = c.id ?? `${parentId ?? 'TASK'}.${i + 1}`;
-    const t = upsertTask(db, {
+    const t = store.upsertTask({
       id,
       title: c.title ?? id,
       status: c.status ?? 'proposed',
@@ -61,11 +63,12 @@ export function proposeTasks(db, { parentId = null, children = [], now = Date.no
 
 /** Promote proposed tasks into the state machine (proposed → spec). Skips illegal moves. */
 export function acceptProposals(db, { ids = [], actor = 'planner', now = Date.now() } = {}) {
+  const store = createStateStore(db);
   const accepted = [];
   const nowIso = new Date(now).toISOString();
   for (const id of ids) {
     try {
-      const r = stateTransition(db, { taskId: id, to: 'spec', actor, note: 'accepted by planner', now: nowIso });
+      const r = store.transition({ taskId: id, to: 'spec', actor, note: 'accepted by planner', now: nowIso });
       if (r && r.ok) accepted.push(id);
     } catch { /* not proposed / illegal — skip */ }
   }
@@ -82,7 +85,8 @@ export function acceptProposals(db, { ids = [], actor = 'planner', now = Date.no
  * (sensitiveBlock / describeBlocks).
  */
 export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy(undefined, config) } = {}) {
-  const tasks = listTasks(db);
+  const store = createStateStore(db);
+  const tasks = store.listTasks();
   const nowIso = new Date(now).toISOString();
   const promoted = [];
   const skippedNotReady = [];
@@ -99,7 +103,7 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
     if (!action) continue;
     try {
       const what = describeBlocks(policy, effectiveRiskTags(db, t), config); // names ALL blocking actions
-      stateTransition(db, { taskId: t.id, to: 'blocked', actor: 'planner', note: `governance hold: needs founder approval to ${what}`, now: nowIso });
+      store.transition({ taskId: t.id, to: 'blocked', actor: 'planner', note: `governance hold: needs founder approval to ${what}`, now: nowIso });
       promoted.push({ id: t.id, from: t.status, to: 'blocked', reason: `sensitive:${action}` });
     } catch { /* illegal move — skip */ }
   }
@@ -129,7 +133,7 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
     ).get(t.id);
     const to = RELEASE_TARGETS.includes(prior?.from_state) ? prior.from_state : 'ready-for-impl';
     try {
-      stateTransition(db, { taskId: t.id, to, actor: 'planner', note: 'released — policy now permits this action', now: nowIso });
+      store.transition({ taskId: t.id, to, actor: 'planner', note: 'released — policy now permits this action', now: nowIso });
       promoted.push({ id: t.id, from: 'blocked', to, reason: 'governance-released' });
     } catch { /* illegal — skip */ }
   }
@@ -213,7 +217,7 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
       continue;
     }
     try {
-      stateTransition(db, { taskId: t.id, to: 'spec', actor: 'planner', note: 'auto-promoted (spec-entry met)', now: nowIso });
+      store.transition({ taskId: t.id, to: 'spec', actor: 'planner', note: 'auto-promoted (spec-entry met)', now: nowIso });
       promoted.push({ id: t.id, from: 'proposed', to: 'spec' });
     } catch { /* blocked or illegal — skip */ }
   }
@@ -232,7 +236,7 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
       continue;
     }
     try {
-      stateTransition(db, { taskId: t.id, to: 'designing', actor: 'planner', note: 'spec complete (DoR met) — fast-tracked', now: nowIso });
+      store.transition({ taskId: t.id, to: 'designing', actor: 'planner', note: 'spec complete (DoR met) — fast-tracked', now: nowIso });
       promoted.push({ id: t.id, from: 'spec', to: 'designing' });
     } catch { /* skip */ }
   }
@@ -242,7 +246,8 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
 
 /** The dashboard `planner` payload: backlog depth, epic progress, and pending proposals. */
 export function plannerStatus(db, { now = Date.now() } = {}) {
-  const tasks = listTasks(db);
+  const store = createStateStore(db);
+  const tasks = store.listTasks();
   const proposalsRaw = tasks.filter((t) => t.status === 'proposed');
   const proposals = proposalsRaw.map((t) => ({
     id: t.id,

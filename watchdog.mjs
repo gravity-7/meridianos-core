@@ -8,7 +8,7 @@
  * `escalations[]` feed. Pure over an injected `db` + budget, so the whole matrix is unit-tested.
  * The watchdog only reaps + reports; it never spawns work (that is the runner).
  */
-import { reapExpiredLeases, forceReleaseLease, listTasks } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
 import { budgetStatus, loadPolicy } from './budget.mjs';
 import { readEvents } from './event-log.mjs';
 import { decide } from './router.mjs';
@@ -33,10 +33,11 @@ function sessionLimitBlock(agent, { config, runs, now = Date.now() } = {}) {
  *  `config`'s DomainPlugin roster (an explicit `agents` array still wins). `config` also threads
  *  to router.decide for the governance-aware idle reason. */
 export function agentHealth(db, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents = undefined } = {}) {
+  const store = createStateStore(db);
   const agentList = agents ?? config.domain.agents;
   const nowIso = new Date(now).toISOString();
   const b = budget ?? budgetStatus({ policy, now, config });
-  const tasks = listTasks(db);
+  const tasks = store.listTasks();
   const ttlSec = (policy?.work?.lease_ttl_min ?? 30) * 60;
   const out = {};
   for (const agent of agentList) {
@@ -130,11 +131,12 @@ export function healthStatus(db, { config, policy = loadPolicy(undefined, config
  *  `agents` defaults to the injected `config`'s DomainPlugin roster (an explicit `agents` array
  *  still wins). */
 export function collectEscalations(db, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents = undefined } = {}) {
+  const store = createStateStore(db);
   const agentList = agents ?? config.domain.agents;
   const ts = new Date(now).toISOString();
   const b = budget ?? budgetStatus({ policy, now, config });
   const esc = [];
-  const allTasks = listTasks(db);
+  const allTasks = store.listTasks();
   const tasksById = new Map(allTasks.map((t) => [t.id, t]));
   const openTask = { label: 'Open task', endpoint: null, payload: null };
   // Task-linked escalations carry status/owner so the dashboard's "Open task" popup can render
@@ -186,8 +188,9 @@ export function collectEscalations(db, { config, policy = loadPolicy(undefined, 
  * can show them with an Un-snooze/Un-skip + Approve control (reversible, never silently lost).
  */
 export function parkedTasks(db, { now = Date.now() } = {}) {
+  const store = createStateStore(db);
   const out = [];
-  for (const t of listTasks(db).filter((t) => t.status === 'blocked')) {
+  for (const t of store.listTasks().filter((t) => t.status === 'blocked')) {
     const skipped = isSkipped(t);
     const until = snoozedUntil(t);
     const snoozed = !!(until && Date.parse(until) > now);
@@ -201,10 +204,11 @@ export function parkedTasks(db, { now = Date.now() } = {}) {
  *  the injected `config`'s DomainPlugin roster (an explicit `agents` array still wins); `config`
  *  also threads to healthStatus/collectEscalations. */
 export function tick(db, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), intervalSec = 60, agents = undefined } = {}) {
+  const store = createStateStore(db);
   const agentList = agents ?? config.domain.agents;
   const b = budget ?? budgetStatus({ policy, now, config });
   const nowIso = new Date(now).toISOString();
-  const { reaped } = reapExpiredLeases(db, { now: nowIso });
+  const { reaped } = store.reapExpiredLeases({ now: nowIso });
 
   // Session-limit auto-reap: if an agent has a confirmed session-limit block, immediately
   // force-release any leases it holds — they will never be heartbeated and would just burn
@@ -215,11 +219,11 @@ export function tick(db, { config, policy = loadPolicy(undefined, config), budge
   for (const agent of agentList) {
     const sl = sessionLimitBlock(agent, { runs, config });
     if (!sl) continue;
-    const staleLeases = listTasks(db).filter(
+    const staleLeases = store.listTasks().filter(
       (t) => t.lease_owner === agent && t.lease_expires && t.lease_expires > nowIso,
     );
     for (const t of staleLeases) {
-      const r = forceReleaseLease(db, { taskId: t.id, agent, now: nowIso });
+      const r = store.forceReleaseLease({ taskId: t.id, agent, now: nowIso });
       if (r.ok) sessionReaped.push(t.id);
     }
   }
