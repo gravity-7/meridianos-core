@@ -5,8 +5,9 @@
  * Enforcement (bite 3.2c): `checkVerdict(ctx)` is called EXACTLY ONCE per request, before
  * forwarding, and the single resulting verdict is threaded through to the token-event emitted for
  * that request — never re-queried, so the decision that blocked (or allowed) the call is always
- * the one stamped on the event. A 'deny' verdict never forwards upstream and responds 429 in the
- * client's own wire format; any other decision (incl. a future 'degrade') is treated as "forward"
+ * the one stamped on the event. A 'deny' verdict never forwards upstream and responds with a
+ * NON-retryable 403 in the client's own wire format (see `denyBody`/`sendDeny`); any other decision
+ * (incl. a future 'degrade') is treated as "forward"
  * for now (see windows.mjs's `makeCheckVerdict` for a real ledger-backed verdict source). The
  * default `checkVerdict` still always allows, so a gateway started without a real verdict source
  * stays permissive.
@@ -66,16 +67,40 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
-/** The 429 body for a denied request, shaped in the CLIENT's own wire format so a harness's
- * existing error-handling (built for real provider rate-limit errors) recognizes it without any
- * gateway-specific parsing. */
+/** HTTP status for a budget deny. A budget HALT is TERMINAL, not transient: unlike a real provider
+ * rate-limit (429, which harnesses correctly retry because capacity frees up), retrying a deny will
+ * NEVER succeed within this run — the cap won't clear. So we answer with a NON-retryable status. The
+ * Anthropic and OpenAI SDKs (and the harnesses built on them, e.g. claude-code) retry 408/409/429/
+ * >=500 and treat 403 as fatal — so a capped agent gets a hard API error and EXITS cleanly instead of
+ * backing off and retrying against the cap until the launcher's 30-min kill (which wastes wall-clock
+ * and a run slot). Once the agent exits, the runner's RCA-3 "opened-PR-but-didn't-transition"
+ * recovery finishes the job. */
+const DENY_STATUS = 403;
+
+/** The deny body, shaped in the CLIENT's own wire format so a harness's existing error-handling
+ * recognizes it. A non-retryable error `type` (403 `permission_error`, distinct from the retryable
+ * `rate_limit_error`) is a second, wire-level signal that this must not be retried; the `over_budget`
+ * code/message keeps it identifiable in logs as a gateway budget halt rather than a real auth error. */
 function denyBody(wire, capWindow) {
   const message = `gateway: over budget (${capWindow})`;
   if (wire === 'anthropic') {
-    return { type: 'error', error: { type: 'rate_limit_error', message } };
+    return { type: 'error', error: { type: 'permission_error', message } };
   }
   // openai
-  return { error: { message, type: 'rate_limit_exceeded', code: 'over_budget' } };
+  return { error: { message, type: 'permission_error', code: 'over_budget' } };
+}
+
+/** Send a budget-deny response: a non-retryable 403 plus an explicit `x-should-retry: false` header.
+ * That header is belt-and-suspenders — the Anthropic/OpenAI SDKs honor it OVER the status-code retry
+ * heuristic, so even a harness that would otherwise retry this status is told, unambiguously, not to. */
+function sendDeny(res, wire, capWindow) {
+  const payload = Buffer.from(JSON.stringify(denyBody(wire, capWindow)));
+  res.writeHead(DENY_STATUS, {
+    'content-type': 'application/json',
+    'content-length': payload.length,
+    'x-should-retry': 'false',
+  });
+  res.end(payload);
 }
 
 /**
@@ -425,7 +450,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       verdict,
       costFn,
     });
-    return sendJson(res, 429, denyBody(route.wire, verdict.capWindow));
+    return sendDeny(res, route.wire, verdict.capWindow);
   }
 
   const body = await readBody(req);

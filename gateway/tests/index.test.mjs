@@ -124,7 +124,7 @@ test('metering: each call returns 200 and the ledger accumulates one token-event
 
 // ─── Enforcement end-to-end: crossing the cap denies the NEXT call, and it never forwards ──────
 
-test('enforcement end-to-end: exceeding the per-5h cap denies the next call with 429 and never forwards upstream', async () => {
+test('enforcement end-to-end: exceeding the per-5h cap denies the next call with a non-retryable 403 and never forwards upstream', async () => {
   const hitsBefore = hits.routeA;
 
   // Two calls at 10 tokens each: checkVerdict is evaluated against PRIOR cumulative usage only
@@ -146,7 +146,8 @@ test('enforcement end-to-end: exceeding the per-5h cap denies the next call with
     headers: { 'x-gateway-token': 'tok-cap', 'content-type': 'application/json' },
     body: JSON.stringify({ model: 'deepseek-chat', messages: [] }),
   });
-  assert.equal(res3.status, 429);
+  assert.equal(res3.status, 403);
+  assert.equal(res3.headers.get('x-should-retry'), 'false');
   const body = await res3.json();
   // deepseek is openai-wire — denyBody's openai shape.
   assert.equal(body.error.code, 'over_budget');

@@ -60,7 +60,7 @@ attempt cap, then blocks + escalates.
 
 ### 5. The gateway sidecar (the enforcement boundary)
 A local forward-proxy all provider traffic routes through — meters inline into its own ledger and
-enforces budgets (429 on over-cap), with keys injected server-side so workers never hold them. Built,
+enforces budgets (non-retryable 403 on over-cap), with keys injected server-side so workers never hold them. Built,
 tested, and dogfooded live; opt-in. The strategic core of the product. See [GATEWAY.md](./GATEWAY.md).
 
 ### 6. Governance, safety & escalation
