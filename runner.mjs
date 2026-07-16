@@ -16,9 +16,9 @@ import { loadPolicy, budgetStatus } from './budget.mjs';
 import { decide } from './router.mjs';
 import { resolveProvider } from './providers.mjs';
 import { createStateStore } from './state-store.mjs';
+import { createEventStore } from './event-store.mjs';
 import { appendRun, readRuns, newRunId } from './runlog.mjs';
 import { isQuotaText, parseResetAt, resetInstant } from './exit-classify.mjs';
-import { warn as logWarn } from './event-log.mjs';
 
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
@@ -132,6 +132,7 @@ export function planRun({ db, config, policy = loadPolicy(undefined, config), bu
  */
 export async function executeRun({ db, config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents, runs, launch, runsPath = undefined, sessionFor, findPr } = {}) {
   const store = createStateStore(db);
+  const events = createEventStore(db);
   const plan = planRun({ db, policy, budget, now, agents, runs, config });
 
   // Missing-key skips (router.decide()'s cost-safety guard) are denials, not claimable — but the
@@ -206,7 +207,7 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
     // burned more than the cap raises a warn event (which the watchdog surfaces as an escalation).
     const cap = policy?.agent_budget?.per_task_tokens;
     if (db && tokens != null && cap && tokens > cap) {
-      try { logWarn(db, 'runner', 'per-task-over-budget', { task: d.task.id, agent: d.agent, tokens, cap }); } catch { /* best-effort */ }
+      try { events.warn('runner', 'per-task-over-budget', { task: d.task.id, agent: d.agent, tokens, cap }); } catch { /* best-effort */ }
     }
     results.push(appendRun({ agent: d.agent, model: d.model, provider: d.provider, harness: d.harness, session, task: d.task.id, tokens, usage, outcome, reason, reset_at: resetAt, note }, { path: runsPath, now, config }));
   }

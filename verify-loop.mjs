@@ -12,6 +12,7 @@
  * if pending reviews have resolved.
  */
 import { createStateStore } from './state-store.mjs';
+import { createEventStore } from './event-store.mjs';
 import { loadPolicy } from './budget.mjs';
 import { reviewerFor } from './config.mjs';
 import {
@@ -20,7 +21,6 @@ import {
 import { spawnAndWait } from './launcher.mjs';
 import { createReviewWorktree } from './worktree.mjs';
 import { primaryTreeBranch } from './boot-guard.mjs';
-import { warn } from './event-log.mjs';
 import { classifyInbound } from './bus-guard.mjs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -222,6 +222,7 @@ async function mergePr(prNumber) {
  */
 export async function verifyCycle(db, { policy, selectModel, dryRun = false, checkRunners, fetchPr, config } = {}) {
   const store = createStateStore(db);
+  const events = createEventStore(db);
   const opts = { fetchPr };
   policy = policy ?? loadPolicy(undefined, config);
   const mode = policy?.auto_merge ?? 'founder_only';
@@ -329,7 +330,7 @@ export async function verifyCycle(db, { policy, selectModel, dryRun = false, che
         const mergeResult = await mergePr(prNumber);
         const afterMerge = primaryTreeBranch({ config });
         if (beforeMerge === 'main' && afterMerge && afterMerge !== 'main') {
-          warn(db, 'verifier', 'primary-tree-stranded-by-merge', { pr: prNumber, from: beforeMerge, to: afterMerge });
+          events.warn('verifier', 'primary-tree-stranded-by-merge', { pr: prNumber, from: beforeMerge, to: afterMerge });
         }
         if (mergeResult.ok) {
           applyVerdict(db, { task: task.id, verdict: 'pass', mode, actor: 'verifier' });

@@ -5,6 +5,7 @@
  */
 import { openDb } from './db.mjs';
 import { createStateStore } from './state-store.mjs';
+import { createEventStore } from './event-store.mjs';
 import { budgetStatus, loadPolicy } from './budget.mjs';
 import { readRuns } from './runlog.mjs';
 import { CLAIMABLE_STATUSES } from './machine.mjs';
@@ -13,7 +14,6 @@ import { runnerStatus } from './runner.mjs';
 import { verifierStatus } from './verifier.mjs';
 import { plannerStatus } from './planner.mjs';
 import { routeModel, categoryIndex, TIERS } from './model-router.mjs';
-import { readEvents } from './event-log.mjs';
 
 // ─── Task-type definitions (constitution §11) ────────────────────────────────
 const TASK_TYPE_META = {
@@ -62,6 +62,7 @@ export function buildStatus({ config, db, dbPath, now = Date.now(), policy = loa
   db = db || openDb(dbPath, config);
   try {
     const store = createStateStore(db);
+    const events = createEventStore(db);
     const tasks = store.listTasks();
     const models = policy?.agent_models ?? {};
 
@@ -126,7 +127,7 @@ export function buildStatus({ config, db, dbPath, now = Date.now(), policy = loa
       capability_matrix: policy?.capability_matrix ?? null,
       work_stealing: policy?.work_stealing ?? false,
       taskCategories: buildTaskCategories(tasks),
-      systemLog: readEvents(db, { limit: 30 }),
+      systemLog: events.readEvents({ limit: 30 }),
       policy,
     };
   } finally {

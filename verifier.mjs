@@ -15,6 +15,7 @@
  */
 import { loadPolicy } from './budget.mjs';
 import { createStateStore } from './state-store.mjs';
+import { createEventStore } from './event-store.mjs';
 import { reviewerFor } from './config.mjs';
 import * as childProcess from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -80,18 +81,15 @@ export function verify({ task, mode = 'founder_only', checks = [], pr = null, ag
   return { task, pr, agent, mode, checks, verdict, submittedTs: new Date(now).toISOString(), mergeable: verdict === 'pass' };
 }
 
-/** Recently merged tasks (transitions to `done`) for the dashboard `verifier.recent`. */
-export function recentVerdicts(db, { limit = 10 } = {}) {
-  return db.prepare(
-    `SELECT h.ts AS ts, h.task_id AS task, t.pr AS pr, h.actor AS actor
-       FROM history h LEFT JOIN tasks t ON t.id = h.task_id
-      WHERE h.op = 'transition' AND h.to_state = 'done' ORDER BY h.seq DESC LIMIT ?`,
-  ).all(limit).map((r) => ({ task: r.task, pr: r.pr ?? null, verdict: 'pass', ts: r.ts, mergedBy: r.actor || null }));
-}
+// recentVerdicts moved to event-log.mjs (D2 bite #2, stage 2a — promoted read-queries; see
+// event-store.mjs's DB_BOUND_FNS). Re-exported here by name so existing importers
+// (`import { recentVerdicts } from './verifier.mjs'`) keep working unchanged.
+export { recentVerdicts } from './event-log.mjs';
 
 /** The dashboard `verifier` payload: mode + everything in-review (with verdicts) + recent merges. */
 export function verifierStatus(db, { config, policy = loadPolicy(undefined, config), now = Date.now(), checksByTask = {} } = {}) {
   const store = createStateStore(db);
+  const events = createEventStore(db);
   const mode = policy?.auto_merge ?? 'founder_only';
   const pending = store.listTasks()
     .filter((t) => t.status === 'in-review')
@@ -99,7 +97,7 @@ export function verifierStatus(db, { config, policy = loadPolicy(undefined, conf
       const checks = checksByTask[t.id] ?? requiredChecks(mode).map((name) => ({ name, status: 'pending', detail: '' }));
       return { task: t.id, pr: t.pr ?? null, agent: t.lease_owner ?? t.owner ?? null, submittedTs: t.updated_at, checks, verdict: verdictFrom(checks, mode) };
     });
-  return { mode, pending, recent: recentVerdicts(db) };
+  return { mode, pending, recent: events.recentVerdicts() };
 }
 
 /** Act on a verdict: a `pass` under an auto-merge mode transitions the task to `done`. */
