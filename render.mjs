@@ -7,7 +7,7 @@
  * stale board by re-rendering and diffing — that is `validate --drift`.
  */
 import { writeFileSync } from 'node:fs';
-import { listTasks, listSprints, listPIs } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
 import { ACTIVE } from './machine.mjs';
 
 const arr = (s) => { try { return JSON.parse(s || '[]'); } catch { return []; } };
@@ -55,12 +55,13 @@ function projectTask(t) {
 
 /** Build the canonical board.json object from the DB. Carries founder-facing meta verbatim. */
 export function buildBoardJson(db, meta = {}) {
+  const store = createStateStore(db);
   return {
     $generated: 'GENERATED from the AIOS state DB. Do not hand-edit — run: node tools/aios/cli.mjs render',
     schema_version: 2,
-    pis: listPIs(db),
-    sprints: listSprints(db),
-    tasks: listTasks(db).map(projectTask), // listTasks is ordered by priority, id → deterministic
+    pis: store.listPIs(),
+    sprints: store.listSprints(),
+    tasks: store.listTasks().map(projectTask), // listTasks is ordered by priority, id → deterministic
     milestones: meta.milestones ?? [],
     founder_actions: meta.founder_actions ?? [],
   };

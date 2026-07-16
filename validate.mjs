@@ -10,7 +10,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { openDb } from './db.mjs';
-import { seedTasks } from './state.mjs';
+import { createStateStore } from './state-store.mjs';
 import { STATES } from './machine.mjs';
 import { buildBoardJson, buildBoardMd } from './render.mjs';
 
@@ -53,7 +53,8 @@ export function validate({ drift = true, config } = {}) {
 
   if (drift && problems.length === 0) {
     const db = openDb(':memory:', config);
-    seedTasks(db, boardJson);
+    const store = createStateStore(db);
+    store.seedTasks(boardJson);
     const meta = { milestones: boardJson.milestones, founder_actions: boardJson.founder_actions };
     const expectJson = JSON.stringify(buildBoardJson(db, meta), null, 2) + '\n';
     const expectMd = buildBoardMd(buildBoardJson(db, meta), undefined, config) + '\n';
