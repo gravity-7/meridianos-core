@@ -512,7 +512,7 @@ test('non-streaming still works unchanged: a plain-JSON route still buffers+pars
   assert.equal(body.id, 'msg_1');
 });
 
-test('enforcement over streaming: a deny verdict still 429s before any streaming/forward', async () => {
+test('enforcement over streaming: a deny verdict still non-retryably 403s before any streaming/forward', async () => {
   verdictMode = { decision: 'deny', capWindow: '5h' };
   const startCount = eventsEnf.length;
   const res = await fetch(`${gatewayEnf.url}/anthropic-stream`, {
@@ -520,10 +520,11 @@ test('enforcement over streaming: a deny verdict still 429s before any streaming
     headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
     body: JSON.stringify({ model: 'claude-sonnet-5', messages: [], stream: true }),
   });
-  assert.equal(res.status, 429);
+  assert.equal(res.status, 403);
+  assert.equal(res.headers.get('x-should-retry'), 'false');
   assert.equal(res.headers.get('content-type'), 'application/json');
   const body = await res.json();
-  assert.equal(body.error.type, 'rate_limit_error');
+  assert.equal(body.error.type, 'permission_error');
 
   assert.equal(eventsEnf.length, startCount + 1);
   const evt = eventsEnf.at(-1);
@@ -538,7 +539,7 @@ test('enforcement over streaming: a deny verdict still 429s before any streaming
 // `verdictMode` set in each test below. `gateway` (the always-allow default) is untouched by any
 // of this, proving the default stays permissive.
 
-test('deny verdict: anthropic wire gets a 429 in anthropic error-shape, upstream never hit, null-usage event emitted', async () => {
+test('deny verdict: anthropic wire gets a non-retryable 403 in anthropic error-shape, upstream never hit, null-usage event emitted', async () => {
   verdictMode = { decision: 'deny', capWindow: '5h' };
   const startCount = eventsEnf.length;
   const res = await fetch(`${gatewayEnf.url}/anthropic`, {
@@ -546,9 +547,10 @@ test('deny verdict: anthropic wire gets a 429 in anthropic error-shape, upstream
     headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
     body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
   });
-  assert.equal(res.status, 429);
+  assert.equal(res.status, 403);
+  assert.equal(res.headers.get('x-should-retry'), 'false');
   const body = await res.json();
-  assert.deepEqual(body, { type: 'error', error: { type: 'rate_limit_error', message: 'gateway: over budget (5h)' } });
+  assert.deepEqual(body, { type: 'error', error: { type: 'permission_error', message: 'gateway: over budget (5h)' } });
 
   assert.equal(eventsEnf.length, startCount + 1);
   const evt = eventsEnf.at(-1);
@@ -564,7 +566,7 @@ test('deny verdict: anthropic wire gets a 429 in anthropic error-shape, upstream
   verdictMode = { decision: 'allow', capWindow: null };
 });
 
-test('deny verdict: openai wire gets a 429 in openai error-shape, upstream never hit, null-usage event emitted', async () => {
+test('deny verdict: openai wire gets a non-retryable 403 in openai error-shape, upstream never hit, null-usage event emitted', async () => {
   verdictMode = { decision: 'deny', capWindow: 'week' };
   const startCount = eventsEnf.length;
   const res = await fetch(`${gatewayEnf.url}/openai`, {
@@ -572,10 +574,11 @@ test('deny verdict: openai wire gets a 429 in openai error-shape, upstream never
     headers: { 'x-gateway-token': 'tok-deepseek' },
     body: '{}',
   });
-  assert.equal(res.status, 429);
+  assert.equal(res.status, 403);
+  assert.equal(res.headers.get('x-should-retry'), 'false');
   const body = await res.json();
   assert.deepEqual(body, {
-    error: { message: 'gateway: over budget (week)', type: 'rate_limit_exceeded', code: 'over_budget' },
+    error: { message: 'gateway: over budget (week)', type: 'permission_error', code: 'over_budget' },
   });
 
   assert.equal(eventsEnf.length, startCount + 1);
@@ -587,20 +590,41 @@ test('deny verdict: openai wire gets a 429 in openai error-shape, upstream never
   verdictMode = { decision: 'allow', capWindow: null };
 });
 
-test('deny verdict: the upstream is genuinely never contacted (a deny on a dead-address route still returns 429, not 502)', async () => {
+test('deny is NON-RETRYABLE: a budget halt must NOT use a retryable status/type (a harness retries 408/409/429/>=500) — this guards against a regression back to 429', async () => {
+  for (const wire of ['anthropic', 'openai']) {
+    verdictMode = { decision: 'deny', capWindow: '5h' };
+    const token = wire === 'anthropic' ? 'tok-anthropic' : 'tok-deepseek';
+    const res = await fetch(`${gatewayEnf.url}/${wire}`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': token, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    // The two independent non-retry signals a harness's SDK reads: the status code and the header.
+    assert.ok(![408, 409, 429].includes(res.status) && res.status < 500, `${wire}: status ${res.status} is retryable`);
+    assert.equal(res.status, 403, `${wire}: expected the non-retryable 403`);
+    assert.equal(res.headers.get('x-should-retry'), 'false', `${wire}: SDKs honor this over the status heuristic`);
+    const body = await res.json();
+    const type = wire === 'anthropic' ? body.error.type : body.error.type;
+    assert.notEqual(type, 'rate_limit_error', `${wire}: must not use the retryable rate-limit type`);
+    assert.notEqual(type, 'rate_limit_exceeded', `${wire}: must not use the retryable rate-limit type`);
+  }
+  verdictMode = { decision: 'allow', capWindow: null };
+});
+
+test('deny verdict: the upstream is genuinely never contacted (a deny on a dead-address route still returns 403, not 502)', async () => {
   verdictMode = { decision: 'deny', capWindow: '5h' };
   // 'tok-network-fail' points at the 'deadroute' route, whose upstreamUrl is an address nothing
   // listens on (http://127.0.0.1:1). If the gateway forwarded despite the deny, the connection
-  // failure would surface as a 502 (see the "upstream network failure" test above) — a 429 here
+  // failure would surface as a 502 (see the "upstream network failure" test above) — a 403 here
   // is only possible if the request never left the gateway.
   const res = await fetch(`${gatewayEnf.url}/anything`, {
     method: 'POST',
     headers: { 'x-gateway-token': 'tok-network-fail' },
     body: '{}',
   });
-  assert.equal(res.status, 429);
+  assert.equal(res.status, 403);
   const body = await res.json();
-  assert.equal(body.error.type, 'rate_limit_exceeded');
+  assert.equal(body.error.type, 'permission_error');
   verdictMode = { decision: 'allow', capWindow: null };
 });
 
@@ -1052,7 +1076,7 @@ test('a throwing costFn on a deny verdict still emits a null-cost event (costFn 
       headers: { 'x-gateway-token': 'tok-cost-deny', 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
     });
-    assert.equal(res.status, 429);
+    assert.equal(res.status, 403);
     assert.equal(eventsCost.length, 1);
     assert.equal(eventsCost.at(-1).costUsd, null);
     assert.equal(eventsCost.at(-1).enforcementDecision, 'deny');
