@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db.mjs';
 import { upsertTask, upsertSprint } from '../state.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import {
   effectiveRiskTags, sensitiveBlock, isFounderApproved,
   snoozedUntil, isSkipped, parseNoteMarkers,
@@ -100,15 +101,17 @@ test('router.decide + planner.plannerCycle thread an injected config into the go
     { id: 'F9', type: 'epic', title: 'crypto epic', status: 'in-progress', risk_tags: ['crypto'] },
     { id: 'F9-buy', type: 'story', title: 'buy', owner: 'claude', status: 'ready-for-impl', priority: 10, parent_id: 'F9', risk_tags: [] },
   ]);
+  const store = createProjectStore({ db, config });
+  const storeFake = createProjectStore({ db, config: fakeConfig });
   // The DEFAULT (PV) config doesn't know 'crypto' at all → claimable.
-  const dDefault = decide(db, { agent: 'claude', policy: policy(), budget: budget(), config });
+  const dDefault = decide(store, { agent: 'claude', policy: policy(), budget: budget(), config });
   assert.equal(dDefault.mayClaim, true);
   // Under the injected tenant config, the inherited 'crypto' tag hard-stops the claim.
-  const dFake = decide(db, { agent: 'claude', policy: policy(), budget: budget(), config: fakeConfig });
+  const dFake = decide(storeFake, { agent: 'claude', policy: policy(), budget: budget(), config: fakeConfig });
   assert.equal(dFake.mayClaim, false);
   assert.equal(dFake.reason, 'sensitive_action:spend_money');
   // planner.plannerCycle parks the same task under the injected config.
-  const r = plannerCycle(db, { policy: policy(), config: fakeConfig });
+  const r = plannerCycle(storeFake, { policy: policy(), config: fakeConfig });
   assert.ok(r.promoted.some((x) => x.id === 'F9-buy' && x.to === 'blocked'), 'injected config governance-blocks the story');
 });
 
@@ -117,7 +120,8 @@ test('router refuses to claim a story that inherits a spend_money epic tag', () 
     { id: 'F2', type: 'epic', title: 'epic', status: 'in-progress', risk_tags: ['payments'] },
     { id: 'F2-pay', type: 'story', title: 'paid', owner: 'claude', status: 'ready-for-impl', priority: 10, parent_id: 'F2', risk_tags: [] },
   ]);
-  const d = decide(db, { agent: 'claude', policy: policy(), budget: budget(), config });
+  const store = createProjectStore({ db, config });
+  const d = decide(store, { agent: 'claude', policy: policy(), budget: budget(), config });
   assert.equal(d.mayClaim, false);
   assert.equal(d.reason, 'sensitive_action:spend_money');
 });
@@ -127,14 +131,15 @@ test('a founder-approved task is exempt from the §6 gate (router + planner)', (
     { id: 'F2', type: 'epic', title: 'epic', status: 'in-progress', risk_tags: ['payments'] },
     { id: 'F2-pay', type: 'story', title: 'paid', owner: 'claude', status: 'ready-for-impl', priority: 10, parent_id: 'F2', risk_tags: [], approved_at: '2026-07-03T00:00:00.000Z' },
   ]);
+  const store = createProjectStore({ db, config });
   assert.equal(isFounderApproved({ approved_at: '2026-07-03T00:00:00.000Z' }), true);
   assert.equal(isFounderApproved({ approved_at: null, note: 'planned' }), false);
   // router: approved task is claimable despite the money tag
-  const d = decide(db, { agent: 'claude', policy: policy(), budget: budget(), config });
+  const d = decide(store, { agent: 'claude', policy: policy(), budget: budget(), config });
   assert.equal(d.mayClaim, true);
   assert.equal(d.task.id, 'F2-pay');
   // planner: does NOT re-block an approved task
-  const r = plannerCycle(db, { policy: policy(), config });
+  const r = plannerCycle(store, { policy: policy(), config });
   assert.ok(!r.promoted.some((p) => p.id === 'F2-pay' && p.to === 'blocked'), 'approved task not re-blocked');
 });
 
@@ -145,13 +150,14 @@ test('planner auto-releases a governance hold once the policy no longer blocks i
     { id: 'F3', type: 'epic', title: 'external epic', status: 'in-progress', risk_tags: ['external'] },
     { id: 'F3-spec', type: 'story', title: 'spec', owner: 'claude', status: 'ready-for-impl', priority: 10, parent_id: 'F3', risk_tags: [] },
   ]);
+  const store = createProjectStore({ db, config });
   // Strict policy → the planner parks it as a governance hold.
-  plannerCycle(db, { policy: strict, config });
+  plannerCycle(store, { policy: strict, config });
   let t = db.prepare("SELECT status,note FROM tasks WHERE id='F3-spec'").get();
   assert.equal(t.status, 'blocked');
   assert.ok(t.note.startsWith('governance hold'));
   // Founder relaxes external_send → next planner cycle releases it back to a workable state.
-  const r = plannerCycle(db, { policy: relaxed, config });
+  const r = plannerCycle(store, { policy: relaxed, config });
   t = db.prepare("SELECT status FROM tasks WHERE id='F3-spec'").get();
   assert.equal(t.status, 'ready-for-impl', 'released once policy permits');
   assert.ok(r.promoted.some((p) => p.id === 'F3-spec' && p.reason === 'governance-released'));
@@ -163,7 +169,8 @@ test('planner does NOT auto-release manual or parked blocks (only its own govern
     { id: 'M1', type: 'story', title: 'manual', owner: 'claude', status: 'blocked', priority: 10, risk_tags: ['external'], note: 'blocked from dashboard' },
     { id: 'P1', type: 'story', title: 'parked', owner: 'claude', status: 'blocked', priority: 10, risk_tags: ['payments'], note: 'PARKED — waiting on data' },
   ]);
-  plannerCycle(db, { policy: relaxed, config });
+  const store = createProjectStore({ db, config });
+  plannerCycle(store, { policy: relaxed, config });
   assert.equal(db.prepare("SELECT status FROM tasks WHERE id='M1'").get().status, 'blocked', 'manual block untouched');
   assert.equal(db.prepare("SELECT status FROM tasks WHERE id='P1'").get().status, 'blocked', 'parked block untouched');
 });
@@ -221,7 +228,7 @@ test('plannerCycle refreshes a stale governance-hold note to the current blockin
   upsertTask(db, { id: 'F2-adapter', type: 'story', parent_id: 'F2', title: 'adapter', status: 'blocked', note: 'governance hold: needs founder approval to external send' }, { now: '2026-07-03T00:00:00.000Z' });
   // external_send now allowed; spend_money still blocks (inherited payments).
   const policy = { sensitive_actions: { external_send: 'allow', spend_money: 'block_and_ask' } };
-  plannerCycle(db, { policy, config });
+  plannerCycle(createProjectStore({ db, config }), { policy, config });
   const t = db.prepare('SELECT note, status FROM tasks WHERE id=?').get('F2-adapter');
   assert.equal(t.status, 'blocked');
   assert.match(t.note, /spend money/);

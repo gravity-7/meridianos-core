@@ -9,7 +9,6 @@
  * emits the dashboard `planner` payload. Pure over an injected `db`.
  */
 import { parseJsonArray } from './state.mjs';
-import { createStateStore } from './state-store.mjs';
 import { loadPolicy } from './budget.mjs';
 import { meetsSpecEntry, meetsDefinitionOfReady } from './definition-of-ready.mjs';
 import { sensitiveBlock, describeBlocks, isFounderApproved } from './sensitive.mjs';
@@ -37,14 +36,13 @@ export function epicsOf(tasks) {
 }
 
 /** Materialize a decomposition into child tasks (status `proposed` by default). */
-export function proposeTasks(db, { parentId = null, children = [], now = Date.now() } = {}) {
-  const store = createStateStore(db);
-  const parent = parentId ? store.getTask(parentId) : null;
+export function proposeTasks(store, { parentId = null, children = [], now = Date.now() } = {}) {
+  const parent = parentId ? store.state.getTask(parentId) : null;
   const nowIso = new Date(now).toISOString();
   const created = [];
   children.forEach((c, i) => {
     const id = c.id ?? `${parentId ?? 'TASK'}.${i + 1}`;
-    const t = store.upsertTask({
+    const t = store.state.upsertTask({
       id,
       title: c.title ?? id,
       status: c.status ?? 'proposed',
@@ -62,13 +60,12 @@ export function proposeTasks(db, { parentId = null, children = [], now = Date.no
 }
 
 /** Promote proposed tasks into the state machine (proposed → spec). Skips illegal moves. */
-export function acceptProposals(db, { ids = [], actor = 'planner', now = Date.now() } = {}) {
-  const store = createStateStore(db);
+export function acceptProposals(store, { ids = [], actor = 'planner', now = Date.now() } = {}) {
   const accepted = [];
   const nowIso = new Date(now).toISOString();
   for (const id of ids) {
     try {
-      const r = store.transition({ taskId: id, to: 'spec', actor, note: 'accepted by planner', now: nowIso });
+      const r = store.state.transition({ taskId: id, to: 'spec', actor, note: 'accepted by planner', now: nowIso });
       if (r && r.ok) accepted.push(id);
     } catch { /* not proposed / illegal — skip */ }
   }
@@ -84,9 +81,8 @@ export function acceptProposals(db, { ids = [], actor = 'planner', now = Date.no
  * `config` is the injected AiosConfig (REQUIRED), threaded to the sensitive.mjs governance calls
  * (sensitiveBlock / describeBlocks).
  */
-export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy(undefined, config) } = {}) {
-  const store = createStateStore(db);
-  const tasks = store.listTasks();
+export function plannerCycle(store, { config, now = Date.now(), policy = loadPolicy(undefined, config) } = {}) {
+  const tasks = store.state.listTasks();
   const nowIso = new Date(now).toISOString();
   const promoted = [];
   const skippedNotReady = [];
@@ -99,11 +95,11 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
     if (t.type !== 'story') continue;
     if (t.status === 'blocked' || t.status === 'done') continue;
     if (isFounderApproved(t)) continue; // founder cleared this §6 hold — let it flow
-    const action = sensitiveBlock(policy, store.effectiveRiskTags(t), undefined, config);
+    const action = sensitiveBlock(policy, store.state.effectiveRiskTags(t), undefined, config);
     if (!action) continue;
     try {
-      const what = describeBlocks(policy, store.effectiveRiskTags(t), config); // names ALL blocking actions
-      store.transition({ taskId: t.id, to: 'blocked', actor: 'planner', note: `governance hold: needs founder approval to ${what}`, now: nowIso });
+      const what = describeBlocks(policy, store.state.effectiveRiskTags(t), config); // names ALL blocking actions
+      store.state.transition({ taskId: t.id, to: 'blocked', actor: 'planner', note: `governance hold: needs founder approval to ${what}`, now: nowIso });
       promoted.push({ id: t.id, from: t.status, to: 'blocked', reason: `sensitive:${action}` });
     } catch { /* illegal move — skip */ }
   }
@@ -117,37 +113,35 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
   for (const t of tasks) {
     if (t.status !== 'blocked') continue;
     if (!(typeof t.note === 'string' && t.note.startsWith('governance hold'))) continue;
-    if (sensitiveBlock(policy, store.effectiveRiskTags(t), undefined, config)) {
+    if (sensitiveBlock(policy, store.state.effectiveRiskTags(t), undefined, config)) {
       // Still blocked, but the ACTIONS that block it may have changed (e.g. the founder relaxed
       // external_send, leaving only spend_money). Refresh the note so it names what is ACTUALLY
       // blocking it now — otherwise the founder relaxes the lever the stale note names and nothing
       // happens (postmortem #7).
-      const want = `governance hold: needs founder approval to ${describeBlocks(policy, store.effectiveRiskTags(t), config)}`;
+      const want = `governance hold: needs founder approval to ${describeBlocks(policy, store.state.effectiveRiskTags(t), config)}`;
       if (t.note !== want) {
-        try { db.prepare('UPDATE tasks SET note=?, updated_at=? WHERE id=?').run(want, nowIso, t.id); } catch { /* skip */ }
+        try { store.state.setTaskNote({ taskId: t.id, note: want, now: nowIso }); } catch { /* skip */ }
       }
       continue; // policy still blocks it — stay parked
     }
-    const prior = db.prepare(
-      "SELECT from_state FROM history WHERE task_id=? AND op='transition' AND to_state='blocked' ORDER BY seq DESC LIMIT 1",
-    ).get(t.id);
+    const prior = store.state.lastTransitionInto(t.id, 'blocked');
     const to = RELEASE_TARGETS.includes(prior?.from_state) ? prior.from_state : 'ready-for-impl';
     try {
-      store.transition({ taskId: t.id, to, actor: 'planner', note: 'released — policy now permits this action', now: nowIso });
+      store.state.transition({ taskId: t.id, to, actor: 'planner', note: 'released — policy now permits this action', now: nowIso });
       promoted.push({ id: t.id, from: 'blocked', to, reason: 'governance-released' });
     } catch { /* illegal — skip */ }
   }
 
   // Sprint Rollover: If the active sprint has stories and all are done, complete it and start the next one.
-  let activeSprint = db.prepare("SELECT * FROM sprints WHERE status = 'active'").get();
-  
+  let activeSprint = store.state.getActiveSprint();
+
   if (activeSprint) {
     const sprintStories = tasks.filter(t => t.sprint_id === activeSprint.id && t.type === 'story');
     if (sprintStories.length > 0) {
       const allDone = sprintStories.every(t => t.status === 'done' || t.status === 'blocked');
       if (allDone) {
         // Complete current sprint
-        db.prepare("UPDATE sprints SET status = 'completed' WHERE id = ?").run(activeSprint.id);
+        store.state.completeSprint(activeSprint.id);
         promoted.push({ id: activeSprint.id, type: 'sprint', from: 'active', to: 'completed' });
 
         // Generate next sprint
@@ -155,14 +149,12 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
         const nextNum = match ? parseInt(match[1], 10) + 1 : Date.now();
         const nextId = `S-${nextNum}`;
         const nextName = `Sprint ${nextNum}`;
-        
-        db.prepare("INSERT INTO sprints (id, pi_id, name, status, goal) VALUES (?, ?, ?, 'active', ?)").run(
-          nextId, activeSprint.pi_id, nextName, 'Auto-generated Sprint'
-        );
+
+        store.state.upsertSprint({ id: nextId, pi_id: activeSprint.pi_id, name: nextName, goal: 'Auto-generated Sprint', status: 'active' });
         promoted.push({ id: nextId, type: 'sprint', from: 'none', to: 'active' });
 
         // Point to the newly created sprint
-        activeSprint = db.prepare("SELECT * FROM sprints WHERE status = 'active'").get();
+        activeSprint = store.state.getActiveSprint();
       }
     }
   }
@@ -175,7 +167,7 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
       // Only pull into sprint if parent is in-progress
       const parent = s.parent_id ? tasks.find(p => p.id === s.parent_id) : null;
       if (parent && parent.status === 'in-progress') {
-        db.prepare('UPDATE tasks SET sprint_id = ?, updated_at = ? WHERE id = ?').run(activeSprint.id, nowIso, s.id);
+        store.state.setTaskSprint({ taskId: s.id, sprintId: activeSprint.id, now: nowIso });
         promoted.push({ id: s.id, from: 'backlog', to: 'sprint_assigned', sprint_id: activeSprint.id });
       }
     }
@@ -190,7 +182,7 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
       t.type === 'story' && t.status !== 'done' && t.status !== 'blocked' &&
       t.sprint_id && t.sprint_id !== activeSprint.id);
     for (const s of stranded) {
-      db.prepare('UPDATE tasks SET sprint_id = ?, updated_at = ? WHERE id = ?').run(activeSprint.id, nowIso, s.id);
+      store.state.setTaskSprint({ taskId: s.id, sprintId: activeSprint.id, now: nowIso });
       promoted.push({ id: s.id, from: s.sprint_id, to: 'sprint_assigned', sprint_id: activeSprint.id });
     }
   }
@@ -198,10 +190,7 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
   for (const t of tasks.filter(t => t.status === 'proposed')) {
     const deps = parseJsonArray(t.depends_on);
     if (deps.length) {
-      const placeholders = deps.map(() => '?').join(',');
-      const doneCount = db.prepare(
-        `SELECT COUNT(*) AS c FROM tasks WHERE id IN (${placeholders}) AND status='done'`,
-      ).get(...deps).c;
+      const doneCount = store.state.countDoneAmong(deps);
       if (doneCount < deps.length) continue;
     }
     // Tier-1 DoR gate: minimal check (title + owner). The spec agent is responsible for
@@ -211,13 +200,13 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
     if (!entry.ready) {
       const note = `not ready: ${entry.reasons.join('; ')}`.slice(0, 240);
       if (t.note !== note) {
-        try { db.prepare('UPDATE tasks SET note=?, updated_at=? WHERE id=?').run(note, nowIso, t.id); } catch { /* skip */ }
+        try { store.state.setTaskNote({ taskId: t.id, note, now: nowIso }); } catch { /* skip */ }
       }
       skippedNotReady.push({ id: t.id, reasons: entry.reasons });
       continue;
     }
     try {
-      store.transition({ taskId: t.id, to: 'spec', actor: 'planner', note: 'auto-promoted (spec-entry met)', now: nowIso });
+      store.state.transition({ taskId: t.id, to: 'spec', actor: 'planner', note: 'auto-promoted (spec-entry met)', now: nowIso });
       promoted.push({ id: t.id, from: 'proposed', to: 'spec' });
     } catch { /* blocked or illegal — skip */ }
   }
@@ -230,13 +219,13 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
     if (!dor.ready) {
       const note = `spec needs work: ${dor.reasons.join('; ')}`.slice(0, 240);
       if (t.note !== note) {
-        try { db.prepare('UPDATE tasks SET note=?, updated_at=? WHERE id=?').run(note, nowIso, t.id); } catch { /* skip */ }
+        try { store.state.setTaskNote({ taskId: t.id, note, now: nowIso }); } catch { /* skip */ }
       }
       skippedNotReady.push({ id: t.id, reasons: dor.reasons });
       continue;
     }
     try {
-      store.transition({ taskId: t.id, to: 'designing', actor: 'planner', note: 'spec complete (DoR met) — fast-tracked', now: nowIso });
+      store.state.transition({ taskId: t.id, to: 'designing', actor: 'planner', note: 'spec complete (DoR met) — fast-tracked', now: nowIso });
       promoted.push({ id: t.id, from: 'spec', to: 'designing' });
     } catch { /* skip */ }
   }
@@ -245,9 +234,8 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
 }
 
 /** The dashboard `planner` payload: backlog depth, epic progress, and pending proposals. */
-export function plannerStatus(db, { now = Date.now() } = {}) {
-  const store = createStateStore(db);
-  const tasks = store.listTasks();
+export function plannerStatus(store, { now = Date.now() } = {}) {
+  const tasks = store.state.listTasks();
   const proposalsRaw = tasks.filter((t) => t.status === 'proposed');
   const proposals = proposalsRaw.map((t) => ({
     id: t.id,

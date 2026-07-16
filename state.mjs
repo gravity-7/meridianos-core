@@ -538,4 +538,82 @@ export function parkedTasks(db, { now = Date.now() } = {}) {
   return out;
 }
 
+// ---------------------------------------------------------------------------------------------
+// D2 bite #2, stage 2b: new state-layer helpers so the ORCHESTRATION layer (planner.mjs,
+// watchdog.mjs, verify-loop.mjs) can stop reaching into a raw `db` directly now that their public
+// entry points flip to receive a ProjectStore `store` instead of `db`. Every body below is
+// byte-identical to the ad-hoc SQL its caller used to run inline — pure relocation, never a
+// behavior change. Exposed via state-store.mjs's DB_BOUND_FNS so callers reach them as
+// `store.state.<name>(...)`.
+// ---------------------------------------------------------------------------------------------
+
+/** Overwrite a task's note WITHOUT an audit row and WITHOUT a status change — distinct from
+ *  annotateTask (which also writes a history row). Mirrors the planner's prior ad-hoc SQL. */
+export function setTaskNote(db, { taskId, note, now = nowIso() }) {
+  db.prepare('UPDATE tasks SET note=?, updated_at=? WHERE id=?').run(note, now, taskId);
+}
+
+/** Re-point a task at a different sprint, with no audit row. Mirrors the planner's prior
+ *  ad-hoc sprint-carry-over SQL. */
+export function setTaskSprint(db, { taskId, sprintId, now = nowIso() }) {
+  db.prepare('UPDATE tasks SET sprint_id = ?, updated_at = ? WHERE id = ?').run(sprintId, now, taskId);
+}
+
+/** The single active sprint row, or undefined if none. */
+export function getActiveSprint(db) {
+  return db.prepare("SELECT * FROM sprints WHERE status = 'active'").get();
+}
+
+/** Mark a sprint completed (no audit row). Mirrors the planner's prior ad-hoc SQL. */
+export function completeSprint(db, id) {
+  db.prepare("UPDATE sprints SET status = 'completed' WHERE id = ?").run(id);
+}
+
+/** How many of `ids` currently have status='done'. */
+export function countDoneAmong(db, ids) {
+  if (!ids.length) return 0;
+  const placeholders = ids.map(() => '?').join(',');
+  return db.prepare(`SELECT COUNT(*) AS c FROM tasks WHERE id IN (${placeholders}) AND status='done'`).get(...ids).c;
+}
+
+/** The `from_state` of the most recent transition INTO `to` for a task (used by the planner to
+ *  restore the pre-block status on a governance release). */
+export function lastTransitionInto(db, taskId, to) {
+  return db.prepare(
+    'SELECT from_state FROM history WHERE task_id=? AND op=\'transition\' AND to_state=? ORDER BY seq DESC LIMIT 1',
+  ).get(taskId, to);
+}
+
+/** Tasks reaped at or above the SLA threshold — likely a stuck agent. Moved from watchdog.mjs's
+ *  ad-hoc SQL so the flipped watchdog.slaBreaches can reach it via store.state instead of a raw db. */
+export function slaBreaches(db, threshold) {
+  return db.prepare(
+    'SELECT id AS task, reap_count AS reapCount, updated_at AS sinceTs FROM tasks WHERE reap_count >= ? ORDER BY reap_count DESC',
+  ).all(threshold).map((r) => ({ task: r.task, reapCount: r.reapCount, sinceTs: r.sinceTs }));
+}
+
+/**
+ * Verify-attempt counter (the `verify_attempts` table) — the durable 3-strike "bounce then block"
+ * counter verify-loop.mjs's handleFailure needs to survive daemon restarts. Moved here so the
+ * flipped verifyCycle can reach it via store.state instead of a raw db.
+ */
+export function getVerifyAttempts(db, taskId) {
+  try { return db.prepare('SELECT attempts FROM verify_attempts WHERE task_id=?').get(taskId)?.attempts ?? 0; }
+  catch { return 0; }
+}
+
+export function bumpVerifyAttempts(db, taskId, now = nowIso()) {
+  const n = getVerifyAttempts(db, taskId) + 1;
+  try {
+    db.prepare(`INSERT INTO verify_attempts(task_id, attempts, updated_at) VALUES (?,?,?)
+                ON CONFLICT(task_id) DO UPDATE SET attempts=excluded.attempts, updated_at=excluded.updated_at`)
+      .run(taskId, n, now);
+  } catch { /* best-effort */ }
+  return n;
+}
+
+export function clearVerifyAttempts(db, taskId) {
+  try { db.prepare('DELETE FROM verify_attempts WHERE task_id=?').run(taskId); } catch { /* best-effort */ }
+}
+
 export { arr as parseJsonArray, nowIso, DAY };

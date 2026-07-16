@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from '../db.mjs';
 import { upsertTask, getTask, claimTask, releaseAllLeases, pruneHistory } from '../state.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import { readRuns } from '../runlog.mjs';
 import { quotaHold, planRun, executeRun } from '../runner.mjs';
 import { scanPrForInjection } from '../verify-loop.mjs';
@@ -25,6 +26,7 @@ function freshDb(seed = []) {
   for (const t of seed) upsertTask(db, t, { now: T0 });
   return db;
 }
+const freshStore = (seed = []) => createProjectStore({ db: freshDb(seed), config });
 const impl = (o = {}) => ({ id: 'F-impl', title: 'impl', owner: 'both', status: 'ready-for-impl', priority: 10, ...o });
 const policy = (over = {}) => ({
   agent_models: { claude: { default: 'claude-opus-4-8' }, antigravity: { default: 'gemini-3-pro' } },
@@ -47,10 +49,10 @@ test('quotaHold blocks an agent whose latest run failed on quota, until the rese
 });
 
 test('planRun skips a quota-held agent with reason session_limit instead of launching it', () => {
-  const db = freshDb([impl()]);
+  const store = freshStore([impl()]);
   const failedAt = localAt(12);
   const runs = [{ agent: 'claude', outcome: 'failed', reason: 'quota', reset_at: '2:20pm', ts: new Date(failedAt).toISOString() }];
-  const plan = planRun({ db, policy: policy(), budget: budget(), now: failedAt + 60_000, agents: ['claude'], runs, config });
+  const plan = planRun({ store, policy: policy(), budget: budget(), now: failedAt + 60_000, agents: ['claude'], runs, config });
   assert.equal(plan.fire, false);
   assert.equal(plan.reason, 'session_limit');
   assert.equal(plan.decisions[0].reason, 'session_limit');
@@ -58,8 +60,8 @@ test('planRun skips a quota-held agent with reason session_limit instead of laun
 
 // ---- RCA-2: dispatch dedupe ---------------------------------------------------------------------
 test('two agents in one tick get DIFFERENT tasks (no dual-dispatch on the same task)', () => {
-  const db = freshDb([impl({ id: 'A', priority: 1 }), impl({ id: 'B', priority: 2 })]);
-  const plan = planRun({ db, policy: policy(), budget: budget(), now: localAt(12), agents: ['claude', 'antigravity'], runs: [], config });
+  const store = freshStore([impl({ id: 'A', priority: 1 }), impl({ id: 'B', priority: 2 })]);
+  const plan = planRun({ store, policy: policy(), budget: budget(), now: localAt(12), agents: ['claude', 'antigravity'], runs: [], config });
   const tasks = plan.decisions.filter((d) => d.mayClaim).map((d) => d.task.id);
   assert.equal(tasks.length, 2);
   assert.notEqual(tasks[0], tasks[1]);
@@ -69,10 +71,11 @@ test('two agents in one tick get DIFFERENT tasks (no dual-dispatch on the same t
 // ---- RCA-3: PR recovery on a missing transition -------------------------------------------------
 test('executeRun recovers a PR the agent opened but forgot to record (no silent work loss)', async () => {
   const db = freshDb([impl()]);
+  const store = createProjectStore({ db, config });
   const runsPath = join(mkdtempSync(join(tmpdir(), 'aios-runs-')), 'log.jsonl');
   // launcher returns ok but does NOT transition; a PR exists on the branch (mocked findPr).
   const launch = () => ({ outcome: 'ok', note: 'done', branch: 'aios/F-impl-abcd1234', tokens: 100 });
-  const r = await executeRun({ db, policy: policy(), budget: budget(), now: localAt(12), runs: [], runsPath, launch, agents: ['claude'], findPr: () => 77, config });
+  const r = await executeRun({ store, policy: policy(), budget: budget(), now: localAt(12), runs: [], runsPath, launch, agents: ['claude'], findPr: () => 77, config });
   assert.equal(getTask(db, 'F-impl').status, 'in-review');
   assert.equal(getTask(db, 'F-impl').pr, '77');
   assert.equal(readRuns({ path: runsPath })[0].outcome, 'ok');
@@ -80,9 +83,10 @@ test('executeRun recovers a PR the agent opened but forgot to record (no silent 
 
 test('executeRun marks no_transition (typed) when the agent skips the transition and no PR exists', async () => {
   const db = freshDb([impl()]);
+  const store = createProjectStore({ db, config });
   const runsPath = join(mkdtempSync(join(tmpdir(), 'aios-runs-')), 'log.jsonl');
   const launch = () => ({ outcome: 'ok', note: 'done', branch: 'aios/F-impl-abcd1234' });
-  const r = await executeRun({ db, policy: policy(), budget: budget(), now: localAt(12), runs: [], runsPath, launch, agents: ['claude'], findPr: () => null, config });
+  const r = await executeRun({ store, policy: policy(), budget: budget(), now: localAt(12), runs: [], runsPath, launch, agents: ['claude'], findPr: () => null, config });
   const rec = readRuns({ path: runsPath })[0];
   assert.equal(rec.outcome, 'failed');
   assert.equal(rec.reason, 'no_transition');

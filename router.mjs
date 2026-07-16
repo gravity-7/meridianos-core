@@ -12,7 +12,6 @@
  */
 import { budgetStatus, loadPolicy } from './budget.mjs';
 import { parseJsonArray } from './state.mjs';
-import { createStateStore } from './state-store.mjs';
 import { CLAIMABLE_STATUSES } from './machine.mjs';
 import { routeModel } from './model-router.mjs';
 import { resolveProvider, providerKeyPresent, modelForTier } from './providers.mjs';
@@ -94,8 +93,7 @@ export function composeFilters(a, b) {
  *   `config` is the injected AiosConfig (REQUIRED), threaded to sensitiveBlock's governance
  *   hard-stop check.
  */
-export function decide(db, { config, agent, now = Date.now(), policy = loadPolicy(undefined, config), budget, claimable = CLAIMABLE_STATUSES, excludeTasks = null } = {}) {
-  const store = createStateStore(db);
+export function decide(store, { config, agent, now = Date.now(), policy = loadPolicy(undefined, config), budget, claimable = CLAIMABLE_STATUSES, excludeTasks = null } = {}) {
   const nowIso = new Date(now).toISOString();
   const deny = (reason) => ({ mayClaim: false, reason, agent, task: null, model: null, ttlMs: null });
 
@@ -106,7 +104,7 @@ export function decide(db, { config, agent, now = Date.now(), policy = loadPolic
   if (!mayClaim) return deny('budget_halt');
 
   const work = policy?.work ?? {};
-  const active = store.listTasks().filter((t) => leaseLive(t, nowIso));
+  const active = store.state.listTasks().filter((t) => leaseLive(t, nowIso));
   if (work.max_parallel != null && active.length >= work.max_parallel) return deny('max_parallel');
   if (work.wip_per_agent != null && active.filter((t) => t.lease_owner === agent).length >= work.wip_per_agent) return deny('wip_per_agent');
 
@@ -116,8 +114,8 @@ export function decide(db, { config, agent, now = Date.now(), policy = loadPolic
   const excludeFilter = excludeTasks && excludeTasks.size
     ? (t) => !excludeTasks.has(t.id)
     : null;
-  const filter = composeFilters(composeFilters(buildCapabilityFilter(agent, policy), store.buildSprintFilter()), excludeFilter);
-  const t = store.nextEligibleTask({ agent, now: nowIso, claimable, filter });
+  const filter = composeFilters(composeFilters(buildCapabilityFilter(agent, policy), store.state.buildSprintFilter()), excludeFilter);
+  const t = store.state.nextEligibleTask({ agent, now: nowIso, claimable, filter });
   if (!t) return deny('no_eligible_task');
   const floor = work.priority_floor ?? 999;
   if (t.priority > floor) return deny('below_priority_floor');
@@ -126,7 +124,7 @@ export function decide(db, { config, agent, now = Date.now(), policy = loadPolic
   // risk_tag mapped to a block_and_ask sensitive action (spend_money / external_send / deploy /
   // schema_change). The planner also parks these as `blocked` + escalates; this is defense-in-depth
   // so a sensitive task is never handed to an agent even if the planner hasn't run yet.
-  const blockedAction = !isFounderApproved(t) && sensitiveBlock(policy, store.effectiveRiskTags(t), undefined, config);
+  const blockedAction = !isFounderApproved(t) && sensitiveBlock(policy, store.state.effectiveRiskTags(t), undefined, config);
   if (blockedAction) return deny(`sensitive_action:${blockedAction}`);
 
   const routed = routeModel(agent, t, policy, agentState, config.domain);
