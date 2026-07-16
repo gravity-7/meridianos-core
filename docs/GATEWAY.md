@@ -16,7 +16,7 @@ daemon can now assemble and run it inline via a policy flag — **opt-in, off by
 ```
 harness ──(gateway token)──▶ GATEWAY ──(real key, server-side)──▶ provider
                                │  meter every call → ledger
-                               │  check budget verdict → allow / DENY(429)
+                               │  check budget verdict → allow / DENY(403, non-retryable)
 ```
 
 Three payoffs, all on-strategy: (1) silent-fallback is *impossible* (no traffic reaches a provider
@@ -50,8 +50,12 @@ server-side.
 2. **Route:** `resolveRoute(activeRegistry, ctx.provider)` — `registry` may be a plain envelope OR a
    `() => store.get()` function resolved per request (live registry swaps). No route → 502.
 3. **Verdict (exactly once):** `checkVerdict(ctx)`. `deny` → emit a deny token-event (null usage) +
-   **429 in the client's wire format** (`rate_limit_error` / `rate_limit_exceeded`), never forwarded.
-   Any other decision → forward. (`degrade` = documented follow-up, currently forwards.)
+   a **non-retryable 403 in the client's wire format** (`permission_error`, `code: over_budget`) with
+   `x-should-retry: false`, never forwarded. A budget halt is terminal, so it deliberately does NOT use
+   the retryable 429/`rate_limit_error` shape — the Anthropic/OpenAI SDKs retry 408/409/429/>=500, so a
+   capped agent would otherwise back off and retry against the cap until the launcher's 30-min kill; a
+   403 makes it exit cleanly and hands off to the runner's RCA-3 recovery. Any other decision → forward.
+   (`degrade` = documented follow-up, currently forwards.)
 4. **Forward:** to `route.upstreamUrl` (**base path preserved** — e.g. DeepSeek's `/anthropic`),
    injecting the real key server-side (`x-api-key` for anthropic, `Authorization: Bearer` for
    openai), and forcing **`accept-encoding: identity`** so the metering parse never hits compressed
