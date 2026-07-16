@@ -7,6 +7,12 @@
  * comparison logic the transcript-based budget.mjs uses today, reused verbatim so the two paths
  * can't drift on what "halt" means.
  *
+ * Cost caps (opt-in, additive): the ledger records `cost_usd` per event, so this module ALSO
+ * compares summed cost against optional `agent_budget.<agent>.per_5h_cost_usd` / `per_week_cost_usd`
+ * caps and denies if EITHER the token OR the cost cap is hit. This fixes token caps over-penalizing
+ * cache-heavy work (near-free cache reads inflate token totals but cost cents). An agent with no
+ * cost caps behaves EXACTLY as the token-only path did. Cost is never fabricated (see `costVerdictFor`).
+ *
  * FOLLOW-UP (3.3c): budget.mjs also supports `five_hour_sessions` — activity-anchored 5h windows
  * derived from the records themselves (first activity opens the window; it closes 5h later),
  * rather than a rolling trailing window. This module only implements the rolling trailing-5h/
@@ -41,9 +47,59 @@ export function agentBudgetVerdict(ledger, { tenant = 'pv', agent, now = Date.no
   const caps = policy?.agent_budget?.[agent];
   const warnPct = policy?.agent_budget?.warn_pct ?? 80;
 
-  const v = verdictFor(usage, caps, warnPct);
+  // Token caps (existing behavior, reused verbatim from budget.mjs) …
+  const tokenVerdict = verdictFor(usage, caps, warnPct);
+  // … AND opt-in USD cost caps from the SAME ledger window (cost_usd is summed by queryWindow).
+  // An agent with no cost caps set yields an all-'no-cap' cost verdict, so the merge below is
+  // byte-identical to the token-only verdict — pure additive, zero behavior change when unused.
+  const costVerdict = costVerdictFor({ last5h: w5.costUsd, last7d: wWeek.costUsd }, caps, warnPct);
+  const v = mergeVerdicts(tokenVerdict, costVerdict);
 
   return { tenant, agent, ...v, sums: { last5h: w5, last7d: wWeek } };
+}
+
+/**
+ * USD-cost verdict, mirroring budget.mjs's `verdictFor` shape/thresholds but comparing summed
+ * `cost_usd` against OPT-IN caps (`caps.per_5h_cost_usd` / `caps.per_week_cost_usd`). A null/absent
+ * cap → 'no-cap' for that window. NEVER denies on unknown cost: `queryWindow` sums only PRICED rows
+ * (unpriced runs land in `costUnknownRuns`, never fabricated), so a window whose runs are all
+ * unpriced reports 0 cost (< any cap) and cannot halt — under-enforcement on missing pricing is the
+ * deliberate safe direction (a real call is never wrongly blocked because we couldn't price it).
+ */
+function costVerdictFor({ last5h, last7d }, caps, warnPct) {
+  const rows = [
+    { window: '5h', used: last5h, cap: caps?.per_5h_cost_usd ?? null },
+    { window: 'week', used: last7d, cap: caps?.per_week_cost_usd ?? null },
+  ];
+  const windows = rows.map((r) => {
+    if (!r.cap) return { ...r, pct: null, state: 'no-cap', unit: 'usd' };
+    const pct = Math.round((r.used / r.cap) * 100);
+    const s = r.used >= r.cap ? 'halt' : (pct >= warnPct ? 'warn' : 'ok');
+    return { ...r, pct, state: s, unit: 'usd' };
+  });
+  const state = windows.reduce((acc, w) => (RANK[w.state] > RANK[acc] ? w.state : acc), 'ok');
+  return { state, windows };
+}
+
+// Severity ladder for combining token + cost verdicts. 'no-cap' ranks BELOW 'ok' so a window with a
+// real cap always wins over one without, and the overall state never reads 'no-cap'.
+const RANK = { 'no-cap': -1, ok: 0, warn: 1, halt: 2 };
+
+/**
+ * Combine the token and cost verdicts into one, per window: an agent is at the WORSE of its two
+ * caps for each of 5h/week (deny if EITHER is halted). The merged `windows` keep their '5h'/'week'
+ * names so `toEnforcementDecision` still resolves a valid `capWindow`.
+ */
+function mergeVerdicts(tokenV, costV) {
+  const windows = ['5h', 'week'].map((name) => {
+    const rt = tokenV.windows.find((w) => w.window === name);
+    const rc = costV.windows.find((w) => w.window === name);
+    if (!rt) return rc;
+    if (!rc) return rt;
+    return (RANK[rc.state] ?? 0) > (RANK[rt.state] ?? 0) ? rc : rt;
+  }).filter(Boolean);
+  const state = windows.reduce((acc, w) => (RANK[w.state] > RANK[acc] ? w.state : acc), 'ok');
+  return { state, windows };
 }
 
 /**
