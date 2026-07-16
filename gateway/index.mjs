@@ -11,6 +11,7 @@
  * loop works end-to-end against an OFFLINE stub upstream.
  */
 import { loadPolicy } from '../budget.mjs';
+import { loadPricing, costFor } from '../pricing.mjs';
 import { openLedger, appendEvent } from './ledger.mjs';
 import { createRunRegistry } from './run-registry.mjs';
 import { buildProviderRegistry } from './registry-source.mjs';
@@ -36,6 +37,13 @@ import { startGateway } from './server.mjs';
  * Returns `{ gateway, ledger, runs, store, url, close() }`: `store` is the live registry-store
  * (see `refreshRegistry` below for pushing a newer envelope into it), `url`/`close` mirror
  * `startGateway`'s own return shape for convenience.
+ *
+ * Cost (bite: ledger cost): the pricing catalog (`pricing.mjs`'s committed `pricing.json`, at
+ * `config.pricingPath`) is loaded ONCE here and closed over by a `costFn` passed into
+ * `startGateway` — `server.mjs` itself stays free of any pricing import (the gateway only ever
+ * takes injected sinks/seams). `costFor` returns `null` (never a fabricated number) when the
+ * catalog has no entry for a provider/model, so a tenant without a `pricing.json` simply gets
+ * `costUsd: null` on every event — no error.
  */
 export async function assembleGateway({ config, policy, port = 0, tenant = 'pv', ledgerPath, now } = {}) {
   const pol = policy ?? loadPolicy(undefined, config);
@@ -43,6 +51,13 @@ export async function assembleGateway({ config, policy, port = 0, tenant = 'pv',
   const runs = createRunRegistry();
   const store = createRegistryStore(buildProviderRegistry({ policy: pol, config, tenant, version: 1, now }));
   const checkVerdict = makeCheckVerdict({ ledger, policy: pol, config });
+  // `config` is nullable here — assembleGateway may be called without one (see e.g. this module's
+  // own hermetic tests). loadPricing REQUIRES a config when its explicit `path` is omitted (it
+  // reads `config.pricingPath`), so a config-less caller gets an empty catalog directly rather
+  // than risking a crash on `undefined.pricingPath` — behaviorally identical to loadPricing's own
+  // missing-file fallback (`{}`), so costFor still returns null (never fabricated) per call.
+  const catalog = config ? loadPricing(config.pricingPath, config) : {};
+  const costFn = (provider, model, usage) => costFor(provider, model, usage, { catalog })?.totalCost ?? null;
 
   const gateway = await startGateway({
     port,
@@ -50,6 +65,7 @@ export async function assembleGateway({ config, policy, port = 0, tenant = 'pv',
     runs,
     onTokenEvent: (evt) => appendEvent(ledger, evt),
     checkVerdict,
+    costFn,
   });
 
   return {

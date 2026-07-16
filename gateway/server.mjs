@@ -245,7 +245,7 @@ function createSseUsageTracker(wire) {
  * up front so the client starts receiving bytes immediately, mirroring the buffered path's header
  * handling (drop content-length/transfer-encoding; keep the upstream content-type).
  */
-function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestId, provider, model, wire, verdict, start, now }) {
+function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestId, provider, model, wire, verdict, start, now, costFn }) {
   const responseHeaders = { ...upstreamRes.headers };
   delete responseHeaders['content-length'];
   delete responseHeaders['transfer-encoding'];
@@ -270,6 +270,7 @@ function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestI
       latencyMs: now() - start,
       usage: tracker.usage,
       verdict,
+      costFn,
     });
   };
 
@@ -292,9 +293,18 @@ function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestI
   });
 }
 
-function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstreamStatus, latencyMs, usage, verdict }) {
+function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstreamStatus, latencyMs, usage, verdict, costFn }) {
   const usageFields = usage ?? { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null };
   const v = verdict ?? {};
+  // costFn is a seam into domain pricing (see assembleGateway in index.mjs) — this module never
+  // imports pricing.mjs itself. It must NEVER take down the request path: a throwing or
+  // misbehaving costFn degrades to a null (unknown) cost, same as an absent catalog entry.
+  let costUsd = null;
+  try {
+    costUsd = costFn(provider, model, usageFields) ?? null;
+  } catch {
+    costUsd = null;
+  }
   const evt = makeTokenEvent(
     {
       tenant: ctx.tenant,
@@ -313,6 +323,7 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstre
       cacheReadTokens: usageFields.cacheReadTokens,
       cacheWriteTokens: usageFields.cacheWriteTokens,
       totalTokens: computeTotal(usageFields),
+      costUsd,
       enforcementDecision: v.decision ?? 'allow',
       capWindow: v.capWindow ?? null,
     },
@@ -332,7 +343,11 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstre
  * is 3.3; defaults to a no-op so this module has no storage dependency). `resolveKey` and `now`
  * are test seams (default `process.env` lookup and `Date.now`). `checkVerdict` is the
  * enforcement seam — defaults to always-allow; pass `makeCheckVerdict(...)` (windows.mjs) for
- * real ledger-backed cap enforcement (3.2c).
+ * real ledger-backed cap enforcement (3.2c). `costFn` is the pricing seam — a pure
+ * `(provider, model, usage) => number|null` — defaults to `() => null` so a gateway started
+ * without one behaves byte-identically to before `costUsd` existed (always null). This module
+ * NEVER imports pricing.mjs itself; `assembleGateway` (index.mjs) builds the real costFn from the
+ * pricing catalog and injects it here (bite: ledger cost).
  */
 export function startGateway({
   port = 0,
@@ -342,9 +357,10 @@ export function startGateway({
   resolveKey = (k) => (k ? process.env[k] : undefined),
   now = () => Date.now(),
   checkVerdict = () => ({ decision: 'allow' }),
+  costFn = () => null,
 } = {}) {
   const server = http.createServer((req, res) => {
-    handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict }).catch((err) => {
+    handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn }).catch((err) => {
       if (!res.headersSent) {
         sendJson(res, 502, { error: 'gateway: unexpected failure', detail: String(err?.message ?? err) });
       }
@@ -363,7 +379,7 @@ export function startGateway({
   });
 }
 
-async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict }) {
+async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn }) {
   const start = now();
   const requestId = randomUUID();
 
@@ -407,6 +423,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       latencyMs: now() - start,
       usage: null,
       verdict,
+      costFn,
     });
     return sendJson(res, 429, denyBody(route.wire, verdict.capWindow));
   }
@@ -444,6 +461,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       latencyMs: now() - start,
       usage: null,
       verdict,
+      costFn,
     });
     return sendJson(res, 502, { error: 'gateway: upstream request failed', detail: String(err?.message ?? err) });
   }
@@ -463,6 +481,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       verdict,
       start,
       now,
+      costFn,
     });
     return;
   }
@@ -490,6 +509,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       latencyMs,
       usage: null,
       verdict,
+      costFn,
     });
     return sendJson(res, 502, { error: 'gateway: could not parse upstream response' });
   }
@@ -506,6 +526,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     latencyMs,
     usage,
     verdict,
+    costFn,
   });
 
   const responseHeaders = { ...upstreamRes.headers };
