@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db.mjs';
 import { upsertTask, listTasks } from '../state.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import { meetsDefinitionOfReady, meetsSpecEntry, countAcceptanceCriteria, hasUserStoryStatement } from '../definition-of-ready.mjs';
 import { plannerCycle } from '../planner.mjs';
 import { resolvePaths } from '../config.mjs';
@@ -67,7 +68,8 @@ test('planner promotes thin+good stories (Tier-1 met) to spec; blocks placeholde
   upsertTask(db, goodStory);
   upsertTask(db, thinStory);
   upsertTask(db, noOwnerStory);
-  const r = plannerCycle(db, { policy: { sensitive_actions: {} }, config });
+  const store = createProjectStore({ db, config });
+  const r = plannerCycle(store, { policy: { sensitive_actions: {} }, config });
   // Both good and thin stories are promoted (both have real titles + owner — Tier-1 passes)
   assert.ok(r.promoted.some((p) => p.id === 'S-good' && p.to === 'spec'), 'good story promoted');
   assert.ok(r.promoted.some((p) => p.id === 'S-thin' && p.to === 'spec'), 'thin story promoted (spec agent will fill ACs)');

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { buildReviewPrompt } from '../verify-loop.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
 
@@ -15,14 +16,17 @@ const config = resolvePaths({ domain: FIXTURE_DOMAIN });
 // the exported verifyCycle with mocked dependencies.
 
 test('verifyCycle returns empty results when no tasks are in-review', async () => {
-  // Minimal mock DB
+  // Minimal mock DB, wrapped in a real ProjectStore (verifyCycle is FLIPPED — D2 bite #2, stage
+  // 2b — to receive a `store`, not a raw `db`; createProjectStore's facades are pure binds over
+  // whatever db.prepare returns, so the mock still drives them exactly as before).
   const db = {
     prepare: () => ({ all: () => [], get: () => null, run: () => ({}) }),
   };
+  const store = createProjectStore({ db, config });
   const policy = { auto_merge: 'peer_agent_review', capability_matrix: {} };
 
   const { verifyCycle } = await import('../verify-loop.mjs');
-  const result = await verifyCycle(db, { policy, dryRun: true });
+  const result = await verifyCycle(store, { policy, dryRun: true });
 
   assert.equal(result.checked, 0);
   assert.deepEqual(result.merged, []);
@@ -44,10 +48,11 @@ test('verifyCycle skips everything in founder_only mode', async () => {
       run: () => ({}),
     }),
   };
+  const store = createProjectStore({ db, config });
   const policy = { auto_merge: 'founder_only' };
 
   const { verifyCycle } = await import('../verify-loop.mjs');
-  const result = await verifyCycle(db, { policy, dryRun: true });
+  const result = await verifyCycle(store, { policy, dryRun: true });
 
   assert.equal(result.checked, 1);
   assert.deepEqual(result.pending, ['T1']);

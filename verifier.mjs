@@ -14,8 +14,6 @@
  * founder wires the real `npm test` / guardrail executors at the edge.
  */
 import { loadPolicy } from './budget.mjs';
-import { createStateStore } from './state-store.mjs';
-import { createEventStore } from './event-store.mjs';
 import { reviewerFor } from './config.mjs';
 import * as childProcess from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -87,26 +85,23 @@ export function verify({ task, mode = 'founder_only', checks = [], pr = null, ag
 export { recentVerdicts } from './event-log.mjs';
 
 /** The dashboard `verifier` payload: mode + everything in-review (with verdicts) + recent merges. */
-export function verifierStatus(db, { config, policy = loadPolicy(undefined, config), now = Date.now(), checksByTask = {} } = {}) {
-  const store = createStateStore(db);
-  const events = createEventStore(db);
+export function verifierStatus(store, { config, policy = loadPolicy(undefined, config), now = Date.now(), checksByTask = {} } = {}) {
   const mode = policy?.auto_merge ?? 'founder_only';
-  const pending = store.listTasks()
+  const pending = store.state.listTasks()
     .filter((t) => t.status === 'in-review')
     .map((t) => {
       const checks = checksByTask[t.id] ?? requiredChecks(mode).map((name) => ({ name, status: 'pending', detail: '' }));
       return { task: t.id, pr: t.pr ?? null, agent: t.lease_owner ?? t.owner ?? null, submittedTs: t.updated_at, checks, verdict: verdictFrom(checks, mode) };
     });
-  return { mode, pending, recent: events.recentVerdicts() };
+  return { mode, pending, recent: store.events.recentVerdicts() };
 }
 
 /** Act on a verdict: a `pass` under an auto-merge mode transitions the task to `done`. */
-export function applyVerdict(db, { task, verdict, mode = 'founder_only', actor = 'verifier', now = Date.now() }) {
+export function applyVerdict(store, { task, verdict, mode = 'founder_only', actor = 'verifier', now = Date.now() }) {
   if (verdict !== 'pass') return { ok: false, reason: `verdict is ${verdict}` };
   if (mode === 'founder_only') return { ok: false, reason: 'founder_only: merge is manual' };
-  const store = createStateStore(db);
   try {
-    const r = store.transition({ taskId: task, to: 'done', actor, note: `auto-merged by verifier (${mode})`, now: new Date(now).toISOString() });
+    const r = store.state.transition({ taskId: task, to: 'done', actor, note: `auto-merged by verifier (${mode})`, now: new Date(now).toISOString() });
     return r && r.ok ? { ok: true, task: r.task } : { ok: false, reason: r?.reason ?? 'transition failed' };
   } catch (e) {
     return { ok: false, reason: String((e && e.message) || e) };

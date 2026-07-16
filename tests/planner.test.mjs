@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db.mjs';
 import { upsertTask, getTask, listTasks, upsertSprint } from '../state.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import { parentOf, epicsOf, proposeTasks, acceptProposals, plannerStatus, plannerCycle } from '../planner.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
@@ -13,6 +14,7 @@ function freshDb(seed = []) {
   for (const t of seed) upsertTask(db, t, { now: T0 });
   return db;
 }
+const freshStore = (seed = []) => createProjectStore({ db: freshDb(seed), config });
 
 test('parentOf returns the nearest ancestor by id-prefix', () => {
   const tasks = [{ id: 'F1' }, { id: 'F1-1' }, { id: 'F1-1.9' }];
@@ -23,7 +25,8 @@ test('parentOf returns the nearest ancestor by id-prefix', () => {
 
 test('proposeTasks materializes children with inherited owner/priority', () => {
   const db = freshDb([{ id: 'F9', title: 'epic', status: 'in-progress', owner: 'claude', priority: 5 }]);
-  const r = proposeTasks(db, { parentId: 'F9', children: [
+  const store = createProjectStore({ db, config });
+  const r = proposeTasks(store, { parentId: 'F9', children: [
     { title: 'child a', resources: ['pkg/x'] },
     { id: 'F9.custom', title: 'child b', owner: 'antigravity', priority: 2 },
   ] });
@@ -52,7 +55,8 @@ test('epicsOf reports done/total progress for parents with descendants', () => {
 
 test('acceptProposals promotes proposed → spec', () => {
   const db = freshDb([{ id: 'P1', title: 'p', status: 'proposed', owner: 'claude', priority: 10 }]);
-  const r = acceptProposals(db, { ids: ['P1'] });
+  const store = createProjectStore({ db, config });
+  const r = acceptProposals(store, { ids: ['P1'] });
   assert.deepEqual(r.accepted, ['P1']);
   assert.equal(getTask(db, 'P1').status, 'spec');
 });
@@ -64,7 +68,8 @@ test('plannerCycle promotes proposed → spec', () => {
     { id: 'P1', title: 'task a', status: 'proposed', owner: 'claude', priority: 10 },
     { id: 'P2', title: 'task b', status: 'proposed', owner: 'antigravity', priority: 20 },
   ]);
-  const r = plannerCycle(db, { config });
+  const store = createProjectStore({ db, config });
+  const r = plannerCycle(store, { config });
   assert.equal(r.promoted.length, 2);
   assert.equal(getTask(db, 'P1').status, 'spec');
   assert.equal(getTask(db, 'P2').status, 'spec');
@@ -75,7 +80,8 @@ test('plannerCycle skips proposed tasks with unmet dependencies', () => {
     { id: 'D1', title: 'dep', status: 'in-progress', owner: 'claude', priority: 5 },
     { id: 'P1', title: 'blocked', status: 'proposed', owner: 'claude', priority: 10, depends_on: ['D1'] },
   ]);
-  const r = plannerCycle(db, { config });
+  const store = createProjectStore({ db, config });
+  const r = plannerCycle(store, { config });
   assert.equal(r.promoted.length, 0);
   assert.equal(getTask(db, 'P1').status, 'proposed');
 });
@@ -85,7 +91,8 @@ test('plannerCycle promotes proposed when deps are done', () => {
     { id: 'D1', title: 'dep', status: 'done', owner: 'claude', priority: 5 },
     { id: 'P1', title: 'ready', status: 'proposed', owner: 'claude', priority: 10, depends_on: ['D1'] },
   ]);
-  const r = plannerCycle(db, { config });
+  const store = createProjectStore({ db, config });
+  const r = plannerCycle(store, { config });
   assert.equal(r.promoted.length, 1);
   assert.equal(getTask(db, 'P1').status, 'spec');
 });
@@ -94,7 +101,8 @@ test('plannerCycle fast-tracks spec → designing when spec file exists', () => 
   const db = freshDb([
     { id: 'S1', title: 'has spec', status: 'spec', owner: 'claude', priority: 10, spec: '.ai/features/S1/spec.md' },
   ]);
-  const r = plannerCycle(db, { config });
+  const store = createProjectStore({ db, config });
+  const r = plannerCycle(store, { config });
   assert.equal(r.promoted.length, 1);
   assert.equal(r.promoted[0].from, 'spec');
   assert.equal(r.promoted[0].to, 'designing');
@@ -105,7 +113,8 @@ test('plannerCycle leaves spec tasks without a spec file for agents to claim', (
   const db = freshDb([
     { id: 'S2', title: 'needs spec', status: 'spec', owner: 'claude', priority: 10 },
   ]);
-  const r = plannerCycle(db, { config });
+  const store = createProjectStore({ db, config });
+  const r = plannerCycle(store, { config });
   assert.equal(r.promoted.length, 0);
   assert.equal(getTask(db, 'S2').status, 'spec');
 });
@@ -116,9 +125,10 @@ test('plannerCycle carries a workable story stranded in a completed sprint into 
   const db = freshDb([
     { id: 'W1', type: 'story', title: 'reopened', status: 'ready-for-impl', owner: 'claude', priority: 10, sprint_id: 'S-2' },
   ]);
+  const store = createProjectStore({ db, config });
   upsertSprint(db, { id: 'S-2', name: 'Sprint 2', status: 'completed' });
   upsertSprint(db, { id: 'S-3', name: 'Sprint 3', status: 'active' });
-  const r = plannerCycle(db, { config });
+  const r = plannerCycle(store, { config });
   assert.equal(getTask(db, 'W1').sprint_id, 'S-3', 'stranded story reassigned to active sprint');
   assert.ok(r.promoted.some((p) => p.id === 'W1' && p.from === 'S-2' && p.sprint_id === 'S-3'), 'promoted log records the carry-over');
 });
@@ -127,8 +137,9 @@ test('plannerCycle leaves a story already in the active sprint untouched', () =>
   const db = freshDb([
     { id: 'A1', type: 'story', title: 'committed', status: 'ready-for-impl', owner: 'claude', priority: 10, sprint_id: 'S-3' },
   ]);
+  const store = createProjectStore({ db, config });
   upsertSprint(db, { id: 'S-3', name: 'Sprint 3', status: 'active' });
-  const r = plannerCycle(db, { config });
+  const r = plannerCycle(store, { config });
   assert.equal(getTask(db, 'A1').sprint_id, 'S-3');
   assert.ok(!r.promoted.some((p) => p.id === 'A1' && p.to === 'sprint_assigned'), 'no spurious re-assignment');
 });
@@ -138,20 +149,21 @@ test('plannerCycle does not carry over done or blocked stories stranded in a com
     { id: 'D1', type: 'story', title: 'done', status: 'done', owner: 'claude', priority: 10, sprint_id: 'S-2' },
     { id: 'B1', type: 'story', title: 'blocked', status: 'blocked', owner: 'claude', priority: 10, sprint_id: 'S-2' },
   ]);
+  const store = createProjectStore({ db, config });
   upsertSprint(db, { id: 'S-2', name: 'Sprint 2', status: 'completed' });
   upsertSprint(db, { id: 'S-3', name: 'Sprint 3', status: 'active' });
-  plannerCycle(db, { config });
+  plannerCycle(store, { config });
   assert.equal(getTask(db, 'D1').sprint_id, 'S-2', 'done story stays put');
   assert.equal(getTask(db, 'B1').sprint_id, 'S-2', 'blocked story stays put');
 });
 
 test('plannerStatus reports backlog depth, epics, and proposals', () => {
-  const db = freshDb([
+  const store = freshStore([
     { id: 'E', title: 'epic', status: 'in-progress', owner: 'both', priority: 5 },
     { id: 'E.1', title: 'c1', status: 'proposed', owner: 'claude', priority: 10, resources: ['pkg/x'] },
     { id: 'S', title: 'spec task', status: 'spec', owner: 'claude', priority: 20 },
   ]);
-  const s = plannerStatus(db);
+  const s = plannerStatus(store);
   assert.equal(s.backlogDepth, 2); // E.1 proposed + S spec
   assert.ok(s.epics.some((e) => e.id === 'E'));
   assert.equal(s.proposals.length, 1);

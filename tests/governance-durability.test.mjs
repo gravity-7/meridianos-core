@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb, backfillGovernanceColumns } from '../db.mjs';
 import { upsertTask, getTask, transition, setGovernanceFlags, seedTasks } from '../state.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import { isFounderApproved, snoozedUntil, isSkipped } from '../sensitive.mjs';
 import { buildBoardJson } from '../render.mjs';
 import { plannerCycle } from '../planner.mjs';
@@ -56,12 +57,13 @@ test('REGRESSION (minio): a note-overwriting verify bounce does NOT erase a foun
   assert.equal(isFounderApproved(t), true, 'still approved after the note-overwriting bounce');
 
   // The planner must NOT re-block the approved task…
-  const pr = plannerCycle(db, { policy: policy() });
+  const store = createProjectStore({ db, config });
+  const pr = plannerCycle(store, { policy: policy() });
   assert.ok(!pr.promoted.some((p) => p.id === 'F2-minio' && p.to === 'blocked'), 'approved task not re-blocked by the planner');
   assert.equal(getTask(db, 'F2-minio').status, 'in-progress', 'stays workable');
 
   // …and the router's §6 gate must not deny it for the sensitive tag.
-  const d = decide(db, { agent: 'claude', policy: policy(), budget: budget(), config });
+  const d = decide(store, { agent: 'claude', policy: policy(), budget: budget(), config });
   assert.notEqual(d.reason, 'sensitive_action:spend_money', 'router does not re-gate an approved task');
 });
 

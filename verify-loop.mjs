@@ -11,8 +11,7 @@
  * peer reviews are spawned asynchronously and tracked as Promises. Each tick checks
  * if pending reviews have resolved.
  */
-import { createStateStore } from './state-store.mjs';
-import { createEventStore } from './event-store.mjs';
+import { getVerifyAttempts, bumpVerifyAttempts, clearVerifyAttempts } from './state.mjs';
 import { loadPolicy } from './budget.mjs';
 import { reviewerFor } from './config.mjs';
 import {
@@ -35,23 +34,8 @@ const MAX_VERIFY_ATTEMPTS = 3;
 
 // --- Persistent attempt counter (postmortem A7) --------------------------------------------------
 // The 3-strike "bounce then block" counter MUST survive daemon restarts, or a permanently-broken
-// task resets to zero every restart and churns forever. Backed by the verify_attempts table.
-function readAttempts(db, taskId) {
-  try { return db.prepare('SELECT attempts FROM verify_attempts WHERE task_id=?').get(taskId)?.attempts ?? 0; }
-  catch { return 0; }
-}
-function bumpAttempts(db, taskId, now = new Date().toISOString()) {
-  const n = readAttempts(db, taskId) + 1;
-  try {
-    db.prepare(`INSERT INTO verify_attempts(task_id, attempts, updated_at) VALUES (?,?,?)
-                ON CONFLICT(task_id) DO UPDATE SET attempts=excluded.attempts, updated_at=excluded.updated_at`)
-      .run(taskId, n, now);
-  } catch { /* best-effort */ }
-  return n;
-}
-function clearAttempts(db, taskId) {
-  try { db.prepare('DELETE FROM verify_attempts WHERE task_id=?').run(taskId); } catch { /* best-effort */ }
-}
+// task resets to zero every restart and churns forever. Backed by the verify_attempts table via
+// state.mjs's getVerifyAttempts/bumpVerifyAttempts/clearVerifyAttempts (D2 bite #2, stage 2b).
 
 /**
  * A verification round failed. Move the task OUT of `in-review` so it stops being re-checked every
@@ -59,23 +43,22 @@ function clearAttempts(db, taskId) {
  * rework, or — once it has failed MAX_VERIFY_ATTEMPTS times — park it `blocked` (which the watchdog
  * surfaces to the founder). Returns the disposition for the results payload.
  */
-function handleFailure(db, task, detail, results, { dryRun = false } = {}) {
-  const store = createStateStore(db);
+function handleFailure(store, task, detail, results, { dryRun = false } = {}) {
   if (dryRun) {
     // Report the disposition WITHOUT mutating state or the attempt counter.
-    const projected = readAttempts(db, task.id) + 1;
+    const projected = store.state.getVerifyAttempts(task.id) + 1;
     results.failed.push({ task: task.id, disposition: projected >= MAX_VERIFY_ATTEMPTS ? 'would-block' : 'would-bounce', detail });
     return;
   }
-  const n = bumpAttempts(db, task.id);
+  const n = store.state.bumpVerifyAttempts(task.id);
   const note = `verification failed (${n}/${MAX_VERIFY_ATTEMPTS}): ${detail}`.slice(0, 300);
   verifyState.delete(task.id);
   try {
     if (n >= MAX_VERIFY_ATTEMPTS) {
-      store.transition({ taskId: task.id, to: 'blocked', actor: 'verifier', note: `needs founder review — ${note}` });
+      store.state.transition({ taskId: task.id, to: 'blocked', actor: 'verifier', note: `needs founder review — ${note}` });
       results.failed.push({ task: task.id, disposition: 'blocked', detail });
     } else {
-      store.transition({ taskId: task.id, to: 'in-progress', actor: 'verifier', note });
+      store.state.transition({ taskId: task.id, to: 'in-progress', actor: 'verifier', note });
       results.failed.push({ task: task.id, disposition: 'bounced', detail });
     }
   } catch (e) {
@@ -220,13 +203,11 @@ async function mergePr(prNumber) {
  *   createCheckRunners / reviewerFor / spawnPeerReview
  * @returns {object} { checked: number, merged: [], failed: [], pending: [] }
  */
-export async function verifyCycle(db, { policy, selectModel, dryRun = false, checkRunners, fetchPr, config } = {}) {
-  const store = createStateStore(db);
-  const events = createEventStore(db);
+export async function verifyCycle(store, { policy, selectModel, dryRun = false, checkRunners, fetchPr, config } = {}) {
   const opts = { fetchPr };
   policy = policy ?? loadPolicy(undefined, config);
   const mode = policy?.auto_merge ?? 'founder_only';
-  const tasks = store.listTasks().filter(t => t.status === 'in-review');
+  const tasks = store.state.listTasks().filter(t => t.status === 'in-review');
   const results = { checked: tasks.length, merged: [], failed: [], pending: [] };
 
   if (tasks.length === 0) return results;
@@ -269,7 +250,7 @@ export async function verifyCycle(db, { policy, selectModel, dryRun = false, che
     // If any sync check failed → bounce/block out of in-review (stops the per-tick churn).
     const failedCheck = state.checks.find(c => c.status === 'fail');
     if (failedCheck) {
-      handleFailure(db, task, `${failedCheck.name}: ${failedCheck.detail}`, results, { dryRun });
+      handleFailure(store, task, `${failedCheck.name}: ${failedCheck.detail}`, results, { dryRun });
       continue;
     }
     // A sync check still pending (e.g. CI running) → wait, don't re-run.
@@ -285,7 +266,7 @@ export async function verifyCycle(db, { policy, selectModel, dryRun = false, che
         // reads it. A poisoned PR is bounced with a security note, never handed to the reviewer.
         const scan = await scanPrForInjection(prNumber, { fetchPr: opts.fetchPr });
         if (!scan.safe) {
-          handleFailure(db, task, scan.reason, results, { dryRun });
+          handleFailure(store, task, scan.reason, results, { dryRun });
           continue;
         }
         // Start the peer review
@@ -330,16 +311,16 @@ export async function verifyCycle(db, { policy, selectModel, dryRun = false, che
         const mergeResult = await mergePr(prNumber);
         const afterMerge = primaryTreeBranch({ config });
         if (beforeMerge === 'main' && afterMerge && afterMerge !== 'main') {
-          events.warn('verifier', 'primary-tree-stranded-by-merge', { pr: prNumber, from: beforeMerge, to: afterMerge });
+          store.events.warn('verifier', 'primary-tree-stranded-by-merge', { pr: prNumber, from: beforeMerge, to: afterMerge });
         }
         if (mergeResult.ok) {
-          applyVerdict(db, { task: task.id, verdict: 'pass', mode, actor: 'verifier' });
-          clearAttempts(db, task.id);
+          applyVerdict(store, { task: task.id, verdict: 'pass', mode, actor: 'verifier' });
+          store.state.clearVerifyAttempts(task.id);
           results.merged.push({ task: task.id, pr: prNumber });
           verifyState.delete(task.id);
         } else {
           // Merge itself failed (conflict, branch protection) — bounce for rework, don't churn.
-          handleFailure(db, task, `merge failed: ${mergeResult.detail}`, results, { dryRun });
+          handleFailure(store, task, `merge failed: ${mergeResult.detail}`, results, { dryRun });
         }
       } else if (dryRun) {
         // Dry run: report what WOULD merge without touching state.
@@ -350,7 +331,7 @@ export async function verifyCycle(db, { policy, selectModel, dryRun = false, che
       }
     } else if (verdict === 'needs_changes') {
       const failed = allChecks.find(c => c.status === 'fail');
-      handleFailure(db, task, failed ? `${failed.name}: ${failed.detail}` : 'changes requested', results, { dryRun });
+      handleFailure(store, task, failed ? `${failed.name}: ${failed.detail}` : 'changes requested', results, { dryRun });
     } else {
       results.pending.push(task.id);
     }
@@ -360,10 +341,12 @@ export async function verifyCycle(db, { policy, selectModel, dryRun = false, che
 }
 
 /** Clear verify state for a specific task (e.g., when it transitions away from in-review). The
- *  durable attempt counter is cleared separately via the DB (clearAttempts) on merge. */
+ *  durable attempt counter is cleared separately via the DB (clearVerifyAttempts) on merge. Kept
+ *  taking a raw `db` (NOT flipped) — it is a direct impl-layer call, not an orchestration entry
+ *  point. */
 export function clearVerifyState(taskId, db = null) {
   verifyState.delete(taskId);
-  if (db) clearAttempts(db, taskId);
+  if (db) clearVerifyAttempts(db, taskId);
 }
 
 /** Get current verify state (for the dashboard). */

@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
 import { buildStatus } from '../status.mjs';
 import { openDb } from '../db.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import { createAios } from '../config.mjs';
 import { writePolicy, LEVER_PATHS } from '../policy-write.mjs';
 import { loadPolicy } from '../budget.mjs';
@@ -112,7 +113,7 @@ function restartDaemon(config) {
 }
 
 let statusCache = { t: 0, body: '' };
-let _db = null;
+let _store = null;
 
 function send(res, code, body, type = 'application/json') {
   res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' });
@@ -145,7 +146,8 @@ export function applyPolicyUpdates(updates, { path, config } = {}) {
 /** `config` is the injected AiosConfig (REQUIRED). Threaded to every call this server makes that
  *  accepts one: readSpec/writeSpec, execCommand, restartDaemon, buildStatus, openDb, actions. */
 export function createDashboardServer(config) {
-  const getDb = () => (_db ||= openDb(undefined, config)); // lazy: don't open the DB just by importing this module
+  // lazy: don't open the DB just by importing this module
+  const getStore = () => (_store ||= createProjectStore({ db: openDb(undefined, config), config }));
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
@@ -211,7 +213,7 @@ export function createDashboardServer(config) {
       }
       if (req.method === 'POST' && ACTION_PATHS.has(url.pathname)) {
         const body = JSON.parse((await readBody(req)) || '{}');
-        const result = handleAction(getDb(), url.pathname, body, { config });
+        const result = handleAction(getStore(), url.pathname, body, { config });
         if (url.pathname !== '/api/run') statusCache.t = 0; // a mutating action → rebuild next poll
         return send(res, 200, JSON.stringify(result));
       }

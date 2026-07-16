@@ -18,8 +18,6 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseJsonArray } from './state.mjs';
-import { createStateStore } from './state-store.mjs';
-import { createDocStore } from './doc-store.mjs';
 import { STATES } from './machine.mjs';
 import { scanInbound } from './bus-guard.mjs';
 
@@ -116,57 +114,49 @@ const brief = (t) => t && {
   contracts: parseJsonArray(t.contracts), spec: t.spec ?? null, pr: t.pr ?? null,
 };
 
-export function nextTask(db, { agent }) {
-  const store = createStateStore(db);
-  const t = store.nextEligibleTask({ agent });
+export function nextTask(store, { agent }) {
+  const t = store.state.nextEligibleTask({ agent });
   return t ? { ok: true, task: brief(t) } : { ok: true, task: null, message: `no eligible task for ${agent}` };
 }
 
-export function claim(db, { agent, taskId, session, ttlMs }) {
-  const store = createStateStore(db);
-  const r = store.claimTask({ taskId, agent, session, ...(ttlMs ? { ttlMs } : {}) });
+export function claim(store, { agent, taskId, session, ttlMs }) {
+  const r = store.state.claimTask({ taskId, agent, session, ...(ttlMs ? { ttlMs } : {}) });
   return r.won ? { ok: true, task: brief(r.task) } : { ok: false, error: r.reason, by: r.by };
 }
 
-export function heartbeat(db, { taskId, session, ttlMs }) {
-  const store = createStateStore(db);
-  const r = store.heartbeat({ taskId, session, ...(ttlMs ? { ttlMs } : {}) });
+export function heartbeat(store, { taskId, session, ttlMs }) {
+  const r = store.state.heartbeat({ taskId, session, ...(ttlMs ? { ttlMs } : {}) });
   return r.ok ? { ok: true } : { ok: false, error: 'not-lease-holder' };
 }
 
-export function transition(db, { taskId, to, session, note, pr }) {
-  const store = createStateStore(db);
+export function transition(store, { taskId, to, session, note, pr }) {
   try {
-    const r = store.transition({ taskId, to, actor: session || 'agent', note, requireSession: session || null, pr });
+    const r = store.state.transition({ taskId, to, actor: session || 'agent', note, requireSession: session || null, pr });
     return r && r.ok === false ? { ok: false, error: r.reason } : { ok: true, task: brief(r.task) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
 }
 
-export function release(db, { taskId, session }) {
-  const store = createStateStore(db);
-  const r = store.releaseLease({ taskId, session });
+export function release(store, { taskId, session }) {
+  const r = store.state.releaseLease({ taskId, session });
   return r.ok ? { ok: true } : { ok: false, error: r.reason };
 }
 
-export function blockTask(db, { taskId, reason, session }) {
-  const store = createStateStore(db);
+export function blockTask(store, { taskId, reason, session }) {
   try {
-    const r = store.blockTask({ taskId, actor: session || 'agent', reason });
+    const r = store.state.blockTask({ taskId, actor: session || 'agent', reason });
     return r && r.ok === false ? { ok: false, error: r.reason } : { ok: true, task: brief(r.task) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
 }
 
-export function list(db) {
-  const store = createStateStore(db);
-  return { ok: true, tasks: store.listTasks().map(brief) };
+export function list(store) {
+  return { ok: true, tasks: store.state.listTasks().map(brief) };
 }
 
-export function submitHandoff(db, { feature, markdown, session }, { config, inbox = undefined, scan = scanInbound, docs = createDocStore(config) } = {}) {
-  const store = createStateStore(db);
+export function submitHandoff(store, { feature, markdown, session }, { config, inbox = undefined, scan = scanInbound, docs = store.docs } = {}) {
   const flagged = scan(markdown);
   if (flagged) return { ok: false, error: `quarantined: ${flagged}` };
   const safe = String(feature).replace(/[^\w.-]/g, '_');
@@ -188,10 +178,10 @@ export function submitHandoff(db, { feature, markdown, session }, { config, inbo
   }
 
   let advanced = false;
-  const t = store.getTask(feature);
+  const t = store.state.getTask(feature);
   if (t && t.status === 'designing') {
     try {
-      store.transition({ taskId: feature, to: 'ready-for-impl', actor: session || 'antigravity', note: 'design handoff submitted', requireSession: session || null, releaseLease: !!session });
+      store.state.transition({ taskId: feature, to: 'ready-for-impl', actor: session || 'antigravity', note: 'design handoff submitted', requireSession: session || null, releaseLease: !!session });
       advanced = true;
     } catch { /* not a legal/owned advance — leave the task as-is, handoff is still written */ }
   }
@@ -201,18 +191,18 @@ export function submitHandoff(db, { feature, markdown, session }, { config, inbo
 // ---- dispatcher --------------------------------------------------------------------------
 /** Validate + route one tool call. Throws BusError on bad input; returns the handler result.
  *  `opts.config` is the injected AiosConfig (REQUIRED). */
-export function dispatch(db, name, args, opts = {}) {
+export function dispatch(store, name, args, opts = {}) {
   const { config } = opts;
   const a = validateArgs(name, args, config);
   switch (name) {
-    case 'next_task': return nextTask(db, a);
-    case 'claim_task': return claim(db, a);
-    case 'heartbeat': return heartbeat(db, a);
-    case 'transition': return transition(db, a);
-    case 'release': return release(db, a);
-    case 'block_task': return blockTask(db, a);
-    case 'list_tasks': return list(db);
-    case 'submit_handoff': return submitHandoff(db, a, opts);
+    case 'next_task': return nextTask(store, a);
+    case 'claim_task': return claim(store, a);
+    case 'heartbeat': return heartbeat(store, a);
+    case 'transition': return transition(store, a);
+    case 'release': return release(store, a);
+    case 'block_task': return blockTask(store, a);
+    case 'list_tasks': return list(store);
+    case 'submit_handoff': return submitHandoff(store, a, opts);
     default: throw new BusError('unknown_tool', `unrecognized tool: ${name}`);
   }
 }

@@ -4,7 +4,7 @@
  * launcher that spawns the agent in the founder's environment.
  *
  * Gates (in order): kill_switch → quiet_hours → max_runs_per_5h → budget halt → router capacity.
- * Everything is pure + injectable (policy, budget, now, runs, db, launch) so the whole gating
+ * Everything is pure + injectable (policy, budget, now, runs, store, launch) so the whole gating
  * matrix is unit-tested. SAFETY: with no `launch` callback, executeRun is a DRY RUN — it claims
  * nothing and spawns nothing. Autonomy is opt-in: the founder wires a real launcher.
  *
@@ -15,8 +15,6 @@ import { spawnSync } from 'node:child_process';
 import { loadPolicy, budgetStatus } from './budget.mjs';
 import { decide } from './router.mjs';
 import { resolveProvider } from './providers.mjs';
-import { createStateStore } from './state-store.mjs';
-import { createEventStore } from './event-store.mjs';
 import { appendRun, readRuns, newRunId } from './runlog.mjs';
 import { isQuotaText, parseResetAt, resetInstant } from './exit-classify.mjs';
 
@@ -100,7 +98,7 @@ export function quotaHold(agent, { config, runs, now = Date.now(), cooldownMs = 
  * still wins, matching the pre-DI default-param precedence). `config` also threads to router.decide
  * for the governance hard-stop check.
  */
-export function planRun({ db, config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents = undefined, runs } = {}) {
+export function planRun({ store, config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents = undefined, runs } = {}) {
   const agentList = agents ?? config.domain.agents;
   const status = runnerStatus({ policy, budget, now, runs, config });
   if (status.holdReason) return { fire: false, reason: status.holdReason, status, decisions: [] };
@@ -114,7 +112,7 @@ export function planRun({ db, config, policy = loadPolicy(undefined, config), bu
       decisions.push({ mayClaim: false, reason: 'session_limit', agent, task: null, model: null, ttlMs: null, resumesAtMs: qh.resumesAtMs, resetAt: qh.resetAt });
       continue;
     }
-    const d = decide(db, { agent, now, policy, budget: b, excludeTasks: assigned, config });
+    const d = decide(store, { agent, now, policy, budget: b, excludeTasks: assigned, config });
     if (d.mayClaim && d.task) assigned.add(d.task.id);
     decisions.push(d);
   }
@@ -130,10 +128,8 @@ export function planRun({ db, config, policy = loadPolicy(undefined, config), bu
  * With no `launch` callback this is a DRY RUN — nothing is claimed, nothing is spawned.
  * `config` is the injected AiosConfig (REQUIRED), threaded to planRun.
  */
-export async function executeRun({ db, config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents, runs, launch, runsPath = undefined, sessionFor, findPr } = {}) {
-  const store = createStateStore(db);
-  const events = createEventStore(db);
-  const plan = planRun({ db, policy, budget, now, agents, runs, config });
+export async function executeRun({ store, config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents, runs, launch, runsPath = undefined, sessionFor, findPr } = {}) {
+  const plan = planRun({ store, policy, budget, now, agents, runs, config });
 
   // Missing-key skips (router.decide()'s cost-safety guard) are denials, not claimable — but the
   // founder still needs to see them, so log + warn even when nothing else fires this cycle.
@@ -155,7 +151,7 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
   const results = [];
   for (const d of plan.decisions.filter((x) => x.mayClaim)) {
     const session = sessionFor ? sessionFor(d) : randomUUID();
-    const claimed = store.claimTask({ taskId: d.task.id, agent: d.agent, session, ttlMs: d.ttlMs, now: nowIso });
+    const claimed = store.state.claimTask({ taskId: d.task.id, agent: d.agent, session, ttlMs: d.ttlMs, now: nowIso });
     if (!claimed.won) {
       results.push(appendRun({ agent: d.agent, model: d.model, provider: d.provider, harness: d.harness, session, task: d.task.id, outcome: 'skipped', reason: 'lost_claim', note: `lost claim: ${claimed.reason}` }, { path: runsPath, now, config }));
       continue;
@@ -176,12 +172,12 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
       reason = r.reason ?? (outcome === 'ok' ? 'ok' : 'nonzero');
       resetAt = r.resetAt ?? null;
       if (outcome === 'ok') {
-        const taskAfter = store.getTask(d.task.id);
+        const taskAfter = store.state.getTask(d.task.id);
         if (taskAfter && taskAfter.status === d.task.status) {
           // RCA-3: the agent finished but never transitioned the task. Before treating this as lost
           // work, try to RECOVER a PR it opened but forgot to record — the honor-system gap must not
           // silently drop a real PR (which would strand or re-duplicate the work).
-          const rec = recoverPr(db, { task: d.task, branch: r.branch, actor: d.agent, now: nowIso, findPr });
+          const rec = recoverPr(store, { task: d.task, branch: r.branch, actor: d.agent, now: nowIso, findPr });
           if (rec.ok) {
             note = `recovered PR #${rec.pr} → in-review (agent skipped its own transition)`;
           } else {
@@ -198,16 +194,16 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
     }
     if (outcome === 'failed') {
       try {
-        const rel = store.releaseLease({ taskId: d.task.id, session });
+        const rel = store.state.releaseLease({ taskId: d.task.id, session });
         // Fallback: if session UUID doesn't match (instant exit race), force-release by agent name
-        if (!rel.ok) store.forceReleaseLease({ taskId: d.task.id, agent: d.agent });
+        if (!rel.ok) store.state.forceReleaseLease({ taskId: d.task.id, agent: d.agent });
       } catch { /* best-effort */ }
     }
     // Post-hoc per_task_tokens actuator (RCA-5): the lever finally does something — a run that
     // burned more than the cap raises a warn event (which the watchdog surfaces as an escalation).
     const cap = policy?.agent_budget?.per_task_tokens;
-    if (db && tokens != null && cap && tokens > cap) {
-      try { events.warn('runner', 'per-task-over-budget', { task: d.task.id, agent: d.agent, tokens, cap }); } catch { /* best-effort */ }
+    if (store && tokens != null && cap && tokens > cap) {
+      try { store.events.warn('runner', 'per-task-over-budget', { task: d.task.id, agent: d.agent, tokens, cap }); } catch { /* best-effort */ }
     }
     results.push(appendRun({ agent: d.agent, model: d.model, provider: d.provider, harness: d.harness, session, task: d.task.id, tokens, usage, outcome, reason, reset_at: resetAt, note }, { path: runsPath, now, config }));
   }
@@ -221,8 +217,7 @@ export async function executeRun({ db, config, policy = loadPolicy(undefined, co
  * the task to `in-review` through legal transitions so the verifier can pick it up. Best-effort —
  * returns { ok:false, reason } when there is no branch, no gh, or no open PR (caller then fails).
  */
-function recoverPr(db, { task, branch, actor, now = new Date().toISOString(), findPr } = {}) {
-  const store = createStateStore(db);
+function recoverPr(store, { task, branch, actor, now = new Date().toISOString(), findPr } = {}) {
   if (task.status !== 'ready-for-impl' && task.status !== 'in-progress') return { ok: false, reason: 'not an implement stage' };
   if (!branch) return { ok: false, reason: 'no branch to inspect' };
   const lookup = findPr ?? ((b) => {
@@ -237,9 +232,9 @@ function recoverPr(db, { task, branch, actor, now = new Date().toISOString(), fi
   if (pr == null) return { ok: false, reason: 'no open PR on branch' };
   try {
     if (task.status === 'ready-for-impl') {
-      store.transition({ taskId: task.id, to: 'in-progress', actor, note: 'auto: PR recovery (agent skipped transition)', now });
+      store.state.transition({ taskId: task.id, to: 'in-progress', actor, note: 'auto: PR recovery (agent skipped transition)', now });
     }
-    store.transition({ taskId: task.id, to: 'in-review', actor, pr: String(pr), note: 'auto-recovered PR — agent skipped its own transition', now });
+    store.state.transition({ taskId: task.id, to: 'in-review', actor, pr: String(pr), note: 'auto-recovered PR — agent skipped its own transition', now });
     return { ok: true, pr };
   } catch (e) {
     return { ok: false, reason: String((e && e.message) || e) };

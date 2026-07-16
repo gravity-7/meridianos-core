@@ -4,12 +4,11 @@
  * Pure read: it opens the state DB, the usage meters, and the run log, and never mutates state.
  */
 import { openDb } from './db.mjs';
-import { createStateStore } from './state-store.mjs';
-import { createEventStore } from './event-store.mjs';
+import { createProjectStore } from './project-store.mjs';
 import { budgetStatus, loadPolicy } from './budget.mjs';
 import { readRuns } from './runlog.mjs';
 import { CLAIMABLE_STATUSES } from './machine.mjs';
-import { healthStatus, collectEscalations, parkedTasks } from './watchdog.mjs';
+import { healthStatus, collectEscalations } from './watchdog.mjs';
 import { runnerStatus } from './runner.mjs';
 import { verifierStatus } from './verifier.mjs';
 import { plannerStatus } from './planner.mjs';
@@ -48,22 +47,22 @@ const leaseLive = (t, nowIso) => t.lease_expires && t.lease_expires > nowIso;
 /**
  * @param {object}  [o]
  * @param {object}  o.config        the injected AiosConfig (REQUIRED)
- * @param {object}  [o.db]          an open DB handle (tests); otherwise opened from o.dbPath
- * @param {string}  [o.dbPath]      state DB path (defaults to the repo DB)
+ * @param {object}  [o.store]       an already-built ProjectStore (tests); otherwise one is built
+ *                                  from a freshly-opened db at o.dbPath (closed again on return)
+ * @param {string}  [o.dbPath]      state DB path (defaults to the repo DB) — only used when
+ *                                  `o.store` is omitted
  * @param {number}  [o.now]         epoch ms (injectable for tests)
  * @param {object}  [o.policy]      parsed policy (defaults to .ai/policy.yaml)
  * @param {object}  [o.agentDirs]   { [agent]: dirOverride } — per-agent usage-store dir override
  *                                  (tests); threaded straight into budgetStatus.
  * @param {number}  [o.runsLimit]
  */
-export function buildStatus({ config, db, dbPath, now = Date.now(), policy = loadPolicy(undefined, config), agentDirs, runsLimit = 20 } = {}) {
+export function buildStatus({ config, store, dbPath, now = Date.now(), policy = loadPolicy(undefined, config), agentDirs, runsLimit = 20 } = {}) {
   const nowIso = new Date(now).toISOString();
-  const owns = !db;
-  db = db || openDb(dbPath, config);
+  const ownedDb = store ? null : openDb(dbPath, config);
+  store = store ?? createProjectStore({ db: ownedDb, config });
   try {
-    const store = createStateStore(db);
-    const events = createEventStore(db);
-    const tasks = store.listTasks();
+    const tasks = store.state.listTasks();
     const models = policy?.agent_models ?? {};
 
     const activeFor = (agent) => {
@@ -116,21 +115,21 @@ export function buildStatus({ config, db, dbPath, now = Date.now(), policy = loa
       queue,
       runs,
       // --- orchestrator subsystems (dashboard-v2 contract) ---
-      health: healthStatus(db, { policy, budget, now, config }),
+      health: healthStatus(store, { policy, budget, now, config }),
       runner: runnerStatus({ policy, budget, now, runs, config }),
-      verifier: verifierStatus(db, { policy, now, config }),
-      planner: plannerStatus(db, { now }),
-      escalations: collectEscalations(db, { policy, budget, now, config }),
+      verifier: verifierStatus(store, { policy, now, config }),
+      planner: plannerStatus(store, { now }),
+      escalations: collectEscalations(store, { policy, budget, now, config }),
       // Snoozed/skipped blocked tasks — kept out of `escalations` so they stop nagging, but
       // still listed so the dashboard can offer Un-snooze/Un-skip/Approve (reversible parking).
-      parked: parkedTasks(db, { now }),
+      parked: store.state.parkedTasks({ now }),
       capability_matrix: policy?.capability_matrix ?? null,
       work_stealing: policy?.work_stealing ?? false,
       taskCategories: buildTaskCategories(tasks),
-      systemLog: events.readEvents({ limit: 30 }),
+      systemLog: store.events.readEvents({ limit: 30 }),
       policy,
     };
   } finally {
-    if (owns) db.close?.();
+    if (ownedDb) ownedDb.close?.();
   }
 }
