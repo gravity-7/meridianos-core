@@ -12,7 +12,7 @@ import { parseJsonArray } from './state.mjs';
 import { createStateStore } from './state-store.mjs';
 import { loadPolicy } from './budget.mjs';
 import { meetsSpecEntry, meetsDefinitionOfReady } from './definition-of-ready.mjs';
-import { effectiveRiskTags, sensitiveBlock, describeBlocks, isFounderApproved } from './sensitive.mjs';
+import { sensitiveBlock, describeBlocks, isFounderApproved } from './sensitive.mjs';
 
 const sep = (childId, parentId) => childId !== parentId && (childId.startsWith(`${parentId}.`) || childId.startsWith(`${parentId}-`));
 
@@ -99,10 +99,10 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
     if (t.type !== 'story') continue;
     if (t.status === 'blocked' || t.status === 'done') continue;
     if (isFounderApproved(t)) continue; // founder cleared this §6 hold — let it flow
-    const action = sensitiveBlock(policy, effectiveRiskTags(db, t), undefined, config);
+    const action = sensitiveBlock(policy, store.effectiveRiskTags(t), undefined, config);
     if (!action) continue;
     try {
-      const what = describeBlocks(policy, effectiveRiskTags(db, t), config); // names ALL blocking actions
+      const what = describeBlocks(policy, store.effectiveRiskTags(t), config); // names ALL blocking actions
       store.transition({ taskId: t.id, to: 'blocked', actor: 'planner', note: `governance hold: needs founder approval to ${what}`, now: nowIso });
       promoted.push({ id: t.id, from: t.status, to: 'blocked', reason: `sensitive:${action}` });
     } catch { /* illegal move — skip */ }
@@ -117,12 +117,12 @@ export function plannerCycle(db, { config, now = Date.now(), policy = loadPolicy
   for (const t of tasks) {
     if (t.status !== 'blocked') continue;
     if (!(typeof t.note === 'string' && t.note.startsWith('governance hold'))) continue;
-    if (sensitiveBlock(policy, effectiveRiskTags(db, t), undefined, config)) {
+    if (sensitiveBlock(policy, store.effectiveRiskTags(t), undefined, config)) {
       // Still blocked, but the ACTIONS that block it may have changed (e.g. the founder relaxed
       // external_send, leaving only spend_money). Refresh the note so it names what is ACTUALLY
       // blocking it now — otherwise the founder relaxes the lever the stale note names and nothing
       // happens (postmortem #7).
-      const want = `governance hold: needs founder approval to ${describeBlocks(policy, effectiveRiskTags(db, t), config)}`;
+      const want = `governance hold: needs founder approval to ${describeBlocks(policy, store.effectiveRiskTags(t), config)}`;
       if (t.note !== want) {
         try { db.prepare('UPDATE tasks SET note=?, updated_at=? WHERE id=?').run(want, nowIso, t.id); } catch { /* skip */ }
       }

@@ -442,4 +442,100 @@ export function nextEligibleTask(db, { agent, now = nowIso(), claimable = CLAIMA
   return null;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Promoted read-queries (D2 bite #2, stage 2a): these used to live in sensitive.mjs / router.mjs /
+// watchdog.mjs. Bodies are byte-identical to their originals except for two self-containment
+// adaptations forced by the acyclic-imports constraint (state.mjs must not import sensitive.mjs /
+// router.mjs / watchdog.mjs): `parseJsonArray(...)` calls use this module's local `arr` helper
+// directly (the exact same function, just its in-module name), and `parkedTasks` calls the local
+// `listTasks(db)` / inlines the two trivial sensitive.mjs column-readers (`skipped_at != null`,
+// `snoozed_until ?? null`) instead of importing them. The old modules re-export these by name so
+// every existing external importer keeps working unchanged.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Walk a task's ancestors via the EXPLICIT parent_id chain and return the task plus every ancestor
+ * row. We deliberately do NOT infer ancestry from the id-prefix: ids like `F2-3-photo-tools-ui`
+ * (a standalone UI epic) share the `F2-` prefix with the money epic `F2` without being its child,
+ * so a prefix heuristic would wrongly tar pure-UI work with `payments`/`external` and block it.
+ * parent_id is the source of truth for the hierarchy (see the seed/board.json).
+ */
+export function taskWithAncestors(db, task) {
+  const all = db.prepare('SELECT id, parent_id, risk_tags FROM tasks').all();
+  const byId = new Map(all.map((t) => [t.id, t]));
+  const out = [];
+  const seen = new Set();
+  let cur = byId.get(task.id) ?? task;
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    out.push(cur);
+    cur = cur.parent_id ? byId.get(cur.parent_id) : null;
+  }
+  return out;
+}
+
+/** The union of a task's own risk_tags and all its ancestors' risk_tags (lowercased). */
+export function effectiveRiskTags(db, task) {
+  const tags = new Set();
+  for (const t of taskWithAncestors(db, task)) {
+    for (const tag of arr(t.risk_tags)) tags.add(String(tag).toLowerCase());
+  }
+  return [...tags];
+}
+
+/**
+ * The scrum sprint gate. In scrum mode ONLY stories committed to an active sprint are workable
+ * (epics/features are containers; unassigned stories are backlog). Returns null when the DB has
+ * no active sprint — so the system degrades to status-based selection instead of starving, and
+ * so non-scrum callers/tests are unaffected. Composable with the capability filter.
+ */
+export function buildSprintFilter(db) {
+  let activeSprintIds;
+  try {
+    activeSprintIds = db.prepare("SELECT id FROM sprints WHERE status = 'active'").all().map((r) => r.id);
+  } catch {
+    return null; // no sprints table (e.g. a minimal test DB) → no scrum gating
+  }
+  if (!activeSprintIds.length) return null; // no active sprint → fail open (don't starve)
+  const active = new Set(activeSprintIds);
+  return (task) => {
+    if (task.type && task.type !== 'story') return false;   // only stories are directly workable
+    if (!task.sprint_id) return false;                       // unassigned = backlog, not committed
+    return active.has(task.sprint_id);                       // must be in an active sprint
+  };
+}
+
+/** Recent expired-lease reaps (from the audit log). owner is recovered from the reap note. */
+export function recentReaps(db, { limit = 10 } = {}) {
+  const rows = db.prepare(
+    `SELECT h.ts AS ts, h.task_id AS task, h.note AS note, t.reap_count AS reapCount
+       FROM history h LEFT JOIN tasks t ON t.id = h.task_id
+      WHERE h.op = 'reap' ORDER BY h.seq DESC LIMIT ?`,
+  ).all(limit);
+  return rows.map((r) => ({
+    ts: r.ts,
+    task: r.task,
+    owner: r.note && r.note.startsWith('owner:') ? r.note.slice(6) : null,
+    reapCount: r.reapCount ?? null,
+    sessionAgeSec: null,
+  }));
+}
+
+/**
+ * Blocked tasks the founder has parked (snoozed or skipped) — kept OUT of collectEscalations
+ * so they stop nagging, but still listed here so the dashboard's "Snoozed / Skipped" section
+ * can show them with an Un-snooze/Un-skip + Approve control (reversible, never silently lost).
+ */
+export function parkedTasks(db, { now = Date.now() } = {}) {
+  const out = [];
+  for (const t of listTasks(db).filter((t) => t.status === 'blocked')) {
+    const skipped = t.skipped_at != null;               // mirrors sensitive.isSkipped
+    const until = t.snoozed_until ?? null;               // mirrors sensitive.snoozedUntil
+    const snoozed = !!(until && Date.parse(until) > now);
+    if (!skipped && !snoozed) continue;
+    out.push({ task: t.id, status: t.status, owner: t.owner, note: t.note, skipped, snoozedUntil: snoozed ? until : null });
+  }
+  return out;
+}
+
 export { arr as parseJsonArray, nowIso, DAY };

@@ -23,6 +23,8 @@ const DB_BOUND_FNS = [
   'upsertSprint', 'claimTask', 'heartbeat', 'releaseLease', 'forceReleaseLease',
   'releaseAllLeases', 'pruneHistory', 'reapExpiredLeases', 'transition', 'blockTask',
   'annotateTask', 'setGovernanceFlags', 'nextEligibleTask',
+  // Promoted read-queries (D2 bite #2, stage 2a — formerly in sensitive/router/watchdog):
+  'taskWithAncestors', 'effectiveRiskTags', 'buildSprintFilter', 'recentReaps', 'parkedTasks',
 ];
 
 /** Build a StateStore bound to one `db` handle: `store.fn(args)` ≡ `state.fn(db, args)`. */

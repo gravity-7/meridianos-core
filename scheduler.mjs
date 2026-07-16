@@ -35,6 +35,7 @@ import { tick } from './watchdog.mjs';
 import { render } from './render.mjs';
 import { launchAgent } from './launcher.mjs';
 import { createStateStore } from './state-store.mjs';
+import { createEventStore } from './event-store.mjs';
 import { createDashboardServer } from './dashboard/server.mjs';
 import { verifyCycle } from './verify-loop.mjs';
 import { pushEscalations } from './escalation-push.mjs';
@@ -42,7 +43,6 @@ import { selectModel } from './router.mjs';
 import { plannerCycle } from './planner.mjs';
 import { pruneAllWorktrees } from './worktree.mjs';
 import { restorePrimaryTreeToMain } from './boot-guard.mjs';
-import { info, warn, error as logError, pruneEvents } from './event-log.mjs';
 import { createRotatingLogger } from './daemon-logger.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -104,6 +104,7 @@ function loadMeta() {
 }
 
 let db;
+let events; // EventStore bound to the composition root's `db` (set alongside it in start())
 let tickCount = 0;
 const startedAt = Date.now();
 
@@ -129,7 +130,7 @@ const startedAt = Date.now();
  * @param {Function} deps._render         render.render
  * @param {Function} deps._loadMeta
  * @param {Function} deps._loadPolicy
- * @param {Function} deps._pruneEvents    event-log.pruneEvents
+ * @param {Function} deps._pruneEvents    event-store.pruneEvents (bound EventStore method)
  * @param {Function} deps._pruneHistory   state.pruneHistory
  * @param {object}   [deps.config]     the injected AiosConfig (defaults to the composition root's)
  */
@@ -149,9 +150,10 @@ export async function runWatchdogTick(deps) {
     _render         = render,
     _loadMeta       = loadMeta,
     _loadPolicy     = loadPolicy,
-    _pruneEvents    = pruneEvents,
+    _pruneEvents    = createEventStore(db).pruneEvents,
     _pruneHistory   = createStateStore(db).pruneHistory,
   } = deps;
+  const events = createEventStore(db);
 
   try {
     const policy = _loadPolicy(undefined, cfg);
@@ -166,13 +168,13 @@ export async function runWatchdogTick(deps) {
 
       // Heartbeat every 10th tick (~10 min)
       if (tickCount % 10 === 0) {
-        info(db, 'scheduler', 'heartbeat', { tick: tickCount, uptimeMin: Math.round((Date.now() - startedAt) / 60_000) });
-        _pruneEvents(db);
+        events.info('scheduler', 'heartbeat', { tick: tickCount, uptimeMin: Math.round((Date.now() - startedAt) / 60_000) });
+        _pruneEvents();
         try { _pruneHistory(); } catch { /* best-effort */ }
       }
     } catch (tickErr) {
       logger.error('watchdog', `tick-error: ${tickErr?.message ?? String(tickErr)}`, tickErr);
-      logError(db, 'watchdog', 'tick-error', { error: tickErr?.message ?? String(tickErr) });
+      events.error('watchdog', 'tick-error', { error: tickErr?.message ?? String(tickErr) });
     }
 
     // Planner: auto-promote proposed → spec → designing. Isolated so a throw
@@ -181,7 +183,7 @@ export async function runWatchdogTick(deps) {
       const pc = _plannerCycle(db, { now: Date.now(), config: cfg });
       if (pc.promoted.length) {
         logger.log('planner', `promoted: ${pc.promoted.map(p => `${p.id} (${p.from}→${p.to})`).join(', ')}`);
-        info(db, 'planner', 'promote', { promoted: pc.promoted });
+        events.info('planner', 'promote', { promoted: pc.promoted });
 
         // G2: non-blocking spec/design-complete pings — piggybacked on the existing escalation
         // webhook (Discord/Slack). The system keeps flowing regardless; founder can optionally
@@ -215,7 +217,7 @@ export async function runWatchdogTick(deps) {
       }
     } catch (plannerErr) {
       logger.error('planner', `cycle-error: ${plannerErr?.message ?? String(plannerErr)}`, plannerErr);
-      logError(db, 'planner', 'cycle-error', { error: plannerErr?.message ?? String(plannerErr) });
+      events.error('planner', 'cycle-error', { error: plannerErr?.message ?? String(plannerErr) });
     }
 
 
@@ -226,15 +228,15 @@ export async function runWatchdogTick(deps) {
         const pushResult = await _pushEscalations(h.escalations, { policy, config: cfg });
         if (pushResult.sent > 0) {
           logger.log('escalation', `pushed ${pushResult.sent} escalation(s)`);
-          info(db, 'escalation', 'push', { sent: pushResult.sent });
+          events.info('escalation', 'push', { sent: pushResult.sent });
         }
         if (pushResult.error) {
           logger.log('escalation', `push error: ${pushResult.error}`);
-          logError(db, 'escalation', 'push-fail', { error: pushResult.error });
+          events.error('escalation', 'push-fail', { error: pushResult.error });
         }
       } catch (pushErr) {
         logger.log('escalation', `push error: ${pushErr.message}`);
-        logError(db, 'escalation', 'push-fail', { error: pushErr.message });
+        events.error('escalation', 'push-fail', { error: pushErr.message });
       }
     }
 
@@ -245,27 +247,27 @@ export async function runWatchdogTick(deps) {
       const vr = await _verifyCycle(db, { policy, selectModel: modelSelector, dryRun, config: cfg });
       if (vr.merged.length) {
         logger.log('verifier', `merged: ${vr.merged.map(m => m.task).join(', ')}`);
-        info(db, 'verifier', 'merge', { tasks: vr.merged.map(m => m.task) });
+        events.info('verifier', 'merge', { tasks: vr.merged.map(m => m.task) });
       }
       if (vr.failed.length) {
         logger.log('verifier', `failed: ${vr.failed.map(f => f.task).join(', ')}`);
-        warn(db, 'verifier', 'check-fail', { tasks: vr.failed.map(f => f.task) });
+        events.warn('verifier', 'check-fail', { tasks: vr.failed.map(f => f.task) });
       }
       if (vr.pending.length) logger.log('verifier', `pending: ${vr.pending.join(', ')}`);
     } catch (verifyErr) {
       logger.error('verifier', `cycle-error: ${verifyErr?.message ?? String(verifyErr)}`, verifyErr);
-      logError(db, 'verifier', 'cycle-error', { error: verifyErr?.message ?? String(verifyErr) });
+      events.error('verifier', 'cycle-error', { error: verifyErr?.message ?? String(verifyErr) });
     }
 
     // Re-render after state changes
     try { _render(db, _loadMeta(), cfg); } catch (renderErr) {
-      warn(db, 'scheduler', 'render-fail', { error: renderErr.message });
+      events.warn('scheduler', 'render-fail', { error: renderErr.message });
     }
   } catch (e) {
     // Belt-and-suspenders outer catch: any subsystem that slips past its own
     // guard lands here.  Log and return — never re-throw.
     logger.error('watchdog', `tick-error: ${e?.message ?? String(e)}`, e);
-    logError(db, 'watchdog', 'tick-error', { error: e?.message ?? String(e) });
+    events.error('watchdog', 'tick-error', { error: e?.message ?? String(e) });
   }
 }
 
@@ -296,6 +298,7 @@ export async function runRunnerCycle(deps) {
     _loadPolicy   = loadPolicy,
     _launchAgent  = launchAgent,
   } = deps;
+  const events = createEventStore(db);
 
   try {
     const policy  = _loadPolicy(undefined, cfg);
@@ -305,7 +308,7 @@ export async function runRunnerCycle(deps) {
 
     // Re-render the board after any state changes
     try { _render(db, _loadMeta(), cfg); } catch (renderErr) {
-      warn(db, 'scheduler', 'render-fail', { error: renderErr.message });
+      events.warn('scheduler', 'render-fail', { error: renderErr.message });
     }
 
     if (result.fired) {
@@ -317,7 +320,7 @@ export async function runRunnerCycle(deps) {
   } catch (e) {
     // Belt-and-suspenders outer catch: log and return — never re-throw.
     logger.error('runner', `cycle-error: ${e?.message ?? String(e)}`, e);
-    logError(db, 'runner', 'cycle-error', { error: e?.message ?? String(e) });
+    events.error('runner', 'cycle-error', { error: e?.message ?? String(e) });
   }
 }
 
@@ -342,7 +345,7 @@ async function watchdogTick() {
     // internal guards), but if something slips through we catch it here so the
     // setInterval loop — and therefore :4317 — stay alive.
     logger.error('watchdog', 'tick-escaped', e);
-    logError(db, 'watchdog', 'tick-escaped', { error: e?.message ?? String(e) });
+    events.error('watchdog', 'tick-escaped', { error: e?.message ?? String(e) });
   }
 }
 
@@ -358,7 +361,7 @@ async function runCycle() {
   } catch (e) {
     // Same belt-and-suspenders pattern as watchdogTick.
     logger.error('runner', 'cycle-escaped', e);
-    logError(db, 'runner', 'cycle-escaped', { error: e?.message ?? String(e) });
+    events.error('runner', 'cycle-escaped', { error: e?.message ?? String(e) });
   }
 }
 
@@ -390,7 +393,7 @@ function scheduleRunner({ force = false } = {}) {
 function startPolicyWatcher() {
   setInterval(() => {
     try { scheduleRunner(); } catch (e) {
-      warn(db, 'scheduler', 'policy-reload-fail', { error: e.message });
+      events.warn('scheduler', 'policy-reload-fail', { error: e.message });
     }
   }, 5 * 60_000);
 }
@@ -433,6 +436,7 @@ export async function start({ domain } = {}) {
   } catch { /* best-effort */ }
 
   db = openDb(undefined, config);
+  events = createEventStore(db);
   const port = Number(process.env.AIOS_DASHBOARD_PORT) || 4317;
 
   // 1. Dashboard — bind the :4317 socket FIRST, before the (potentially slow, git-heavy) boot
@@ -452,15 +456,15 @@ export async function start({ domain } = {}) {
     const r = restorePrimaryTreeToMain({ config });
     if (r.switched) {
       logger.log('boot', `WARN: primary tree was stranded on '${r.from}' — restored to main (discarded board drift)`);
-      warn(db, 'boot', 'primary-tree-restored', { from: r.from });
+      events.warn('boot', 'primary-tree-restored', { from: r.from });
     } else if (r.reason === 'dirty') {
       logger.log('boot', `WARN: primary tree on '${r.from}' has non-board uncommitted changes (${r.dirty.join(', ')}) — leaving it untouched; manual cleanup needed`);
-      warn(db, 'boot', 'primary-tree-stranded-dirty', { from: r.from, dirty: r.dirty });
+      events.warn('boot', 'primary-tree-stranded-dirty', { from: r.from, dirty: r.dirty });
     } else if (r.reason === 'switch-failed' || r.reason === 'head-unknown') {
       logger.error('boot', `primary-tree restore failed (${r.reason}): ${r.error || ''}`);
-      logError(db, 'boot', 'primary-tree-restore-fail', { reason: r.reason, error: r.error });
+      events.error('boot', 'primary-tree-restore-fail', { reason: r.reason, error: r.error });
     }
-  } catch (e) { warn(db, 'boot', 'primary-tree-guard-fail', { error: e.message }); }
+  } catch (e) { events.warn('boot', 'primary-tree-guard-fail', { error: e.message }); }
 
   // Clean any worktrees orphaned by a previous crash (agents from a dead daemon are gone anyway).
   try { const p = pruneAllWorktrees(config); if (p.removed) logger.log('worktree', `pruned ${p.removed} orphaned worktree(s)`); } catch { /* best-effort */ }
@@ -468,7 +472,7 @@ export async function start({ domain } = {}) {
   // Boot lease recovery (RCA-4): any agent a previous daemon launched died with it, so its lease is
   // an orphan. Free every live lease now — the TTL reaper would otherwise sit on non-expired ones
   // for up to lease_ttl_min, wedging a max_parallel slot after every crash/restart.
-  try { const r = createStateStore(db).releaseAllLeases(); if (r.freed.length) logger.log('boot', `freed ${r.freed.length} orphaned lease(s): ${r.freed.join(', ')}`); } catch (e) { warn(db, 'scheduler', 'boot-lease-recovery-fail', { error: e.message }); }
+  try { const r = createStateStore(db).releaseAllLeases(); if (r.freed.length) logger.log('boot', `freed ${r.freed.length} orphaned lease(s): ${r.freed.join(', ')}`); } catch (e) { events.warn('scheduler', 'boot-lease-recovery-fail', { error: e.message }); }
 
   // Opt-in metering/enforcement gateway (config.gateway drives launcher.mjs's injection). Off by
   // default — a tenant with no policy.gateway block is byte-identical to before.
@@ -481,7 +485,7 @@ export async function start({ domain } = {}) {
     config.gateway = gw.gatewayConfig;
     closeGateway = gw.close;
     logger.log('gateway', `sidecar ${config.gateway.url} (tenant ${gwTenant})`);
-    info(db, 'gateway', 'start', { url: config.gateway.url, tenant: gwTenant });
+    events.info('gateway', 'start', { url: config.gateway.url, tenant: gwTenant });
   }
 
   // 2. Watchdog
@@ -499,12 +503,12 @@ export async function start({ domain } = {}) {
   setTimeout(runCycle, 5_000);
 
   const cadence = loadPolicy(undefined, config)?.schedule?.cadence ?? 'off';
-  info(db, 'scheduler', 'start', { port, cadence });
+  events.info('scheduler', 'start', { port, cadence });
   logger.log('scheduler', 'AIOS daemon started — Ctrl+C to stop');
 
   // Graceful shutdown
   const shutdown = () => {
-    info(db, 'scheduler', 'shutdown');
+    events.info('scheduler', 'shutdown');
     logger.log('scheduler', 'shutting down...');
     if (runnerTimer) clearInterval(runnerTimer);
     try { closeGateway(); } catch { /* best-effort — never block shutdown */ }

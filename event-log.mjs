@@ -42,3 +42,15 @@ export function pruneEvents(db, { keep = 5000 } = {}) {
     return db.prepare('DELETE FROM events WHERE seq <= ?').run(cutoff).changes;
   } catch { return 0; }
 }
+
+// Promoted from verifier.mjs (D2 bite #2, stage 2a) — bodies byte-identical; verifier.mjs
+// re-exports this by name so existing external importers keep working.
+
+/** Recently merged tasks (transitions to `done`) for the dashboard `verifier.recent`. */
+export function recentVerdicts(db, { limit = 10 } = {}) {
+  return db.prepare(
+    `SELECT h.ts AS ts, h.task_id AS task, t.pr AS pr, h.actor AS actor
+       FROM history h LEFT JOIN tasks t ON t.id = h.task_id
+      WHERE h.op = 'transition' AND h.to_state = 'done' ORDER BY h.seq DESC LIMIT ?`,
+  ).all(limit).map((r) => ({ task: r.task, pr: r.pr ?? null, verdict: 'pass', ts: r.ts, mergedBy: r.actor || null }));
+}

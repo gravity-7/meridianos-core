@@ -12,7 +12,11 @@
  * Pure over an injected db (only reads). The router denies claims for blocked tasks; the planner
  * parks them as `blocked` (which auto-escalates to the founder via the watchdog feed).
  */
-import { parseJsonArray } from './state.mjs';
+
+// taskWithAncestors / effectiveRiskTags moved to state.mjs (D2 bite #2, stage 2a — promoted
+// read-queries; see state-store.mjs's DB_BOUND_FNS). Re-exported here by name so existing
+// importers (`import { effectiveRiskTags } from './sensitive.mjs'`) keep working unchanged.
+export { taskWithAncestors, effectiveRiskTags } from './state.mjs';
 
 /** The default disposition when a sensitive action isn't named in policy — fail safe (stop). */
 const DEFAULT_DISPOSITION = 'block_and_ask';
@@ -62,36 +66,6 @@ export function parseNoteMarkers(note) {
     skipped: !!skip,
     skipReason: skip && skip[1] ? skip[1] : null,
   };
-}
-
-/**
- * Walk a task's ancestors via the EXPLICIT parent_id chain and return the task plus every ancestor
- * row. We deliberately do NOT infer ancestry from the id-prefix: ids like `F2-3-photo-tools-ui`
- * (a standalone UI epic) share the `F2-` prefix with the money epic `F2` without being its child,
- * so a prefix heuristic would wrongly tar pure-UI work with `payments`/`external` and block it.
- * parent_id is the source of truth for the hierarchy (see the seed/board.json).
- */
-export function taskWithAncestors(db, task) {
-  const all = db.prepare('SELECT id, parent_id, risk_tags FROM tasks').all();
-  const byId = new Map(all.map((t) => [t.id, t]));
-  const out = [];
-  const seen = new Set();
-  let cur = byId.get(task.id) ?? task;
-  while (cur && !seen.has(cur.id)) {
-    seen.add(cur.id);
-    out.push(cur);
-    cur = cur.parent_id ? byId.get(cur.parent_id) : null;
-  }
-  return out;
-}
-
-/** The union of a task's own risk_tags and all its ancestors' risk_tags (lowercased). */
-export function effectiveRiskTags(db, task) {
-  const tags = new Set();
-  for (const t of taskWithAncestors(db, task)) {
-    for (const tag of parseJsonArray(t.risk_tags)) tags.add(String(tag).toLowerCase());
-  }
-  return [...tags];
 }
 
 /**
