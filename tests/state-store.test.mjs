@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db.mjs';
-import { upsertTask, getTask } from '../state.mjs';
+import {
+  upsertTask, getTask, upsertSprint, taskWithAncestors, effectiveRiskTags, buildSprintFilter,
+  recentReaps, parkedTasks, claimTask, reapExpiredLeases,
+} from '../state.mjs';
 import { createStateStore } from '../state-store.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
@@ -117,4 +120,73 @@ test('createStateStore re-exposes the non-db passthroughs (parseJsonArray, nowIs
   assert.match(store.nowIso(), /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(typeof store.DEFAULT_TTL_MS, 'number');
   assert.equal(typeof store.DAY, 'number');
+});
+
+// --- Promoted read-queries (D2 bite #2, stage 2a): these used to live in sensitive.mjs /
+// router.mjs / watchdog.mjs. The store versions must match the bare state.mjs functions exactly.
+
+test('store.taskWithAncestors(task) deep-equals state.taskWithAncestors(db, task)', () => {
+  const db = freshDb([
+    { id: 'F2', type: 'epic', title: 'epic', status: 'in-progress', risk_tags: ['payments'] },
+    { id: 'F2-pay', type: 'story', title: 'paid', status: 'ready-for-impl', parent_id: 'F2', priority: 10 },
+  ]);
+  const store = createStateStore(db);
+  const task = { id: 'F2-pay', parent_id: 'F2', risk_tags: '[]' };
+  assert.deepEqual(store.taskWithAncestors(task), taskWithAncestors(db, task));
+  assert.equal(store.taskWithAncestors(task).length, 2);
+});
+
+test('store.effectiveRiskTags(task) inherits ancestor risk_tags, matching the bare function', () => {
+  const db = freshDb([
+    { id: 'F2', type: 'epic', title: 'epic', status: 'in-progress', risk_tags: ['payments', 'external'] },
+    { id: 'F2-pay', type: 'story', title: 'paid', status: 'ready-for-impl', parent_id: 'F2', priority: 10, risk_tags: [] },
+  ]);
+  const store = createStateStore(db);
+  const task = { id: 'F2-pay', parent_id: 'F2', risk_tags: '[]' };
+  const tags = store.effectiveRiskTags(task);
+  assert.deepEqual(new Set(tags), new Set(effectiveRiskTags(db, task)));
+  assert.ok(tags.includes('payments'));
+  assert.ok(tags.includes('external'));
+});
+
+test('store.buildSprintFilter() matches state.buildSprintFilter(db) (null when no active sprint, gating function once active)', () => {
+  const db = freshDb([{ id: 'S1', type: 'story', title: 's', status: 'ready-for-impl', priority: 10 }]);
+  const store = createStateStore(db);
+  assert.equal(store.buildSprintFilter(), null);
+  assert.equal(buildSprintFilter(db), null);
+
+  upsertSprint(db, { id: 'S-A', name: 'A', status: 'active' });
+  const f = store.buildSprintFilter();
+  assert.equal(typeof f, 'function');
+  assert.equal(f({ type: 'story', sprint_id: 'S-A' }), true);
+  assert.equal(f({ type: 'story', sprint_id: 'S-B' }), false);
+});
+
+test('store.recentReaps() matches state.recentReaps(db, ...) after a reap', () => {
+  const db = freshDb([impl()]);
+  const claim = store => store.claimTask({ taskId: 'F-impl', agent: 'agent-a', session: 's1', ttlMs: 1, now: T0 });
+  const store = createStateStore(db);
+  claim(store);
+  const later = new Date(Date.parse(T0) + 1000).toISOString();
+  reapExpiredLeases(db, { now: later });
+  const viaStore = store.recentReaps({ limit: 5 });
+  const viaBare = recentReaps(db, { limit: 5 });
+  assert.deepEqual(viaStore, viaBare);
+  assert.equal(viaStore.length, 1);
+  assert.equal(viaStore[0].task, 'F-impl');
+  assert.equal(viaStore[0].owner, 'agent-a');
+});
+
+test('store.parkedTasks() matches state.parkedTasks(db, ...) for skipped + snoozed blocked tasks', () => {
+  const db = freshDb([
+    { id: 'F-normal', title: 'normal', status: 'blocked', owner: 'agent-a', priority: 10, note: 'blocked' },
+    { id: 'F-skipped', title: 'skipped', status: 'blocked', owner: 'agent-a', priority: 20, note: 'blocked', skipped_at: T0, skip_reason: 'legal' },
+  ]);
+  const store = createStateStore(db);
+  const viaStore = store.parkedTasks({ now: Date.parse(T0) });
+  const viaBare = parkedTasks(db, { now: Date.parse(T0) });
+  assert.deepEqual(viaStore, viaBare);
+  assert.equal(viaStore.length, 1);
+  assert.equal(viaStore[0].task, 'F-skipped');
+  assert.equal(viaStore[0].skipped, true);
 });

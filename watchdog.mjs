@@ -9,8 +9,8 @@
  * The watchdog only reaps + reports; it never spawns work (that is the runner).
  */
 import { createStateStore } from './state-store.mjs';
+import { createEventStore } from './event-store.mjs';
 import { budgetStatus, loadPolicy } from './budget.mjs';
-import { readEvents } from './event-log.mjs';
 import { decide } from './router.mjs';
 import { readRuns } from './runlog.mjs';
 import { runnerStatus, quotaHold } from './runner.mjs';
@@ -87,21 +87,10 @@ export function agentHealth(db, { config, policy = loadPolicy(undefined, config)
   return out;
 }
 
-/** Recent expired-lease reaps (from the audit log). owner is recovered from the reap note. */
-export function recentReaps(db, { limit = 10 } = {}) {
-  const rows = db.prepare(
-    `SELECT h.ts AS ts, h.task_id AS task, h.note AS note, t.reap_count AS reapCount
-       FROM history h LEFT JOIN tasks t ON t.id = h.task_id
-      WHERE h.op = 'reap' ORDER BY h.seq DESC LIMIT ?`,
-  ).all(limit);
-  return rows.map((r) => ({
-    ts: r.ts,
-    task: r.task,
-    owner: r.note && r.note.startsWith('owner:') ? r.note.slice(6) : null,
-    reapCount: r.reapCount ?? null,
-    sessionAgeSec: null,
-  }));
-}
+// recentReaps moved to state.mjs (D2 bite #2, stage 2a — promoted read-queries; see
+// state-store.mjs's DB_BOUND_FNS). Re-exported here by name so existing importers
+// (`import { recentReaps } from './watchdog.mjs'`) keep working unchanged.
+export { recentReaps } from './state.mjs';
 
 /** Tasks reaped at or above the SLA threshold — likely a stuck agent. */
 export function slaBreaches(db, { config, policy = loadPolicy(undefined, config) } = {}) {
@@ -113,6 +102,7 @@ export function slaBreaches(db, { config, policy = loadPolicy(undefined, config)
 
 /** The dashboard `health` payload. `config` threads through to agentHealth's injected default. */
 export function healthStatus(db, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), intervalSec = 60, running = true, agents } = {}) {
+  const store = createStateStore(db);
   const b = budget ?? budgetStatus({ policy, now, config });
   return {
     watchdog: {
@@ -122,7 +112,7 @@ export function healthStatus(db, { config, policy = loadPolicy(undefined, config
       intervalSec,
     },
     agents: agentHealth(db, { policy, budget: b, now, config, ...(agents ? { agents } : {}) }),
-    reaps: recentReaps(db, { limit: 10 }),
+    reaps: store.recentReaps({ limit: 10 }),
     slaBreaches: slaBreaches(db, { policy, config }),
   };
 }
@@ -166,13 +156,14 @@ export function collectEscalations(db, { config, policy = loadPolicy(undefined, 
   }
 
   // Bridge: recent error/fatal events → escalation feed (auto-flows to Discord/Slack)
-  const recentErrors = readEvents(db, { limit: 10, level: 'error' })
+  const events = createEventStore(db);
+  const recentErrors = events.readEvents({ limit: 10, level: 'error' })
     .filter(e => Date.parse(e.ts) > now - 5 * 60_000);
   for (const e of recentErrors) {
     const detail = e.detail ? (typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail)) : '';
     push('critical', 'system_error', `${e.source}: ${e.event}`, detail || `System error in ${e.source}`);
   }
-  const recentFatals = readEvents(db, { limit: 5, level: 'fatal' })
+  const recentFatals = events.readEvents({ limit: 5, level: 'fatal' })
     .filter(e => Date.parse(e.ts) > now - 5 * 60_000);
   for (const e of recentFatals) {
     const detail = e.detail ? (typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail)) : '';
@@ -182,23 +173,10 @@ export function collectEscalations(db, { config, policy = loadPolicy(undefined, 
   return esc;
 }
 
-/**
- * Blocked tasks the founder has parked (snoozed or skipped) — kept OUT of collectEscalations
- * so they stop nagging, but still listed here so the dashboard's "Snoozed / Skipped" section
- * can show them with an Un-snooze/Un-skip + Approve control (reversible, never silently lost).
- */
-export function parkedTasks(db, { now = Date.now() } = {}) {
-  const store = createStateStore(db);
-  const out = [];
-  for (const t of store.listTasks().filter((t) => t.status === 'blocked')) {
-    const skipped = isSkipped(t);
-    const until = snoozedUntil(t);
-    const snoozed = !!(until && Date.parse(until) > now);
-    if (!skipped && !snoozed) continue;
-    out.push({ task: t.id, status: t.status, owner: t.owner, note: t.note, skipped, snoozedUntil: snoozed ? until : null });
-  }
-  return out;
-}
+// parkedTasks moved to state.mjs (D2 bite #2, stage 2a — promoted read-queries; see
+// state-store.mjs's DB_BOUND_FNS). Re-exported here by name so existing importers
+// (`import { parkedTasks } from './watchdog.mjs'`) keep working unchanged.
+export { parkedTasks } from './state.mjs';
 
 /** One watchdog cycle: reap expired leases, then report health + escalations. `agents` defaults to
  *  the injected `config`'s DomainPlugin roster (an explicit `agents` array still wins); `config`

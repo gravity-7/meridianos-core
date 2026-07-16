@@ -16,7 +16,7 @@ import { createStateStore } from './state-store.mjs';
 import { CLAIMABLE_STATUSES } from './machine.mjs';
 import { routeModel } from './model-router.mjs';
 import { resolveProvider, providerKeyPresent, modelForTier } from './providers.mjs';
-import { effectiveRiskTags, sensitiveBlock, isFounderApproved } from './sensitive.mjs';
+import { sensitiveBlock, isFounderApproved } from './sensitive.mjs';
 
 const leaseLive = (t, nowIso) => t.lease_expires && t.lease_expires > nowIso;
 const brief = (t) => ({ id: t.id, title: t.title, status: t.status, owner: t.owner, priority: t.priority, complexity: t.complexity, risk_tags: t.risk_tags });
@@ -71,27 +71,10 @@ export function buildCapabilityFilter(agent, policy) {
   };
 }
 
-/**
- * The scrum sprint gate. In scrum mode ONLY stories committed to an active sprint are workable
- * (epics/features are containers; unassigned stories are backlog). Returns null when the DB has
- * no active sprint — so the system degrades to status-based selection instead of starving, and
- * so non-scrum callers/tests are unaffected. Composable with the capability filter.
- */
-export function buildSprintFilter(db) {
-  let activeSprintIds;
-  try {
-    activeSprintIds = db.prepare("SELECT id FROM sprints WHERE status = 'active'").all().map((r) => r.id);
-  } catch {
-    return null; // no sprints table (e.g. a minimal test DB) → no scrum gating
-  }
-  if (!activeSprintIds.length) return null; // no active sprint → fail open (don't starve)
-  const active = new Set(activeSprintIds);
-  return (task) => {
-    if (task.type && task.type !== 'story') return false;   // only stories are directly workable
-    if (!task.sprint_id) return false;                       // unassigned = backlog, not committed
-    return active.has(task.sprint_id);                       // must be in an active sprint
-  };
-}
+// buildSprintFilter moved to state.mjs (D2 bite #2, stage 2a — promoted read-queries; see
+// state-store.mjs's DB_BOUND_FNS). Re-exported here by name so existing importers
+// (`import { buildSprintFilter } from './router.mjs'`) keep working unchanged.
+export { buildSprintFilter } from './state.mjs';
 
 /** Compose two task filters (either may be null). Returns null only when both are null. */
 export function composeFilters(a, b) {
@@ -133,7 +116,7 @@ export function decide(db, { config, agent, now = Date.now(), policy = loadPolic
   const excludeFilter = excludeTasks && excludeTasks.size
     ? (t) => !excludeTasks.has(t.id)
     : null;
-  const filter = composeFilters(composeFilters(buildCapabilityFilter(agent, policy), buildSprintFilter(db)), excludeFilter);
+  const filter = composeFilters(composeFilters(buildCapabilityFilter(agent, policy), store.buildSprintFilter()), excludeFilter);
   const t = store.nextEligibleTask({ agent, now: nowIso, claimable, filter });
   if (!t) return deny('no_eligible_task');
   const floor = work.priority_floor ?? 999;
@@ -143,7 +126,7 @@ export function decide(db, { config, agent, now = Date.now(), policy = loadPolic
   // risk_tag mapped to a block_and_ask sensitive action (spend_money / external_send / deploy /
   // schema_change). The planner also parks these as `blocked` + escalates; this is defense-in-depth
   // so a sensitive task is never handed to an agent even if the planner hasn't run yet.
-  const blockedAction = !isFounderApproved(t) && sensitiveBlock(policy, effectiveRiskTags(db, t), undefined, config);
+  const blockedAction = !isFounderApproved(t) && sensitiveBlock(policy, store.effectiveRiskTags(t), undefined, config);
   if (blockedAction) return deny(`sensitive_action:${blockedAction}`);
 
   const routed = routeModel(agent, t, policy, agentState, config.domain);
