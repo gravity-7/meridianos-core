@@ -435,7 +435,15 @@ export async function start({ domain } = {}) {
   db = openDb(undefined, config);
   const port = Number(process.env.AIOS_DASHBOARD_PORT) || 4317;
 
-  // Boot tree-hygiene recovery (do this FIRST): the PRIMARY working tree must only ever carry
+  // 1. Dashboard — bind the :4317 socket FIRST, before the (potentially slow, git-heavy) boot
+  // recovery below, so the control panel is reachable as early as possible on startup rather than
+  // after several git/gh subprocesses. Recovery + the first ticks still share this one event loop,
+  // so /healthz becomes responsive the moment the loop is free.
+  createDashboardServer(config).listen(port, '127.0.0.1', () => {
+    logger.log('dashboard', `http://localhost:${port}`);
+  });
+
+  // Boot tree-hygiene recovery (early, right after the dashboard binds): the PRIMARY working tree must only ever carry
   // generated board drift — all agent work happens in isolated worktrees. It has repeatedly been
   // found stranded on an agent's feature branch after a crash/prune/merge race on Windows, which
   // breaks the founder's manual git pull/merge. Auto-heal: if HEAD != main, discard the generated
@@ -461,11 +469,6 @@ export async function start({ domain } = {}) {
   // an orphan. Free every live lease now — the TTL reaper would otherwise sit on non-expired ones
   // for up to lease_ttl_min, wedging a max_parallel slot after every crash/restart.
   try { const r = releaseAllLeases(db); if (r.freed.length) logger.log('boot', `freed ${r.freed.length} orphaned lease(s): ${r.freed.join(', ')}`); } catch (e) { warn(db, 'scheduler', 'boot-lease-recovery-fail', { error: e.message }); }
-
-  // 1. Dashboard
-  createDashboardServer(config).listen(port, '127.0.0.1', () => {
-    logger.log('dashboard', `http://localhost:${port}`);
-  });
 
   // Opt-in metering/enforcement gateway (config.gateway drives launcher.mjs's injection). Off by
   // default — a tenant with no policy.gateway block is byte-identical to before.
