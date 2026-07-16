@@ -33,6 +33,14 @@ per run.
 catalog entry**, `costFor` returns **`null`** — never `$0`. Callers (budget breakdowns, the gateway
 ledger's cost fields) treat `null` as "cost unknown," counted separately, not as free.
 
+**The gateway ledger** (bite: ledger cost) now records this per event: `assembleGateway`
+(`gateway/index.mjs`) loads the catalog once and injects a `costFn` seam into `startGateway`
+(`gateway/server.mjs`) that calls `costFor(...).totalCost` for every metered call — `server.mjs`
+itself never imports `pricing.mjs` (the gateway only ever takes injected sinks/seams). Every
+`token-event`'s `costUsd` is that real dollar figure, or `null` when the model has no catalog entry
+— e.g. a heavy-cache-read call can log a huge token count but a near-zero real cost, which token
+counts alone can't show (this is what the DeepSeek dogfood surfaced).
+
 ---
 
 ## Where prices come from (the source of truth)

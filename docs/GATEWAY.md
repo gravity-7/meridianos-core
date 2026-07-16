@@ -65,7 +65,12 @@ server-side.
      input/cache + cumulative `message_delta` output; openai final usage chunk). Meters **once** at
      stream end/error. SSE `:` comment lines (keep-alives) are ignored.
 6. **Emit:** exactly one `token-event` per request (success *or* failure — metering is never silently
-   skipped; a forward/parse failure emits with null usage).
+   skipped; a forward/parse failure emits with null usage). The event's `costUsd` is computed via an
+   injected `costFn` seam (a pure `(provider, model, usage) => number|null`, default `() => null`) —
+   `server.mjs` never imports pricing itself; `assembleGateway` (`index.mjs`) builds the real one from
+   the pricing catalog (`pricing.mjs`'s `costFor`) once at assembly time. `costUsd` is `null` whenever
+   the catalog has no entry for that provider/model (never a fabricated `$0`), and a throwing `costFn`
+   degrades to `null` rather than breaking the request.
 
 ---
 

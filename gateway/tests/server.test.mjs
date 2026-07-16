@@ -859,3 +859,204 @@ test('e2e: a client-set thinking value survives untouched even on a thinking-ena
   assert.deepEqual(forwarded.thinking, { type: 'client-chosen' });
   assert.equal('reasoning_effort' in forwarded, false);
 });
+
+// ─── Cost (bite: ledger cost) ───────────────────────────────────────────────
+// `costFn` is a pricing SEAM injected into startGateway (never a pricing.mjs import in server.mjs
+// itself — see assembleGateway in index.mjs for the real wiring). Default is `() => null`, so a
+// gateway started without one stays byte-identical to before `costUsd` existed.
+
+test('default (no costFn): costUsd stays null — byte-identical to before cost existed', async () => {
+  // `gateway` (the shared fixture above) is started with no costFn at all.
+  const res = await fetch(`${gateway.url}/anthropic`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-anthropic', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+  const evt = events.at(-1);
+  assert.equal(evt.costUsd, null);
+});
+
+test('a costFn(): => null (explicit) also yields costUsd null', async () => {
+  const runsCost = createRunRegistry();
+  runsCost.registerRun('tok-cost-null', { tenant: 'pv', agent: 'claude', session: 'sCostNull', task: null, runId: null, provider: 'anthropic', model: 'claude-sonnet-5', tier: 'medium' });
+  const eventsCost = [];
+  const gatewayCost = await startGateway({
+    port: 0,
+    registry: {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      tenant: 'pv',
+      providers: { anthropic: PROVIDERS.anthropic },
+      routes: { anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' } },
+    },
+    runs: runsCost,
+    onTokenEvent: (evt) => eventsCost.push(evt),
+    resolveKey: (k) => (k ? KEYS[k] : undefined),
+    now: () => Date.now(),
+    costFn: () => null,
+  });
+  try {
+    const res = await fetch(`${gatewayCost.url}/anthropic`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': 'tok-cost-null', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(eventsCost.at(-1).costUsd, null);
+  } finally {
+    await gatewayCost.close();
+  }
+});
+
+test('a real costFn computes costUsd from the metered usage on the buffered path', async () => {
+  const runsCost = createRunRegistry();
+  runsCost.registerRun('tok-cost-buf', { tenant: 'pv', agent: 'claude', session: 'sCostBuf', task: null, runId: null, provider: 'anthropic', model: 'claude-sonnet-5', tier: 'medium' });
+  const eventsCost = [];
+  const seen = [];
+  const gatewayCost = await startGateway({
+    port: 0,
+    registry: {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      tenant: 'pv',
+      providers: { anthropic: PROVIDERS.anthropic },
+      routes: { anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' } },
+    },
+    runs: runsCost,
+    onTokenEvent: (evt) => eventsCost.push(evt),
+    resolveKey: (k) => (k ? KEYS[k] : undefined),
+    now: () => Date.now(),
+    // The /anthropic stub route returns usage: { input_tokens: 10, output_tokens: 20, ... }.
+    costFn: (provider, model, usage) => {
+      seen.push({ provider, model, usage });
+      return (usage.outputTokens ?? 0) * 0.001;
+    },
+  });
+  try {
+    const res = await fetch(`${gatewayCost.url}/anthropic`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': 'tok-cost-buf', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+    });
+    assert.equal(res.status, 200);
+    const evt = eventsCost.at(-1);
+    assert.equal(evt.outputTokens, 20);
+    assert.equal(evt.costUsd, 0.02); // 20 * 0.001
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].provider, 'anthropic');
+    assert.equal(seen[0].model, 'claude-sonnet-5');
+    assert.equal(seen[0].usage.inputTokens, 10);
+    assert.equal(seen[0].usage.outputTokens, 20);
+  } finally {
+    await gatewayCost.close();
+  }
+});
+
+test('a real costFn computes costUsd from the metered usage on the streaming path', async () => {
+  const runsCost = createRunRegistry();
+  runsCost.registerRun('tok-cost-stream', { tenant: 'pv', agent: 'claude', session: 'sCostStream', task: null, runId: null, provider: 'anthropic', model: 'claude-sonnet-5', tier: 'medium' });
+  const eventsCost = [];
+  const gatewayCost = await startGateway({
+    port: 0,
+    registry: {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      tenant: 'pv',
+      providers: { anthropic: PROVIDERS.anthropic },
+      routes: { anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' } },
+    },
+    runs: runsCost,
+    onTokenEvent: (evt) => eventsCost.push(evt),
+    resolveKey: (k) => (k ? KEYS[k] : undefined),
+    now: () => Date.now(),
+    // /anthropic-stream terminates with input=10, output=20 (see the stub's message_delta events).
+    costFn: (provider, model, usage) => (usage.outputTokens ?? 0) * 0.001,
+  });
+  try {
+    const res = await fetch(`${gatewayCost.url}/anthropic-stream`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': 'tok-cost-stream', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [], stream: true }),
+    });
+    assert.equal(res.status, 200);
+    // Drain the stream so the terminal usage is captured and the token-event emitted.
+    const reader = res.body.getReader();
+    while (!(await reader.read()).done) {}
+    const evt = eventsCost.at(-1);
+    assert.equal(evt.outputTokens, 20);
+    assert.equal(evt.costUsd, 0.02);
+  } finally {
+    await gatewayCost.close();
+  }
+});
+
+test('a throwing costFn does not break the request: costUsd is null but the event still emits and the response still succeeds', async () => {
+  const runsCost = createRunRegistry();
+  runsCost.registerRun('tok-cost-throw', { tenant: 'pv', agent: 'claude', session: 'sCostThrow', task: null, runId: null, provider: 'anthropic', model: 'claude-sonnet-5', tier: 'medium' });
+  const eventsCost = [];
+  const gatewayCost = await startGateway({
+    port: 0,
+    registry: {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      tenant: 'pv',
+      providers: { anthropic: PROVIDERS.anthropic },
+      routes: { anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' } },
+    },
+    runs: runsCost,
+    onTokenEvent: (evt) => eventsCost.push(evt),
+    resolveKey: (k) => (k ? KEYS[k] : undefined),
+    now: () => Date.now(),
+    costFn: () => { throw new Error('boom: bad pricing catalog'); },
+  });
+  try {
+    const res = await fetch(`${gatewayCost.url}/anthropic`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': 'tok-cost-throw', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(eventsCost.length, 1);
+    const evt = eventsCost.at(-1);
+    assert.equal(evt.costUsd, null);
+    assert.equal(evt.outputTokens, 20); // metering itself is unaffected by the costFn failure
+  } finally {
+    await gatewayCost.close();
+  }
+});
+
+test('a throwing costFn on a deny verdict still emits a null-cost event (costFn threading covers the deny path too)', async () => {
+  const runsCost = createRunRegistry();
+  runsCost.registerRun('tok-cost-deny', { tenant: 'pv', agent: 'claude', session: 'sCostDeny', task: null, runId: null, provider: 'anthropic', model: 'claude-sonnet-5', tier: 'medium' });
+  const eventsCost = [];
+  const gatewayCost = await startGateway({
+    port: 0,
+    registry: {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      tenant: 'pv',
+      providers: { anthropic: PROVIDERS.anthropic },
+      routes: { anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' } },
+    },
+    runs: runsCost,
+    onTokenEvent: (evt) => eventsCost.push(evt),
+    resolveKey: (k) => (k ? KEYS[k] : undefined),
+    now: () => Date.now(),
+    checkVerdict: () => ({ decision: 'deny', capWindow: '5h' }),
+    costFn: () => { throw new Error('boom'); },
+  });
+  try {
+    const res = await fetch(`${gatewayCost.url}/anthropic`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': 'tok-cost-deny', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }),
+    });
+    assert.equal(res.status, 429);
+    assert.equal(eventsCost.length, 1);
+    assert.equal(eventsCost.at(-1).costUsd, null);
+    assert.equal(eventsCost.at(-1).enforcementDecision, 'deny');
+  } finally {
+    await gatewayCost.close();
+  }
+});
