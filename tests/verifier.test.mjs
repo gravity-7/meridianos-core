@@ -48,8 +48,8 @@ test('verdictFrom: a skipped guardrail is neutral — it does not block the gate
   assert.equal(verdictFrom([{ name: 'tests', status: 'pending' }, skip], 'verifier_gated'), 'pending');
 });
 
-test('runChecks normalizes results; a throwing runner is a failed check', () => {
-  const checks = runChecks({}, { runners: [
+test('runChecks normalizes results; a throwing runner is a failed check', async () => {
+  const checks = await runChecks({}, { runners: [
     { name: 'tests', fn: () => ({ status: 'pass', detail: '61/61' }) },
     { name: 'guardrails', fn: () => { throw new Error('boom'); } },
   ] });
@@ -102,52 +102,52 @@ function guardrailsCheck(repoRoot, opts = {}) {
   return createCheckRunners(repoRoot, { config, ...opts }).find((r) => r.name === 'guardrails');
 }
 
-test('createCheckRunners guardrail runner: FIXTURE_DOMAIN\'s default (guardrailCheck:null) → skip (tenant declared no check)', () => {
+test('createCheckRunners guardrail runner: FIXTURE_DOMAIN\'s default (guardrailCheck:null) → skip (tenant declared no check)', async () => {
   // No override — this exercises the injected config's domain.guardrailCheck DEFAULT.
   // FIXTURE_DOMAIN declares no guardrail check at all (a real tenant, e.g. this repo's own
   // tools/aios/pv-domain.mjs, injects a real {cmd,script} instead — proven end-to-end for a real
   // script by the "used verbatim" test below).
   const runner = guardrailsCheck(config.repoRoot);
-  const res = runner.fn();
+  const res = await runner.fn();
   assert.deepEqual(res, { status: 'skip', detail: 'no guardrail check configured' });
 });
 
-test('createCheckRunners guardrail runner: an explicit {cmd,script} override runs it, pass/fail by exit code', () => {
+test('createCheckRunners guardrail runner: an explicit {cmd,script} override runs it, pass/fail by exit code', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aios-guardrail-default-parity-'));
   try {
     writeFileSync(join(dir, 'ok.mjs'), 'process.exit(0);\n');
     const runner = guardrailsCheck(dir, { guardrailCheck: { cmd: process.execPath, script: 'ok.mjs' } });
-    const res = runner.fn();
+    const res = await runner.fn();
     assert.ok(res.status === 'pass' || res.status === 'fail', `expected pass/fail, got ${res.status}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('createCheckRunners guardrail runner: guardrailCheck:null → skip (tenant declared no check)', () => {
+test('createCheckRunners guardrail runner: guardrailCheck:null → skip (tenant declared no check)', async () => {
   const runner = guardrailsCheck(config.repoRoot, { guardrailCheck: null });
-  const res = runner.fn();
+  const res = await runner.fn();
   assert.deepEqual(res, { status: 'skip', detail: 'no guardrail check configured' });
 });
 
-test('createCheckRunners guardrail runner: a script that does not exist on disk → skip (NOT pass)', () => {
+test('createCheckRunners guardrail runner: a script that does not exist on disk → skip (NOT pass)', async () => {
   const runner = guardrailsCheck(config.repoRoot, { guardrailCheck: { cmd: 'python', script: 'tools/guardrails/does-not-exist.py' } });
-  const res = runner.fn();
+  const res = await runner.fn();
   assert.equal(res.status, 'skip');
   assert.match(res.detail, /not found/);
 });
 
-test('createCheckRunners guardrail runner: a custom {cmd, script} from config is used verbatim', () => {
+test('createCheckRunners guardrail runner: a custom {cmd, script} from config is used verbatim', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aios-guardrail-'));
   try {
     writeFileSync(join(dir, 'pass.mjs'), 'process.exit(0);\n');
     writeFileSync(join(dir, 'fail.mjs'), 'process.stdout.write("nope"); process.exit(1);\n');
 
     const passRunner = guardrailsCheck(dir, { guardrailCheck: { cmd: process.execPath, script: 'pass.mjs' } });
-    assert.deepEqual(passRunner.fn(), { status: 'pass', detail: 'clean' });
+    assert.deepEqual(await passRunner.fn(), { status: 'pass', detail: 'clean' });
 
     const failRunner = guardrailsCheck(dir, { guardrailCheck: { cmd: process.execPath, script: 'fail.mjs' } });
-    const failRes = failRunner.fn();
+    const failRes = await failRunner.fn();
     assert.equal(failRes.status, 'fail');
     assert.match(failRes.detail, /nope/);
   } finally {
@@ -155,12 +155,12 @@ test('createCheckRunners guardrail runner: a custom {cmd, script} from config is
   }
 });
 
-test('createCheckRunners guardrail runner: an unavailable interpreter → skip, not the old silent fail-open pass', () => {
+test('createCheckRunners guardrail runner: an unavailable interpreter → skip, not the old silent fail-open pass', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aios-guardrail-spawnerr-'));
   try {
     writeFileSync(join(dir, 'script.py'), '# present on disk, but the interpreter below does not exist\n');
     const runner = guardrailsCheck(dir, { guardrailCheck: { cmd: 'this-interpreter-does-not-exist-xyz', script: 'script.py' } });
-    const res = runner.fn();
+    const res = await runner.fn();
     assert.equal(res.status, 'skip');
     assert.match(res.detail, /guardrail runner unavailable/);
   } finally {

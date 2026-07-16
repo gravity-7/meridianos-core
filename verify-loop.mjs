@@ -15,14 +15,13 @@ import { listTasks, transition as stateTransition } from './state.mjs';
 import { loadPolicy } from './budget.mjs';
 import { reviewerFor } from './config.mjs';
 import {
-  requiredChecks, verdictFrom, applyVerdict, createCheckRunners,
+  requiredChecks, verdictFrom, applyVerdict, createCheckRunners, runCmd,
 } from './verifier.mjs';
 import { spawnAndWait } from './launcher.mjs';
 import { createReviewWorktree } from './worktree.mjs';
 import { primaryTreeBranch } from './boot-guard.mjs';
 import { warn } from './event-log.mjs';
 import { classifyInbound } from './bus-guard.mjs';
-import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -176,17 +175,17 @@ export async function spawnPeerReview({ task, prNumber, reviewerAgent, model, co
  * must never wedge the queue) — the peer review remains a gate. `fetchPr` is injectable for tests.
  * Returns { safe, reason } — reason set only when a CRITICAL injection is detected.
  */
-export function scanPrForInjection(prNumber, { fetchPr } = {}) {
-  const fetch = fetchPr ?? ((n) => {
+export async function scanPrForInjection(prNumber, { fetchPr } = {}) {
+  const fetch = fetchPr ?? (async (n) => {
     try {
-      const meta = spawnSync('gh', ['pr', 'view', String(n), '--json', 'title,body'], { cwd: REPO_ROOT, timeout: 30_000, stdio: 'pipe', windowsHide: true, encoding: 'utf8' });
-      const diff = spawnSync('gh', ['pr', 'diff', String(n)], { cwd: REPO_ROOT, timeout: 30_000, stdio: 'pipe', windowsHide: true, encoding: 'utf8' });
+      const meta = await runCmd('gh', ['pr', 'view', String(n), '--json', 'title,body'], { cwd: REPO_ROOT, timeout: 30_000 });
+      const diff = await runCmd('gh', ['pr', 'diff', String(n)], { cwd: REPO_ROOT, timeout: 30_000, maxBuffer: 10 * 1024 * 1024 });
       let title = '', body = '';
       try { const j = JSON.parse(meta.stdout || '{}'); title = j.title || ''; body = j.body || ''; } catch { /* not JSON */ }
       return `${title}\n${body}\n${diff.stdout || ''}`;
     } catch { return null; }
   });
-  const content = fetch(prNumber);
+  const content = await fetch(prNumber);
   if (content == null) return { safe: true, reason: null }; // gh unavailable → fail open
   const { severity, findings } = classifyInbound(content);
   if (severity === 'critical') {
@@ -199,13 +198,8 @@ export function scanPrForInjection(prNumber, { fetchPr } = {}) {
 /**
  * Merge a PR via gh CLI. Returns {ok, detail}.
  */
-function mergePr(prNumber) {
-  const r = spawnSync('gh', ['pr', 'merge', String(prNumber), '--squash', '--delete-branch'], {
-    cwd: REPO_ROOT,
-    timeout: 60_000,
-    stdio: 'pipe',
-    windowsHide: true,
-  });
+async function mergePr(prNumber) {
+  const r = await runCmd('gh', ['pr', 'merge', String(prNumber), '--squash', '--delete-branch'], { cwd: REPO_ROOT, timeout: 60_000 });
   if (r.status === 0) {
     return { ok: true, detail: `PR #${prNumber} merged` };
   }
@@ -256,14 +250,14 @@ export async function verifyCycle(db, { policy, selectModel, dryRun = false, che
 
     if (!state) {
       // First time seeing this task/PR — run synchronous checks once.
-      const checks = checkRunners.map(runner => {
+      const checks = await Promise.all(checkRunners.map(async (runner) => {
         try {
-          const res = runner.fn({ task, agent: task.lease_owner || task.owner }) || {};
+          const res = (await runner.fn({ task, agent: task.lease_owner || task.owner })) || {};
           return { name: runner.name, status: res.status ?? 'pass', detail: res.detail ?? '' };
         } catch (e) {
           return { name: runner.name, status: 'fail', detail: String(e?.message || e) };
         }
-      });
+      }));
 
       state = { checks, pr: prNumber, peerStarted: false, peerPromise: null, peerResult: null };
       verifyState.set(task.id, state);
@@ -286,7 +280,7 @@ export async function verifyCycle(db, { policy, selectModel, dryRun = false, che
       if (!state.peerStarted && prNumber) {
         // Security gate (P1): scan the untrusted PR content for prompt-injection BEFORE any agent
         // reads it. A poisoned PR is bounced with a security note, never handed to the reviewer.
-        const scan = scanPrForInjection(prNumber, { fetchPr: opts.fetchPr });
+        const scan = await scanPrForInjection(prNumber, { fetchPr: opts.fetchPr });
         if (!scan.safe) {
           handleFailure(db, task, scan.reason, results, { dryRun });
           continue;
@@ -330,7 +324,7 @@ export async function verifyCycle(db, { policy, selectModel, dryRun = false, che
         // the primary tree's branch around the merge — if it goes from main → a feature branch, this
         // is the smoking gun. The boot guard heals the strand; this pinpoints WHERE it happened.
         const beforeMerge = primaryTreeBranch({ config });
-        const mergeResult = mergePr(prNumber);
+        const mergeResult = await mergePr(prNumber);
         const afterMerge = primaryTreeBranch({ config });
         if (beforeMerge === 'main' && afterMerge && afterMerge !== 'main') {
           warn(db, 'verifier', 'primary-tree-stranded-by-merge', { pr: prNumber, from: beforeMerge, to: afterMerge });
