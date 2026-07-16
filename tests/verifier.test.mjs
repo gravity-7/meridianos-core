@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from '../db.mjs';
 import { upsertTask, getTask } from '../state.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import {
   requiredChecks, verdictFrom, runChecks, verify, verifierStatus, applyVerdict, createCheckRunners,
 } from '../verifier.mjs';
@@ -18,6 +19,7 @@ function freshDb(seed = []) {
   for (const t of seed) upsertTask(db, t, { now: T0 });
   return db;
 }
+const freshStore = (seed = []) => createProjectStore({ db: freshDb(seed), config });
 const pass = (name) => ({ name, status: 'pass', detail: '' });
 
 test('requiredChecks adds peer-review only in peer mode', () => {
@@ -68,11 +70,11 @@ test('verify reports the verdict and mergeability', () => {
 });
 
 test('verifierStatus lists in-review tasks with per-mode verdicts', () => {
-  const db = freshDb([
+  const store = freshStore([
     { id: 'F-a', title: 'a', status: 'in-review', owner: 'claude', pr: '33', priority: 10 },
     { id: 'F-b', title: 'b', status: 'ready-for-impl', owner: 'claude', priority: 20 },
   ]);
-  const s = verifierStatus(db, { policy: { auto_merge: 'verifier_gated' }, checksByTask: { 'F-a': [pass('tests'), pass('guardrails')] }, config });
+  const s = verifierStatus(store, { policy: { auto_merge: 'verifier_gated' }, checksByTask: { 'F-a': [pass('tests'), pass('guardrails')] }, config });
   assert.equal(s.mode, 'verifier_gated');
   assert.equal(s.pending.length, 1);
   assert.equal(s.pending[0].task, 'F-a');
@@ -81,17 +83,19 @@ test('verifierStatus lists in-review tasks with per-mode verdicts', () => {
 
 test('applyVerdict auto-merges on pass under a gate, but not in founder_only', () => {
   const db = freshDb([{ id: 'F-a', title: 'a', status: 'in-review', owner: 'claude', priority: 10 }]);
-  const blocked = applyVerdict(db, { task: 'F-a', verdict: 'pass', mode: 'founder_only' });
+  const store = createProjectStore({ db, config });
+  const blocked = applyVerdict(store, { task: 'F-a', verdict: 'pass', mode: 'founder_only' });
   assert.equal(blocked.ok, false);
   assert.equal(getTask(db, 'F-a').status, 'in-review');
-  const merged = applyVerdict(db, { task: 'F-a', verdict: 'pass', mode: 'verifier_gated' });
+  const merged = applyVerdict(store, { task: 'F-a', verdict: 'pass', mode: 'verifier_gated' });
   assert.equal(merged.ok, true);
   assert.equal(getTask(db, 'F-a').status, 'done');
 });
 
 test('applyVerdict refuses a non-pass verdict', () => {
   const db = freshDb([{ id: 'F-a', title: 'a', status: 'in-review', owner: 'claude', priority: 10 }]);
-  const r = applyVerdict(db, { task: 'F-a', verdict: 'needs_changes', mode: 'verifier_gated' });
+  const store = createProjectStore({ db, config });
+  const r = applyVerdict(store, { task: 'F-a', verdict: 'needs_changes', mode: 'verifier_gated' });
   assert.equal(r.ok, false);
   assert.equal(getTask(db, 'F-a').status, 'in-review');
 });

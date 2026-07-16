@@ -16,6 +16,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db.mjs';
 import { seedTasks, getTask } from '../state.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import { buildBoardJson, buildBoardMd } from '../render.mjs';
 import { checkInvariants } from '../validate.mjs';
 import { plannerCycle } from '../planner.mjs';
@@ -106,7 +107,7 @@ test('governance: plannerCycle hard-stops a crypto-tagged story under Acme\'s ri
   {
     const db = openDb(':memory:', ACME);
     seedTasks(db, seedBoard);
-    plannerCycle(db, { policy, config: ACME });
+    plannerCycle(createProjectStore({ db, config: ACME }), { policy, config: ACME });
     const t = getTask(db, 'ACME-CRYPTO');
     assert.equal(t.status, 'blocked', 'Acme riskToAction maps crypto to a block_and_ask action');
     assert.match(t.note, /governance hold/);
@@ -119,7 +120,7 @@ test('governance: plannerCycle hard-stops a crypto-tagged story under Acme\'s ri
   {
     const db = openDb(':memory:', TENANT1);
     seedTasks(db, seedBoard);
-    plannerCycle(db, { policy, config: TENANT1 });
+    plannerCycle(createProjectStore({ db, config: TENANT1 }), { policy, config: TENANT1 });
     const t = getTask(db, 'ACME-CRYPTO');
     assert.equal(t.status, 'ready-for-impl', 'tenant #1 riskToAction does not know "crypto" -> no governance hold applies');
     db.close();
@@ -158,7 +159,7 @@ test('status: buildStatus keys `agents` and `queue[].routing` off the Acme roste
     { id: 'ACME-Q1', title: 'sensor calib', owner: 'dev', status: 'ready-for-impl', priority: 10, created_at: T, updated_at: T },
   ] });
   const acmePolicy = { agent_models: { dev: { default: 'acme-dev-model' }, qa: { default: 'acme-qa-model' }, lead: { default: 'acme-lead-model' } } };
-  const s = buildStatus({ db, config: ACME, policy: acmePolicy, now: Date.parse(T) });
+  const s = buildStatus({ store: createProjectStore({ db, config: ACME }), config: ACME, policy: acmePolicy, now: Date.parse(T) });
   assert.deepEqual(Object.keys(s.agents), ['dev', 'qa', 'lead'], 'agents keyed by the Acme roster, in roster order');
   assert.equal(s.agents.dev.model, 'acme-dev-model');
   assert.ok(!('claude' in s.agents) && !('antigravity' in s.agents), 'no PV agent identity leaks into a non-PV tenant');

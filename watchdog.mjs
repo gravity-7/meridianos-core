@@ -8,8 +8,6 @@
  * `escalations[]` feed. Pure over an injected `db` + budget, so the whole matrix is unit-tested.
  * The watchdog only reaps + reports; it never spawns work (that is the runner).
  */
-import { createStateStore } from './state-store.mjs';
-import { createEventStore } from './event-store.mjs';
 import { budgetStatus, loadPolicy } from './budget.mjs';
 import { decide } from './router.mjs';
 import { readRuns } from './runlog.mjs';
@@ -32,12 +30,11 @@ function sessionLimitBlock(agent, { config, runs, now = Date.now() } = {}) {
 /** Per-agent health for the dashboard `health.agents` map. `agents` defaults to the injected
  *  `config`'s DomainPlugin roster (an explicit `agents` array still wins). `config` also threads
  *  to router.decide for the governance-aware idle reason. */
-export function agentHealth(db, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents = undefined } = {}) {
-  const store = createStateStore(db);
+export function agentHealth(store, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents = undefined } = {}) {
   const agentList = agents ?? config.domain.agents;
   const nowIso = new Date(now).toISOString();
   const b = budget ?? budgetStatus({ policy, now, config });
-  const tasks = store.listTasks();
+  const tasks = store.state.listTasks();
   const ttlSec = (policy?.work?.lease_ttl_min ?? 30) * 60;
   const out = {};
   for (const agent of agentList) {
@@ -70,7 +67,7 @@ export function agentHealth(db, { config, policy = loadPolicy(undefined, config)
             if (rs.holdReason) {
               idleReason = rs.holdReason; // 'max_runs' | 'quiet_hours' | 'kill_switch' | 'budget_halt'
             } else {
-              const d = decide(db, { agent, now, policy, budget: b, config });
+              const d = decide(store, { agent, now, policy, budget: b, config });
               idleReason = d.mayClaim ? 'ready' : d.reason;
             }
           }
@@ -92,17 +89,16 @@ export function agentHealth(db, { config, policy = loadPolicy(undefined, config)
 // (`import { recentReaps } from './watchdog.mjs'`) keep working unchanged.
 export { recentReaps } from './state.mjs';
 
-/** Tasks reaped at or above the SLA threshold — likely a stuck agent. */
-export function slaBreaches(db, { config, policy = loadPolicy(undefined, config) } = {}) {
+/** Tasks reaped at or above the SLA threshold — likely a stuck agent. Body moved to
+ *  state.mjs (D2 bite #2, stage 2b) — reached here via store.state so the flipped watchdog never
+ *  touches a raw db. */
+export function slaBreaches(store, { config, policy = loadPolicy(undefined, config) } = {}) {
   const threshold = policy?.work?.reap_sla ?? REAP_SLA_DEFAULT;
-  return db.prepare(
-    'SELECT id AS task, reap_count AS reapCount, updated_at AS sinceTs FROM tasks WHERE reap_count >= ? ORDER BY reap_count DESC',
-  ).all(threshold).map((r) => ({ task: r.task, reapCount: r.reapCount, sinceTs: r.sinceTs }));
+  return store.state.slaBreaches(threshold);
 }
 
 /** The dashboard `health` payload. `config` threads through to agentHealth's injected default. */
-export function healthStatus(db, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), intervalSec = 60, running = true, agents } = {}) {
-  const store = createStateStore(db);
+export function healthStatus(store, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), intervalSec = 60, running = true, agents } = {}) {
   const b = budget ?? budgetStatus({ policy, now, config });
   return {
     watchdog: {
@@ -111,22 +107,21 @@ export function healthStatus(db, { config, policy = loadPolicy(undefined, config
       nextTickTs: new Date(now + intervalSec * 1000).toISOString(),
       intervalSec,
     },
-    agents: agentHealth(db, { policy, budget: b, now, config, ...(agents ? { agents } : {}) }),
-    reaps: store.recentReaps({ limit: 10 }),
-    slaBreaches: slaBreaches(db, { policy, config }),
+    agents: agentHealth(store, { policy, budget: b, now, config, ...(agents ? { agents } : {}) }),
+    reaps: store.state.recentReaps({ limit: 10 }),
+    slaBreaches: slaBreaches(store, { policy, config }),
   };
 }
 
 /** The dashboard `escalations[]` feed — cross-cutting "needs you" items, newest concerns first.
  *  `agents` defaults to the injected `config`'s DomainPlugin roster (an explicit `agents` array
  *  still wins). */
-export function collectEscalations(db, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents = undefined } = {}) {
-  const store = createStateStore(db);
+export function collectEscalations(store, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents = undefined } = {}) {
   const agentList = agents ?? config.domain.agents;
   const ts = new Date(now).toISOString();
   const b = budget ?? budgetStatus({ policy, now, config });
   const esc = [];
-  const allTasks = store.listTasks();
+  const allTasks = store.state.listTasks();
   const tasksById = new Map(allTasks.map((t) => [t.id, t]));
   const openTask = { label: 'Open task', endpoint: null, payload: null };
   // Task-linked escalations carry status/owner so the dashboard's "Open task" popup can render
@@ -142,7 +137,7 @@ export function collectEscalations(db, { config, policy = loadPolicy(undefined, 
     if (st === 'halt') push('critical', 'budget_halt', `${agent} budget exhausted`, `${agent} hit a hard cap — paused until the window rolls over or you raise the cap.`);
     else if (st === 'warn') push('warn', 'budget_warn', `${agent} budget at warn`, `${agent} crossed the warn threshold of a window cap.`);
   }
-  for (const s of slaBreaches(db, { policy, config })) {
+  for (const s of slaBreaches(store, { policy, config })) {
     push('warn', 'lease_reaped', `Task stalling: ${s.task}`, `Lease reaped ${s.reapCount}× — the agent may be stuck on this task.`, s.task, openTask);
   }
   // A skipped or still-snoozed blocked task is a founder decision already made (park it) — it
@@ -156,7 +151,7 @@ export function collectEscalations(db, { config, policy = loadPolicy(undefined, 
   }
 
   // Bridge: recent error/fatal events → escalation feed (auto-flows to Discord/Slack)
-  const events = createEventStore(db);
+  const events = store.events;
   const recentErrors = events.readEvents({ limit: 10, level: 'error' })
     .filter(e => Date.parse(e.ts) > now - 5 * 60_000);
   for (const e of recentErrors) {
@@ -181,12 +176,11 @@ export { parkedTasks } from './state.mjs';
 /** One watchdog cycle: reap expired leases, then report health + escalations. `agents` defaults to
  *  the injected `config`'s DomainPlugin roster (an explicit `agents` array still wins); `config`
  *  also threads to healthStatus/collectEscalations. */
-export function tick(db, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), intervalSec = 60, agents = undefined } = {}) {
-  const store = createStateStore(db);
+export function tick(store, { config, policy = loadPolicy(undefined, config), budget, now = Date.now(), intervalSec = 60, agents = undefined } = {}) {
   const agentList = agents ?? config.domain.agents;
   const b = budget ?? budgetStatus({ policy, now, config });
   const nowIso = new Date(now).toISOString();
-  const { reaped } = store.reapExpiredLeases({ now: nowIso });
+  const { reaped } = store.state.reapExpiredLeases({ now: nowIso });
 
   // Session-limit auto-reap: if an agent has a confirmed session-limit block, immediately
   // force-release any leases it holds — they will never be heartbeated and would just burn
@@ -197,18 +191,18 @@ export function tick(db, { config, policy = loadPolicy(undefined, config), budge
   for (const agent of agentList) {
     const sl = sessionLimitBlock(agent, { runs, config });
     if (!sl) continue;
-    const staleLeases = store.listTasks().filter(
+    const staleLeases = store.state.listTasks().filter(
       (t) => t.lease_owner === agent && t.lease_expires && t.lease_expires > nowIso,
     );
     for (const t of staleLeases) {
-      const r = store.forceReleaseLease({ taskId: t.id, agent, now: nowIso });
+      const r = store.state.forceReleaseLease({ taskId: t.id, agent, now: nowIso });
       if (r.ok) sessionReaped.push(t.id);
     }
   }
 
   return {
     reaped: [...reaped, ...sessionReaped],
-    health: healthStatus(db, { policy, budget: b, now, intervalSec, config }),
-    escalations: collectEscalations(db, { policy, budget: b, now, config }),
+    health: healthStatus(store, { policy, budget: b, now, intervalSec, config }),
+    escalations: collectEscalations(store, { policy, budget: b, now, config }),
   };
 }

@@ -32,10 +32,8 @@ import { openDb } from './db.mjs';
 import { loadPolicy } from './budget.mjs';
 import { executeRun, cadenceMs, runnerStatus } from './runner.mjs';
 import { tick } from './watchdog.mjs';
-import { render } from './render.mjs';
 import { launchAgent } from './launcher.mjs';
-import { createStateStore } from './state-store.mjs';
-import { createEventStore } from './event-store.mjs';
+import { createProjectStore } from './project-store.mjs';
 import { createDashboardServer } from './dashboard/server.mjs';
 import { verifyCycle } from './verify-loop.mjs';
 import { pushEscalations } from './escalation-push.mjs';
@@ -103,8 +101,9 @@ function loadMeta() {
   try { const b = JSON.parse(readFileSync(config.boardJson, 'utf8')); return { milestones: b.milestones, founder_actions: b.founder_actions }; } catch { return {}; }
 }
 
-let db;
-let events; // EventStore bound to the composition root's `db` (set alongside it in start())
+let db;    // raw handle — owned ONLY by the composition root (needed to close it on shutdown)
+let store; // ProjectStore built over `db`, threaded into every flipped entry point below
+let events; // = store.events (set alongside it in start())
 let tickCount = 0;
 const startedAt = Date.now();
 
@@ -117,7 +116,7 @@ const startedAt = Date.now();
  * function can be unit-tested without real sockets or a real DB.
  *
  * @param {object} deps
- * @param {object}   deps.db          SQLite handle
+ * @param {object}   deps.store       the composition root's ProjectStore
  * @param {object}   deps.logger      { log, error } — rotating logger or test double
  * @param {number}   deps.tickCount   current tick counter
  * @param {number}   deps.startedAt   daemon start timestamp (ms)
@@ -127,16 +126,16 @@ const startedAt = Date.now();
  * @param {Function} deps._pushEscalations escalation-push.pushEscalations
  * @param {Function} deps._verifyCycle    verify-loop.verifyCycle
  * @param {Function} deps._selectModel    router.selectModel
- * @param {Function} deps._render         render.render
+ * @param {Function} deps._render         (meta) => store.render(meta)
  * @param {Function} deps._loadMeta
  * @param {Function} deps._loadPolicy
- * @param {Function} deps._pruneEvents    event-store.pruneEvents (bound EventStore method)
- * @param {Function} deps._pruneHistory   state.pruneHistory
+ * @param {Function} deps._pruneEvents    store.events.pruneEvents
+ * @param {Function} deps._pruneHistory   store.state.pruneHistory
  * @param {object}   [deps.config]     the injected AiosConfig (defaults to the composition root's)
  */
 export async function runWatchdogTick(deps) {
   const {
-    db,
+    store,
     logger,
     tickCount,
     startedAt,
@@ -147,13 +146,13 @@ export async function runWatchdogTick(deps) {
     _pushEscalations = pushEscalations,
     _verifyCycle    = verifyCycle,
     _selectModel    = selectModel,
-    _render         = render,
+    _render         = (meta) => store.render(meta),
     _loadMeta       = loadMeta,
     _loadPolicy     = loadPolicy,
-    _pruneEvents    = createEventStore(db).pruneEvents,
-    _pruneHistory   = createStateStore(db).pruneHistory,
+    _pruneEvents    = store.events.pruneEvents,
+    _pruneHistory   = store.state.pruneHistory,
   } = deps;
-  const events = createEventStore(db);
+  const events = store.events;
 
   try {
     const policy = _loadPolicy(undefined, cfg);
@@ -163,7 +162,7 @@ export async function runWatchdogTick(deps) {
     // the rest of this cycle.
     let h;
     try {
-      h = _tick(db, { policy, config: cfg });
+      h = _tick(store, { policy, config: cfg });
       if (h.reaped?.length) logger.log('watchdog', `reaped: ${h.reaped.join(', ')}`);
 
       // Heartbeat every 10th tick (~10 min)
@@ -180,7 +179,7 @@ export async function runWatchdogTick(deps) {
     // Planner: auto-promote proposed → spec → designing. Isolated so a throw
     // here does not skip the escalation push or verify loop below.
     try {
-      const pc = _plannerCycle(db, { now: Date.now(), config: cfg });
+      const pc = _plannerCycle(store, { now: Date.now(), config: cfg });
       if (pc.promoted.length) {
         logger.log('planner', `promoted: ${pc.promoted.map(p => `${p.id} (${p.from}→${p.to})`).join(', ')}`);
         events.info('planner', 'promote', { promoted: pc.promoted });
@@ -244,7 +243,7 @@ export async function runWatchdogTick(deps) {
     // a throw here still lets the render below run.
     try {
       const modelSelector = (agent) => _selectModel(policy, agent, 'ok', null, cfg.domain);
-      const vr = await _verifyCycle(db, { policy, selectModel: modelSelector, dryRun, config: cfg });
+      const vr = await _verifyCycle(store, { policy, selectModel: modelSelector, dryRun, config: cfg });
       if (vr.merged.length) {
         logger.log('verifier', `merged: ${vr.merged.map(m => m.task).join(', ')}`);
         events.info('verifier', 'merge', { tasks: vr.merged.map(m => m.task) });
@@ -260,7 +259,7 @@ export async function runWatchdogTick(deps) {
     }
 
     // Re-render after state changes
-    try { _render(db, _loadMeta(), cfg); } catch (renderErr) {
+    try { _render(_loadMeta()); } catch (renderErr) {
       events.warn('scheduler', 'render-fail', { error: renderErr.message });
     }
   } catch (e) {
@@ -276,11 +275,11 @@ export async function runWatchdogTick(deps) {
  * function can be unit-tested without real spawns or a real DB.
  *
  * @param {object} deps
- * @param {object}   deps.db
+ * @param {object}   deps.store    the composition root's ProjectStore
  * @param {object}   deps.logger
  * @param {boolean}  deps.dryRun
  * @param {Function} deps._executeRun   runner.executeRun
- * @param {Function} deps._render       render.render
+ * @param {Function} deps._render       (meta) => store.render(meta)
  * @param {Function} deps._loadMeta
  * @param {Function} deps._loadPolicy
  * @param {Function} deps._launchAgent  launcher.launchAgent
@@ -288,26 +287,26 @@ export async function runWatchdogTick(deps) {
  */
 export async function runRunnerCycle(deps) {
   const {
-    db,
+    store,
     logger,
     dryRun,
     config: cfg   = config,
     _executeRun   = executeRun,
-    _render       = render,
+    _render       = (meta) => store.render(meta),
     _loadMeta     = loadMeta,
     _loadPolicy   = loadPolicy,
     _launchAgent  = launchAgent,
   } = deps;
-  const events = createEventStore(db);
+  const events = store.events;
 
   try {
     const policy  = _loadPolicy(undefined, cfg);
     const launcher = dryRun ? undefined : _launchAgent;
 
-    const result = await _executeRun({ db, policy, launch: launcher, config: cfg });
+    const result = await _executeRun({ store, policy, launch: launcher, config: cfg });
 
     // Re-render the board after any state changes
-    try { _render(db, _loadMeta(), cfg); } catch (renderErr) {
+    try { _render(_loadMeta()); } catch (renderErr) {
       events.warn('scheduler', 'render-fail', { error: renderErr.message });
     }
 
@@ -333,7 +332,7 @@ async function watchdogTick() {
   tickCount++;
   try {
     await runWatchdogTick({
-      db,
+      store,
       logger,
       tickCount,
       startedAt,
@@ -353,7 +352,7 @@ async function watchdogTick() {
 async function runCycle() {
   try {
     await runRunnerCycle({
-      db,
+      store,
       logger,
       dryRun: process.env.AIOS_DRY_RUN === '1',
       config,
@@ -436,7 +435,8 @@ export async function start({ domain } = {}) {
   } catch { /* best-effort */ }
 
   db = openDb(undefined, config);
-  events = createEventStore(db);
+  store = createProjectStore({ db, config });
+  events = store.events;
   const port = Number(process.env.AIOS_DASHBOARD_PORT) || 4317;
 
   // 1. Dashboard — bind the :4317 socket FIRST, before the (potentially slow, git-heavy) boot
@@ -472,7 +472,7 @@ export async function start({ domain } = {}) {
   // Boot lease recovery (RCA-4): any agent a previous daemon launched died with it, so its lease is
   // an orphan. Free every live lease now — the TTL reaper would otherwise sit on non-expired ones
   // for up to lease_ttl_min, wedging a max_parallel slot after every crash/restart.
-  try { const r = createStateStore(db).releaseAllLeases(); if (r.freed.length) logger.log('boot', `freed ${r.freed.length} orphaned lease(s): ${r.freed.join(', ')}`); } catch (e) { events.warn('scheduler', 'boot-lease-recovery-fail', { error: e.message }); }
+  try { const r = store.state.releaseAllLeases(); if (r.freed.length) logger.log('boot', `freed ${r.freed.length} orphaned lease(s): ${r.freed.join(', ')}`); } catch (e) { events.warn('scheduler', 'boot-lease-recovery-fail', { error: e.message }); }
 
   // Opt-in metering/enforcement gateway (config.gateway drives launcher.mjs's injection). Off by
   // default — a tenant with no policy.gateway block is byte-identical to before.

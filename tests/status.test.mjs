@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from '../db.mjs';
 import { seedTasks, claimTask } from '../state.mjs';
+import { createProjectStore } from '../project-store.mjs';
 import { buildStatus } from '../status.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
@@ -38,7 +39,8 @@ test('buildStatus reports the active lease, queue, budget, models and policy', (
     agent_models: { claude: { default: 'claude-opus-4-8' }, antigravity: { default: 'gemini-3-pro' } },
   };
 
-  const s = buildStatus({ db, now, policy, agentDirs: { claude: cdir, antigravity: [mkdtempSync(join(tmpdir(), 'st-ag-'))] }, config });
+  const store = createProjectStore({ db, config });
+  const s = buildStatus({ store, now, policy, agentDirs: { claude: cdir, antigravity: [mkdtempSync(join(tmpdir(), 'st-ag-'))] }, config });
 
   assert.equal(s.kill_switch, false);
   assert.equal(s.agents.claude.active.task, 'F1');

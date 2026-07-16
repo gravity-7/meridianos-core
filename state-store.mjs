@@ -25,6 +25,10 @@ const DB_BOUND_FNS = [
   'annotateTask', 'setGovernanceFlags', 'nextEligibleTask',
   // Promoted read-queries (D2 bite #2, stage 2a — formerly in sensitive/router/watchdog):
   'taskWithAncestors', 'effectiveRiskTags', 'buildSprintFilter', 'recentReaps', 'parkedTasks',
+  // New state-layer helpers (D2 bite #2, stage 2b — formerly ad-hoc SQL inline in planner.mjs /
+  // watchdog.mjs / verify-loop.mjs; see state.mjs's own "stage 2b" comment block):
+  'setTaskNote', 'setTaskSprint', 'getActiveSprint', 'completeSprint', 'countDoneAmong',
+  'lastTransitionInto', 'slaBreaches', 'getVerifyAttempts', 'bumpVerifyAttempts', 'clearVerifyAttempts',
 ];
 
 /** Build a StateStore bound to one `db` handle: `store.fn(args)` ≡ `state.fn(db, args)`. */

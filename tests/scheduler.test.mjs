@@ -32,11 +32,17 @@ function fakeLogger() {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: build a minimal stub DB (enough for event-log's .prepare().run())
+// Helper: build a minimal stub ProjectStore (enough for the composition root's
+// direct store.events.* logging calls inside runWatchdogTick/runRunnerCycle —
+// every test below overrides _pruneEvents/_pruneHistory/_render explicitly, so
+// the stub's state/render need not do anything real).
 // ---------------------------------------------------------------------------
-function stubDb() {
+function stubStore() {
   return {
-    prepare: () => ({ run: () => ({}), all: () => [], get: () => null }),
+    state: { pruneHistory: () => {} },
+    events: { info: () => {}, warn: () => {}, error: () => {}, pruneEvents: () => {} },
+    docs: {},
+    render: () => {},
   };
 }
 
@@ -47,7 +53,7 @@ function stubDb() {
 test('runWatchdogTick: a throw inside any subsystem is caught; loop keeps going', async () => {
   const { runWatchdogTick } = await import('../scheduler.mjs');
   const logger = fakeLogger();
-  const db = stubDb();
+  const store = stubStore();
 
   // _tick throws; everything else is a no-op stub
   const _tick = () => { throw new Error('simulated watchdog subsystem failure'); };
@@ -64,7 +70,7 @@ test('runWatchdogTick: a throw inside any subsystem is caught; loop keeps going'
   // Must not throw — tick body catches internally
   await assert.doesNotReject(
     runWatchdogTick({
-      db, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
+      store, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
       _tick, _plannerCycle, _pushEscalations, _verifyCycle,
       _selectModel, _render, _loadMeta, _loadPolicy, _pruneEvents, _pruneHistory,
     }),
@@ -78,7 +84,7 @@ test('runWatchdogTick: a throw inside any subsystem is caught; loop keeps going'
 test('runWatchdogTick: a throwing tick does not prevent subsequent ticks from running', async () => {
   const { runWatchdogTick } = await import('../scheduler.mjs');
   const logger = fakeLogger();
-  const db = stubDb();
+  const store = stubStore();
 
   let callCount = 0;
   const _tick = () => {
@@ -87,7 +93,7 @@ test('runWatchdogTick: a throwing tick does not prevent subsequent ticks from ru
     return { reaped: [], escalations: [] };
   };
   const stubs = {
-    db, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
+    store, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
     _tick,
     _plannerCycle:    () => ({ promoted: [] }),
     _pushEscalations: async () => ({ sent: 0 }),
@@ -117,7 +123,7 @@ test('runWatchdogTick: a throwing tick does not prevent subsequent ticks from ru
 test('runWatchdogTick: _tick throwing still lets _plannerCycle and _verifyCycle run, and escalation push no-ops', async () => {
   const { runWatchdogTick } = await import('../scheduler.mjs');
   const logger = fakeLogger();
-  const db = stubDb();
+  const store = stubStore();
 
   let plannerCalled = false;
   let verifyCalled = false;
@@ -130,7 +136,7 @@ test('runWatchdogTick: _tick throwing still lets _plannerCycle and _verifyCycle 
 
   await assert.doesNotReject(
     runWatchdogTick({
-      db, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
+      store, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
       _tick, _plannerCycle, _pushEscalations, _verifyCycle,
       _selectModel: () => 'stub', _render: () => {}, _loadMeta: () => ({}),
       _loadPolicy: () => ({ work: {}, schedule: {}, quiet_hours: { enabled: false } }),
@@ -149,7 +155,7 @@ test('runWatchdogTick: _tick throwing still lets _plannerCycle and _verifyCycle 
 test('runWatchdogTick: _plannerCycle throwing still lets _tick have run and _verifyCycle still run', async () => {
   const { runWatchdogTick } = await import('../scheduler.mjs');
   const logger = fakeLogger();
-  const db = stubDb();
+  const store = stubStore();
 
   let tickCalled = false;
   let verifyCalled = false;
@@ -161,7 +167,7 @@ test('runWatchdogTick: _plannerCycle throwing still lets _tick have run and _ver
 
   await assert.doesNotReject(
     runWatchdogTick({
-      db, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
+      store, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
       _tick, _plannerCycle, _pushEscalations, _verifyCycle,
       _selectModel: () => 'stub', _render: () => {}, _loadMeta: () => ({}),
       _loadPolicy: () => ({ work: {}, schedule: {}, quiet_hours: { enabled: false } }),
@@ -179,7 +185,7 @@ test('runWatchdogTick: _plannerCycle throwing still lets _tick have run and _ver
 test('runWatchdogTick: _verifyCycle throwing still lets earlier subsystems have run and resolves normally', async () => {
   const { runWatchdogTick } = await import('../scheduler.mjs');
   const logger = fakeLogger();
-  const db = stubDb();
+  const store = stubStore();
 
   let tickCalled = false;
   let plannerCalled = false;
@@ -191,7 +197,7 @@ test('runWatchdogTick: _verifyCycle throwing still lets earlier subsystems have 
 
   await assert.doesNotReject(
     runWatchdogTick({
-      db, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
+      store, logger, tickCount: 1, startedAt: Date.now(), dryRun: true,
       _tick, _plannerCycle, _pushEscalations, _verifyCycle,
       _selectModel: () => 'stub', _render: () => {}, _loadMeta: () => ({}),
       _loadPolicy: () => ({ work: {}, schedule: {}, quiet_hours: { enabled: false } }),
@@ -213,13 +219,13 @@ test('runWatchdogTick: _verifyCycle throwing still lets earlier subsystems have 
 test('runRunnerCycle: a throw inside executeRun is caught; no re-throw', async () => {
   const { runRunnerCycle } = await import('../scheduler.mjs');
   const logger = fakeLogger();
-  const db = stubDb();
+  const store = stubStore();
 
   const _executeRun = async () => { throw new Error('simulated runner failure'); };
 
   await assert.doesNotReject(
     runRunnerCycle({
-      db, logger, dryRun: true,
+      store, logger, dryRun: true,
       _executeRun,
       _render:     () => {},
       _loadMeta:   () => ({}),
@@ -238,7 +244,7 @@ test('runRunnerCycle: a throw inside executeRun is caught; no re-throw', async (
 test('runRunnerCycle: logs fired runs when executeRun succeeds', async () => {
   const { runRunnerCycle } = await import('../scheduler.mjs');
   const logger = fakeLogger();
-  const db = stubDb();
+  const store = stubStore();
 
   const _executeRun = async () => ({
     fired: true,
@@ -246,7 +252,7 @@ test('runRunnerCycle: logs fired runs when executeRun succeeds', async () => {
   });
 
   await runRunnerCycle({
-    db, logger, dryRun: false,
+    store, logger, dryRun: false,
     _executeRun,
     _render:      () => {},
     _loadMeta:    () => ({}),
