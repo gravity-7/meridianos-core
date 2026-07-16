@@ -193,3 +193,59 @@ test('makeCheckVerdict: scopes by ctx.agent (a different agent with no events ge
   const checkVerdict = makeCheckVerdict({ ledger, policy, now: () => NOW });
   assert.deepEqual(checkVerdict({ tenant: 'pv', agent: 'other' }), { decision: 'allow', capWindow: null });
 });
+
+// ─── cost-based caps (opt-in, additive to token caps) ───────────────────────
+
+test('cost cap: halt once summed cost_usd is at/over per_5h_cost_usd (token cap unused)', () => {
+  const ledger = openLedger(':memory:');
+  appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 10, costUsd: 0.6 }));
+  const policy = policyWith({ per_5h_cost_usd: 0.5, per_week_cost_usd: 5 });
+  const v = agentBudgetVerdict(ledger, { agent: 'claude', now: NOW, policy });
+  assert.equal(v.state, 'halt');
+  assert.deepEqual(toEnforcementDecision(v), { decision: 'deny', capWindow: '5h' });
+});
+
+test('cost cap: ok while cost is under the cap', () => {
+  const ledger = openLedger(':memory:');
+  appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 10, costUsd: 0.1 }));
+  const policy = policyWith({ per_5h_cost_usd: 0.5, per_week_cost_usd: 5 });
+  const v = agentBudgetVerdict(ledger, { agent: 'claude', now: NOW, policy });
+  assert.equal(v.state, 'ok');
+  assert.deepEqual(toEnforcementDecision(v), { decision: 'allow', capWindow: null });
+});
+
+test('cost cap: never denies on UNKNOWN cost — cache-heavy near-free work is not blocked', () => {
+  // The over-penalization case cost caps exist to fix: huge token totals whose cost is null/unknown.
+  const ledger = openLedger(':memory:');
+  appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 500_000, costUsd: null }));
+  const policy = policyWith({ per_5h_cost_usd: 0.5, per_week_cost_usd: 5 }); // ONLY cost caps, no token cap
+  const v = agentBudgetVerdict(ledger, { agent: 'claude', now: NOW, policy });
+  assert.equal(v.state, 'ok'); // unknown cost sums to 0 → under cap → allowed
+  assert.deepEqual(toEnforcementDecision(v), { decision: 'allow', capWindow: null });
+});
+
+test('token + cost caps combine: token OK but cost over → deny (cost cap halts independently)', () => {
+  const ledger = openLedger(':memory:');
+  appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 100, costUsd: 2 }));
+  const policy = policyWith({ per_5h_tokens: 100_000, per_week_tokens: 500_000, per_5h_cost_usd: 1, per_week_cost_usd: 10 });
+  const v = agentBudgetVerdict(ledger, { agent: 'claude', now: NOW, policy });
+  assert.equal(v.state, 'halt');
+  assert.deepEqual(toEnforcementDecision(v), { decision: 'deny', capWindow: '5h' });
+});
+
+test('token + cost caps combine: cost OK but tokens over → still deny (token cap unchanged)', () => {
+  const ledger = openLedger(':memory:');
+  appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 1000, costUsd: 0.01 }));
+  const policy = policyWith({ per_5h_tokens: 1000, per_week_tokens: 5000, per_5h_cost_usd: 100, per_week_cost_usd: 500 });
+  const v = agentBudgetVerdict(ledger, { agent: 'claude', now: NOW, policy });
+  assert.equal(v.state, 'halt');
+  assert.deepEqual(toEnforcementDecision(v), { decision: 'deny', capWindow: '5h' });
+});
+
+test('no cost caps set → verdict is byte-identical to the token-only path (backward compat)', () => {
+  const ledger = openLedger(':memory:');
+  appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 850, costUsd: 999 }));
+  const policy = policyWith({ per_5h_tokens: 1000, per_week_tokens: 5000 }); // no cost caps
+  const v = agentBudgetVerdict(ledger, { agent: 'claude', now: NOW, policy });
+  assert.equal(v.state, 'warn'); // 850/1000 = 85% ≥ warn_pct 80 — cost (999) ignored, no cost cap
+});
