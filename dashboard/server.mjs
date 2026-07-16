@@ -149,6 +149,14 @@ export function createDashboardServer(config) {
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
+      // Cheap liveness probe: touches NO DB, filesystem, git, or transcript scan, so it answers
+      // instantly whenever the event loop is free — and, crucially, times out when the loop is
+      // BLOCKED (e.g. a synchronous git/gh spawnSync in a tick). That makes it a true wedge signal
+      // an external watchdog can poll to restart a daemon that is "listening but unresponsive"
+      // (the failure mode that only a process-EXIT restart, not this, would otherwise miss).
+      if (req.method === 'GET' && url.pathname === '/healthz') {
+        return send(res, 200, JSON.stringify({ ok: true, ts: Date.now() }));
+      }
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         const html = readFileSync(INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
         return send(res, 200, html, 'text/html; charset=utf-8');
