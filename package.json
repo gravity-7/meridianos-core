@@ -1,6 +1,6 @@
 {
   "name": "@gravity-7/meridianos-core",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": false,
   "type": "module",
   "description": "MeridianOS — provider/harness-agnostic autonomous agent-orchestration core. Tenant behavior injected via a DomainPlugin.",
