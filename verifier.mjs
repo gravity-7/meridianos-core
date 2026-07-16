@@ -20,6 +20,26 @@ import * as childProcess from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
+/**
+ * Run a subprocess WITHOUT blocking the event loop. The daemon's dashboard (:4317) and every tick
+ * share ONE thread, so a synchronous `spawnSync` here froze the whole daemon for the command's entire
+ * timeout (up to 60s) — the "listening but unresponsive" wedge. `execFile` is async, so the loop stays
+ * free while `gh`/git runs. Returns only the fields the callers below read from spawnSync's result:
+ * never rejects — a non-zero exit is a normal result (numeric `status`); a spawn failure (ENOENT, etc.)
+ * sets `error` with `status: null`, exactly as spawnSync did. `_execFile` is injectable for tests.
+ */
+export function runCmd(cmd, args, opts = {}, { _execFile = childProcess.execFile } = {}) {
+  return new Promise((resolve) => {
+    _execFile(cmd, args, { windowsHide: true, ...opts }, (error, stdout, stderr) => {
+      if (error && typeof error.code !== 'number') {
+        resolve({ status: null, stdout: stdout ?? '', stderr: stderr ?? '', error });     // spawn failure
+      } else {
+        resolve({ status: error ? error.code : 0, stdout: stdout ?? '', stderr: stderr ?? '', error: null });
+      }
+    });
+  });
+}
+
 export const VERDICTS = ['pending', 'pass', 'fail', 'needs_changes'];
 export const MODES = ['founder_only', 'peer_agent_review', 'verifier_gated'];
 
@@ -40,16 +60,18 @@ export function verdictFrom(checks, mode) {
   return mode === 'founder_only' ? 'pending' : 'pass';
 }
 
-/** Run injectable check functions → normalized check results. A throwing runner ⇒ a failed check. */
-export function runChecks(ctx, { runners = [] } = {}) {
-  return runners.map((r) => {
+/** Run injectable check functions → normalized check results. A throwing runner ⇒ a failed check.
+ *  `await` transparently handles both async runners (the real gh/guardrail checks) and the sync
+ *  mock runners tests inject. */
+export async function runChecks(ctx, { runners = [] } = {}) {
+  return Promise.all(runners.map(async (r) => {
     try {
-      const res = r.fn(ctx) || {};
+      const res = (await r.fn(ctx)) || {};
       return { name: r.name, status: res.status ?? 'pass', detail: res.detail ?? '' };
     } catch (e) {
       return { name: r.name, status: 'fail', detail: String((e && e.message) || e) };
     }
-  });
+  }));
 }
 
 /** Evaluate one submission → { verdict, mergeable, checks, ... }. */
@@ -125,14 +147,13 @@ export function createCheckRunners(repoRoot, opts = {}) {
   // be a `??` fallback (that would silently turn an explicit null back into the default). Mirrors
   // default-param semantics (which only apply on `undefined`) via an explicit presence check.
   const check = 'guardrailCheck' in opts ? guardrailCheck : config.domain.guardrailCheck;
-  const { spawnSync } = childProcess;
   return [
     {
       name: 'tests',
-      fn: (ctx) => {
+      fn: async (ctx) => {
         const pr = ctx?.task?.pr;
         if (!pr) return { status: 'fail', detail: 'no PR recorded — agent must open a PR and record it (cli transition --pr <n>)' };
-        const r = spawnSync('gh', ['pr', 'checks', String(pr), '--json', 'name,state,bucket'], { cwd: repoRoot, timeout: 60_000, stdio: 'pipe', windowsHide: true });
+        const r = await runCmd('gh', ['pr', 'checks', String(pr), '--json', 'name,state,bucket'], { cwd: repoRoot, timeout: 60_000 });
         // gh exits non-zero when checks are failing/pending OR when there are none — parse to disambiguate.
         let buckets = [];
         try { buckets = JSON.parse(r.stdout?.toString() || '[]'); } catch { /* not JSON */ }
@@ -148,12 +169,12 @@ export function createCheckRunners(repoRoot, opts = {}) {
     },
     {
       name: 'guardrails',
-      fn: () => {
+      fn: async () => {
         if (check == null) return { status: 'skip', detail: 'no guardrail check configured' };
         if (!existsSync(join(repoRoot, check.script))) {
           return { status: 'skip', detail: 'guardrail script not found — inapplicable' };
         }
-        const r = spawnSync(check.cmd, [check.script], { cwd: repoRoot, timeout: 60_000, stdio: 'pipe', windowsHide: true });
+        const r = await runCmd(check.cmd, [check.script], { cwd: repoRoot, timeout: 60_000 });
         if (r.error) return { status: 'skip', detail: `guardrail runner unavailable (${r.error.code})` };
         return { status: r.status === 0 ? 'pass' : 'fail', detail: r.status === 0 ? 'clean' : (r.stdout?.toString().slice(-300) || `exit ${r.status}`) };
       },

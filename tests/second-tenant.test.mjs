@@ -137,11 +137,11 @@ test('routing: reviewerFor picks from the Acme roster when the Acme config is ac
 
 // ─── 5. Guardrail runner: an honest `skip`, not a fail-open `pass`, when Acme declares none ────
 
-test('guardrails: createCheckRunners honors Acme\'s guardrailCheck:null as an honest skip, not a silent pass', () => {
+test('guardrails: createCheckRunners honors Acme\'s guardrailCheck:null as an honest skip, not a silent pass', async () => {
   const runners = createCheckRunners(ACME.repoRoot, { config: ACME });
   const guardrailRunner = runners.find((r) => r.name === 'guardrails');
   assert.ok(guardrailRunner, 'a guardrails runner is always present');
-  const result = guardrailRunner.fn({});
+  const result = await guardrailRunner.fn({});
   assert.equal(result.status, 'skip', 'Acme declared no guardrail check -> inapplicable, not a fail-open pass');
 });
 
