@@ -79,6 +79,21 @@ test('createAios({domain: FIXTURE_DOMAIN}).config matches a plain resolvePaths({
   });
 });
 
+test('AIOS_WORKTREE_ROOT overrides worktreeRoot (multi-tenant isolation) without touching other paths', () => {
+  const isolated = join(EXPECTED_REPO_ROOT, '..', '.aios-worktrees-tenantX');
+  withEnv({ AIOS_ROOT: undefined, AIOS_DB: undefined, AIOS_WORKTREE_ROOT: isolated }, () => {
+    const p = resolvePaths({ domain: FIXTURE_DOMAIN });
+    assert.equal(p.worktreeRoot, isolated, 'worktreeRoot honors AIOS_WORKTREE_ROOT');
+    // every OTHER path is unchanged — the override is scoped to the worktree root only
+    assert.equal(p.boardJson, join(EXPECTED_REPO_ROOT, '.ai', 'state', 'board.json'));
+    assert.equal(p.policyPath, join(EXPECTED_REPO_ROOT, '.ai', 'policy.yaml'));
+  });
+  // unset ⇒ back to the default sibling derivation (byte-identical to before)
+  withEnv({ AIOS_ROOT: undefined, AIOS_DB: undefined, AIOS_WORKTREE_ROOT: undefined }, () => {
+    assert.equal(resolvePaths({ domain: FIXTURE_DOMAIN }).worktreeRoot, join(EXPECTED_REPO_ROOT, '..', '.aios-worktrees'));
+  });
+});
+
 test('AIOS_ROOT redirects every derived path under the new root', () => {
   const tmpRoot = join(EXPECTED_REPO_ROOT, '.tmp-aios-root-test');
   withEnv({ AIOS_ROOT: tmpRoot, AIOS_DB: undefined }, () => {

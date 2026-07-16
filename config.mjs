@@ -143,8 +143,12 @@ export function resolvePaths({ root, domain } = {}) {
     featuresDir: join(repoRoot, '.ai', 'features'),
     secretFile: join(repoRoot, '.ai', 'secrets', 'escalation-webhook'),
     // Sibling of the repo root, deliberately OUTSIDE it — so the main tree's `git status` never
-    // sees agent worktrees (see worktree.mjs).
-    worktreeRoot: join(repoRoot, '..', '.aios-worktrees'),
+    // sees agent worktrees (see worktree.mjs). `$AIOS_WORKTREE_ROOT` overrides it so MULTIPLE
+    // tenants under the same parent dir don't collide on one shared `.aios-worktrees` — the boot
+    // `pruneAllWorktrees()` sweeps everything under this path, so two tenants sharing it would wipe
+    // each other's live agent worktrees. Each tenant sets its own isolated root (default unchanged
+    // for single-tenant/PV — byte-identical).
+    worktreeRoot: process.env.AIOS_WORKTREE_ROOT || join(repoRoot, '..', '.aios-worktrees'),
     pricingPath: join(repoRoot, 'tools', 'aios', 'pricing.json'),
     domain: resolvedDomain,
   };
