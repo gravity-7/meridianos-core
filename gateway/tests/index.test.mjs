@@ -12,6 +12,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { assembleGateway, refreshRegistry } from '../index.mjs';
 import { listEvents, queryWindow } from '../ledger.mjs';
 
@@ -190,4 +193,132 @@ test('live registry swap: refreshRegistry applies a newer envelope and the NEXT 
   assert.equal(resAfter.status, 200);
   const bodyAfter = await resAfter.json();
   assert.match(bodyAfter.id, /^routeB-/);
+});
+
+// ─── Cost (bite: ledger cost) ───────────────────────────────────────────────
+// Proves assembleGateway wires a REAL costFn end-to-end: it loads the pricing catalog from
+// `config.pricingPath` once and closes over it, so a call against a priced model gets a real
+// `costUsd` on its ledger event, and a call against an unpriced model gets null (never fabricated).
+// Isolated in its own before/after + stub upstream so it doesn't interfere with (or depend on
+// ordering of) the shared-`assembled` suite above.
+
+let stubCost;
+let stubCostUrl;
+let assembledCost;
+let tmpDir;
+let pricingPath;
+
+before(async () => {
+  stubCost = http.createServer(async (req, res) => {
+    for await (const _c of req) { /* drain the request body */ }
+    const payload = Buffer.from(JSON.stringify({
+      id: 'cost-1',
+      usage: { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 },
+    }));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(payload);
+  });
+  await new Promise((resolve) => stubCost.listen(0, '127.0.0.1', resolve));
+  stubCostUrl = `http://127.0.0.1:${stubCost.address().port}`;
+
+  process.env.TEST_COST_DEEPSEEK_KEY = 'sk-deepseek-cost-test';
+
+  tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cost-'));
+  pricingPath = join(tmpDir, 'pricing.json');
+  // $2/M input, $10/M output for the priced model; the unpriced model is deliberately absent.
+  writeFileSync(pricingPath, JSON.stringify({
+    deepseek: { 'deepseek-priced': { inputPerM: 2, outputPerM: 10 } },
+  }));
+
+  const policy = {
+    providers: { deepseek: { baseUrl: stubCostUrl, keyEnv: 'TEST_COST_DEEPSEEK_KEY' } },
+  };
+  assembledCost = await assembleGateway({
+    config: { pricingPath },
+    policy,
+    tenant: 'pv',
+    ledgerPath: ':memory:',
+    now: Date.now(),
+  });
+
+  assembledCost.runs.registerRun('tok-priced', {
+    tenant: 'pv', agent: 'costagent', session: 's-priced', task: null, runId: null,
+    provider: 'deepseek', model: 'deepseek-priced', tier: 'medium',
+  });
+  assembledCost.runs.registerRun('tok-unpriced', {
+    tenant: 'pv', agent: 'costagent', session: 's-unpriced', task: null, runId: null,
+    provider: 'deepseek', model: 'deepseek-unpriced', tier: 'medium',
+  });
+});
+
+after(async () => {
+  await assembledCost.close();
+  await new Promise((resolve) => stubCost.close(resolve));
+  delete process.env.TEST_COST_DEEPSEEK_KEY;
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('cost end-to-end: a call against a priced model gets a real costUsd computed from the catalog', async () => {
+  const res = await fetch(`${assembledCost.url}/chat`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-priced', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek-priced', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+
+  const events = listEvents(assembledCost.ledger, { tenant: 'pv', agent: 'costagent' });
+  const evt = events.find((e) => e.session === 's-priced');
+  assert.equal(evt.inputTokens, 1_000_000);
+  assert.equal(evt.outputTokens, 1_000_000);
+  // 1M in * $2/M + 1M out * $10/M = $12.
+  assert.equal(evt.costUsd, 12);
+});
+
+test('cost end-to-end: a call against a model absent from the catalog gets costUsd: null, never fabricated', async () => {
+  const res = await fetch(`${assembledCost.url}/chat`, {
+    method: 'POST',
+    headers: { 'x-gateway-token': 'tok-unpriced', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek-unpriced', messages: [] }),
+  });
+  assert.equal(res.status, 200);
+
+  const events = listEvents(assembledCost.ledger, { tenant: 'pv', agent: 'costagent' });
+  const evt = events.find((e) => e.session === 's-unpriced');
+  assert.equal(evt.costUsd, null);
+});
+
+test('assembleGateway with no config at all still assembles fine and yields costUsd: null (no crash on a missing pricing path)', async () => {
+  const stubNoConfig = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'nc-1', usage: { prompt_tokens: 5, completion_tokens: 5 } }));
+  });
+  await new Promise((resolve) => stubNoConfig.listen(0, '127.0.0.1', resolve));
+  const noConfigUrl = `http://127.0.0.1:${stubNoConfig.address().port}`;
+  process.env.TEST_NOCONFIG_KEY = 'sk-noconfig-test';
+
+  const assembledNoConfig = await assembleGateway({
+    // NO `config` passed at all — matches the shared-`assembled` fixture above.
+    policy: { providers: { deepseek: { baseUrl: noConfigUrl, keyEnv: 'TEST_NOCONFIG_KEY' } } },
+    tenant: 'pv',
+    ledgerPath: ':memory:',
+    now: Date.now(),
+  });
+  try {
+    assembledNoConfig.runs.registerRun('tok-nc', {
+      tenant: 'pv', agent: 'ncagent', session: 's-nc', task: null, runId: null,
+      provider: 'deepseek', model: 'deepseek-chat', tier: 'medium',
+    });
+    const res = await fetch(`${assembledNoConfig.url}/chat`, {
+      method: 'POST',
+      headers: { 'x-gateway-token': 'tok-nc', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-chat', messages: [] }),
+    });
+    assert.equal(res.status, 200);
+    const events = listEvents(assembledNoConfig.ledger, { tenant: 'pv', agent: 'ncagent' });
+    assert.equal(events[0].costUsd, null);
+  } finally {
+    await assembledNoConfig.close();
+    await new Promise((resolve) => stubNoConfig.close(resolve));
+    delete process.env.TEST_NOCONFIG_KEY;
+  }
 });
