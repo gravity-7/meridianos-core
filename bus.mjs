@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { parseJsonArray } from './state.mjs';
 import { STATES } from './machine.mjs';
 import { scanInbound } from './bus-guard.mjs';
+import { createInboxSource } from './inbox-source.mjs';
 
 /** A validation / quarantine failure. Carries a machine-readable `code`. */
 export class BusError extends Error {
@@ -156,25 +157,27 @@ export function list(store) {
   return { ok: true, tasks: store.state.listTasks().map(brief) };
 }
 
-export function submitHandoff(store, { feature, markdown, session }, { config, inbox = undefined, scan = scanInbound, docs = store.docs } = {}) {
+export function submitHandoff(store, { feature, markdown, session }, { config, inbox = undefined, scan = scanInbound, docs = store.docs, inboxSource = createInboxSource({ config, docs }) } = {}) {
   const flagged = scan(markdown);
   if (flagged) return { ok: false, error: `quarantined: ${flagged}` };
   const safe = String(feature).replace(/[^\w.-]/g, '_');
   // `from`/`to` are fixed prose describing the design→impl contract (nothing parses them back —
   // see REPO-AUDIT.md §1.3), not a roster lookup, so they don't need generalizing for 2.1b. TODO:
   // if a non-default roster ever adds a second design or impl role, key these off config.domain.agents.
-  const body = `---\nfeature: ${feature}\nfrom: antigravity\nto: claude-code\nstatus: ready-for-impl\n---\n\n${markdown}`;
   let handoffPath;
   if (inbox !== undefined) {
     // Test override: preserve today's exact behavior — write directly to the given absolute dir,
-    // bypassing the DocStore (which is scoped to config.repoRoot, not an arbitrary temp dir).
+    // bypassing the DocStore/InboxSource (which are scoped to config.repoRoot, not an arbitrary
+    // temp dir).
+    const body = `---\nfeature: ${feature}\nfrom: antigravity\nto: claude-code\nstatus: ready-for-impl\n---\n\n${markdown}`;
     if (!existsSync(inbox)) mkdirSync(inbox, { recursive: true });
     const outPath = join(inbox, `${safe}.handoff.md`);
     writeFileSync(outPath, body, 'utf8');
     handoffPath = `.ai/inbox/${safe}.handoff.md`;
   } else {
-    docs.write(join('.ai', 'inbox', `${safe}.handoff.md`), body);
-    handoffPath = `.ai/inbox/${safe}.handoff.md`;
+    // Default path: write through the InboxSource (D2 bite #3) instead of a direct docs.write —
+    // its `submit()` reproduces this exact frontmatter/body byte-for-byte (see inbox-source.mjs).
+    handoffPath = inboxSource.submit({ feature, markdown });
   }
 
   let advanced = false;
