@@ -9,6 +9,9 @@
     ".": "./config.mjs",
     "./*": "./*"
   },
+  "bin": {
+    "meridian-gateway": "./gateway/cli.mjs"
+  },
   "dependencies": {
     "better-sqlite3": "12.11.1"
   },
