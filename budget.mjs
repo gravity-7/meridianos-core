@@ -43,6 +43,7 @@ import { antigravityUsage } from './antigravity-usage.mjs';
 import { readRuns } from './runlog.mjs';
 import { parseYaml } from './yaml-lite.mjs';
 import { costFor, loadPricing } from './pricing.mjs';
+import { openLedger, queryWindow, listEvents } from './gateway/ledger.mjs';
 
 /** `config` is the injected AiosConfig (REQUIRED); it only matters when `path` itself is
  *  omitted. */
@@ -179,7 +180,58 @@ const METER_READERS = {
   protobuf: { fn: antigravityUsage, dirKey: 'dirs' },
 };
 
-export function budgetStatus({ config, policy = loadPolicy(undefined, config), now = Date.now(), agentDirs = {}, runs, runsPath = undefined, pricing = loadPricing(undefined, config) } = {}) {
+/**
+ * ledgerWindowUsage (C9) — one agent's 5h/week window usage sourced from the gateway's own
+ * token-event ledger (gateway/ledger.mjs's `queryWindow`), the canonical record when the
+ * cost-governance gateway is on. Computed over the EXACT SAME window boundaries budgetStatus
+ * already anchors every agent to — `weekStartMs` is the SAME `weekWindow(agent)` result the
+ * transcript path uses (plan-week anchor, else rolling trailing-7d), and the 5h boundary is
+ * either a rolling trailing-5h OR — when `session5h` is on — an activity-anchored session computed
+ * from the ledger's OWN event timestamps, mirroring claude-usage.mjs's `session5h` algorithm
+ * exactly so the two metering paths can never disagree about what "the current window" means.
+ *
+ * No founder split: unlike the transcript/protobuf meters (which see EVERY local session,
+ * founder-interactive or agent-launched, and need `agentSessions` to tell them apart), the ledger
+ * only ever contains gateway-PROXIED calls already tagged with the requesting agent — there is no
+ * founder-usage bleed to separate out, so `attribution` (total vs agent_only) is a no-op here.
+ *
+ * Never fabricates: `queryWindow`'s own never-fabricate aggregate is used verbatim — an agent/
+ * window with zero matching ledger rows correctly reports 0 usage (a real "no spend"), not
+ * "unknown". Never throws: `queryWindow` already swallows its own query errors into a zeroed
+ * aggregate, and `listEvents` (used only for `session5h` anchoring) does the same.
+ */
+export function ledgerWindowUsage(ledger, { tenant, agent, now = Date.now(), weekStartMs = null, session5h = false } = {}) {
+  const nowIso = new Date(now).toISOString();
+  const startWeekMs = weekStartMs ?? (now - WEEK);
+
+  let start5hMs = now - H5;
+  let fiveHourSession = null;
+  if (session5h) {
+    const stamped = listEvents(ledger, { tenant, agent, limit: 1_000_000 })
+      .map((e) => (e?.ts ? Date.parse(e.ts) : null))
+      .filter((ts) => ts != null && ts <= now)
+      .sort((a, b) => a - b);
+    let ws = null;
+    for (const ts of stamped) if (ws == null || ts >= ws + H5) ws = ts;
+    const active = ws != null && now < ws + H5;
+    start5hMs = active ? ws : Infinity;
+    fiveHourSession = { start: active ? ws : null, resetAt: active ? ws + H5 : null };
+  }
+
+  const w5 = Number.isFinite(start5hMs)
+    ? queryWindow(ledger, { tenant, agent, since: new Date(start5hMs).toISOString(), until: nowIso })
+    : null;
+  const wWeek = queryWindow(ledger, { tenant, agent, since: new Date(startWeekMs).toISOString(), until: nowIso });
+  const wTotal = queryWindow(ledger, { tenant, agent });
+
+  const toWindow = (agg) => (agg
+    ? { input: agg.inputTokens, output: agg.outputTokens, billable: agg.totalTokens }
+    : { input: 0, output: 0, billable: 0 });
+
+  return { last5h: toWindow(w5), last7d: toWindow(wWeek), total: toWindow(wTotal), noTimestamp: 0, founder: null, fiveHourSession };
+}
+
+export function budgetStatus({ config, policy = loadPolicy(undefined, config), now = Date.now(), agentDirs = {}, runs, runsPath = undefined, pricing = loadPricing(undefined, config), ledger: ledgerOverride = undefined } = {}) {
   const warnPct = policy?.agent_budget?.warn_pct ?? 80;
   const killed = policy?.kill_switch === true;
   // Anything other than the explicit `agent_only` keeps today's behaviour: count every session.
@@ -216,9 +268,33 @@ export function budgetStatus({ config, policy = loadPolicy(undefined, config), n
   const resets = {};
   const mayClaim = {};
 
+  // C9: ledger-canonical budget windows. Byte-identical to pre-C9 when the gateway is off/absent
+  // (AC6) — `ledger` stays null and every agent falls straight into the existing meter-reader path
+  // below, unchanged. When `config.gateway.enabled === true` (AC5), the gateway's own token-event
+  // ledger becomes the source of truth for window usage: it's opened ONCE here (an explicit
+  // `ledger` override — the test seam — skips the open entirely), and a failure to open/resolve it
+  // (missing tenant, or the open itself throwing) degrades to the existing path rather than
+  // crashing budgetStatus, exactly like every other never-fabricate guard in this file.
+  const gatewayOn = config?.gateway?.enabled === true;
+  const gatewayTenant = config?.gateway?.registry?.tenant ?? config?.gateway?.tenant ?? null;
+  let ledger = null;
+  if (gatewayOn && gatewayTenant) {
+    try { ledger = ledgerOverride ?? openLedger(config.gateway.ledgerPath, { config }); } catch { ledger = null; }
+  }
+
   for (const agent of roster) {
-    const sessions = agentSessionIds(runList, agent);
     const week = weekWindow(agent);
+
+    if (ledger) {
+      const lu = ledgerWindowUsage(ledger, { tenant: gatewayTenant, agent, now, weekStartMs: week.startMs, session5h });
+      out[agent] = { usage: lu, founder: null, source: 'ledger', ...verdictFor(lu, policy?.agent_budget?.[agent], warnPct) };
+      mayClaim[agent] = !killed && out[agent].state !== 'halt';
+      resets[`${agent}_week_at`] = iso(week.resetAt);
+      resets[`${agent}_5h_at`] = iso(lu.fiveHourSession?.resetAt);
+      continue;
+    }
+
+    const sessions = agentSessionIds(runList, agent);
     const kind = config.domain.budgetMeter?.[agent] ?? 'transcript';
     const reader = METER_READERS[kind] ?? METER_READERS.transcript;
     const dirOverride = agentDirs[agent];
@@ -227,7 +303,7 @@ export function budgetStatus({ config, policy = loadPolicy(undefined, config), n
     // sees (opencode has its own store) — fold them into the SAME windows before gating on a cap.
     const extra = nonTranscriptUsage(runList, { agent, now, start5h: usage.fiveHourSession?.start ?? (now - H5), startWeek: week.startMs ?? (now - WEEK) });
     const withExtra = mergeExtra(gate(usage), extra);
-    out[agent] = { usage: withExtra, founder: usage.founder, ...verdictFor(withExtra, policy?.agent_budget?.[agent], warnPct) };
+    out[agent] = { usage: withExtra, founder: usage.founder, source: 'meter', ...verdictFor(withExtra, policy?.agent_budget?.[agent], warnPct) };
     mayClaim[agent] = !killed && out[agent].state !== 'halt';
     resets[`${agent}_week_at`] = iso(week.resetAt);
     resets[`${agent}_5h_at`] = iso(usage.fiveHourSession?.resetAt);
