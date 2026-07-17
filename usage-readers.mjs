@@ -23,10 +23,17 @@
  * only — `{ home, dirs, dbPath }` reach the same location-override knobs claude-usage.mjs /
  * antigravity-usage.mjs / opencode-usage.mjs already expose, so tests never touch a real
  * ~/.claude, ~/.gemini, or ~/.local/share/opencode. Production call sites omit it.
+ *
+ * `meterRun` (below `readUsage`) is the canonical-first entry point added on top of this module
+ * (C4): when the cost-governance gateway is on, gateway/ledger.mjs's own append-only ledger is the
+ * metering source of truth, and every reader above demotes to a fallback used only when the
+ * gateway is off or the ledger has no matching event for this run. `readUsage` itself is untouched
+ * — same signature, same behavior — so gateway-OFF callers of `readUsage` directly see zero change.
  */
 import { findSessionTranscriptPath, readTranscript } from './claude-usage.mjs';
 import { findConversationDbPath, readConversationUsage } from './antigravity-usage.mjs';
 import { opencodeUsageForDirectory } from './opencode-usage.mjs';
+import { queryWindow } from './gateway/ledger.mjs';
 
 /**
  * claude-code — reads the session's own transcript, model-agnostically (no filter on
@@ -100,4 +107,52 @@ export function readUsage(harness, run, result, overrides) {
   const reader = READERS[harness];
   if (!reader) return null;
   try { return reader(run, result, overrides); } catch { return null; }
+}
+
+/**
+ * meterRun — canonical-first metering for one completed run (C4). When the cost-governance
+ * gateway is ON, gateway/ledger.mjs's own append-only ledger is the metering source of truth;
+ * the `readUsage` dispatcher above demotes to a FALLBACK used only when the gateway is off, or
+ * when the ledger has no event matching this run. Purely additive: `readUsage` is called exactly
+ * as it always was, so the fallback path is byte-identical to today's metering.
+ *
+ * Ledger match key: tenant (`config.gateway.registry.tenant`) + agent (`run.agent`) + the run's
+ * own time window — `run.startedAt` / `run.endedAt`, both optional ISO-8601 strings forwarded
+ * straight to `queryWindow`'s `since`/`until` (an absent bound is unbounded on that side, exactly
+ * as `queryWindow` already defines it). Neither `run.startedAt` nor `run.endedAt` is wired into
+ * any production caller yet — a run with neither simply queries the tenant+agent's entire ledger
+ * history, which is a superset match, never a false negative.
+ *
+ * "Matching ledger event" is `queryWindow`'s own `runs > 0` — the same never-fabricate aggregate
+ * budget.mjs/windows.mjs already trust, so this reuses that signal rather than re-deriving it.
+ * Missing `tenant`/`agent`/`ledger` (nothing to match against) is treated identically to "no
+ * match": fall through to the reader.
+ *
+ * Never guesses: if neither the ledger nor the reader has a number for this run, tokens/cost come
+ * back as `0` — not fabricated as anything else — with `source` still naming which path was
+ * consulted, so the caller (not this function) decides whether that zero means "genuinely zero
+ * spend" or "totally unmetered."
+ *
+ * `overrides` is the same test seam `readUsage` exposes ( `{ home, dirs, dbPath }` ), forwarded
+ * verbatim to the fallback reader; production call sites omit it.
+ */
+export function meterRun(run, result, { config, ledger, overrides } = {}) {
+  const gatewayOn = config?.gateway?.enabled === true;
+  if (gatewayOn && ledger) {
+    const tenant = config.gateway.registry?.tenant;
+    const agent = run?.agent;
+    if (tenant && agent) {
+      const w = queryWindow(ledger, { tenant, agent, since: run?.startedAt, until: run?.endedAt });
+      if (w.runs > 0) {
+        return { tokensIn: w.inputTokens, tokensOut: w.outputTokens, costUsd: w.costUsd, source: 'ledger' };
+      }
+    }
+  }
+  const usage = readUsage(run?.harness, run, result, overrides);
+  return {
+    tokensIn: usage?.inputTokens ?? 0,
+    tokensOut: usage?.outputTokens ?? 0,
+    costUsd: 0,
+    source: 'usage-reader',
+  };
 }
