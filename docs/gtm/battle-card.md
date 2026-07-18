@@ -33,7 +33,38 @@ overspending. We are harness-agnostic by design — a customer keeps their agent
 
 ---
 
+## Competitive reality — what the vendors already ship (verified from public docs, 2026-07-19)
+
+**Read this before claiming metering as our differentiator.** It is not, on its own.
+
+**Anthropic** (`platform.claude.com/docs/en/manage-claude/workspaces` + `/usage-cost-api`):
+- **Workspaces** segment API keys, members, and limits — up to 100 per org. Per-workspace **monthly spend caps** and rate limits (RPM / input TPM / output TPM).
+- **Usage & Cost Admin API** with `1m` / `1h` / `1d` buckets, filter+group by **api_key · workspace · model · service_tier · context_window · inference_geo · speed**. Data lands ~5 minutes after the request.
+- A dedicated **Claude Code workspace**, auto-created at first sign-in, minting a per-user key — **"the only workspace that supports per-user monthly spend limits"** — plus a Claude Code Analytics API with per-user estimated costs.
+- A **partner ecosystem already consuming that API**: CloudZero, Datadog, Grafana Cloud, Honeycomb, **Vantage** (FinOps for LLM cost).
+
+**OpenAI**: per-project monthly budgets, notification thresholds, per-model usage restrictions, per-key usage views.
+
+### What this kills, and what survives
+
+| Claim | Verdict |
+|---|---|
+| "We meter your token usage and cost" | ❌ **Dead as a differentiator.** Anthropic's own API is granular (7 dimensions, 1-minute buckets). Don't lead with it. |
+| "We give you a cost dashboard" | ❌ **Crowded.** Vantage, CloudZero, Datadog, Grafana, and Honeycomb all ship Anthropic integrations today. |
+| "We cap per-user spend on Claude Code" | ❌ **Anthropic already does this**, natively, for their own tool. |
+| **"One ledger across Anthropic + OpenAI + DeepSeek + local"** | ✅ **Survives.** Every vendor surface is vendor-scoped by construction. No vendor will ever aggregate a competitor. |
+| **"Cost per task / per run / per PR"** | ✅ **Survives, and is the sharpest line.** Anthropic's dimensions are all *infrastructure* (key, workspace, model, tier, geo). **There is no user-defined tag, label, or job dimension** — the vendor cannot know what work a call was for. Our ledger carries `task`, `run_id`, `session` on every row. |
+| **"Denied before the call is billed"** | ✅ **Survives.** Vendor data arrives **~5 minutes after the fact** — it is reporting, not enforcement. **OpenAI's project budget is explicitly soft:** *"API requests will continue to be processed without interruption... it does not enforce a hard cap on spending."* Our `checkVerdict` runs before forwarding. |
+
+**The line that works:** a vendor tells a CTO *"workspace-prod spent $14,000 last month."* Only we tell them *"feature X cost $4.65 to build."* That is unit economics of engineering work, not a utility bill.
+
+⚠️ **Unresolved:** Anthropic's docs describe both a workspace "spend limit" (*"Cap monthly spending"*) and "spend **notifications**" (*"alerts when spending reaches certain thresholds"*) without stating whether requests are actually blocked at the cap. **Do not claim Anthropic's cap is soft** until that's confirmed — OpenAI's is documented as soft; Anthropic's is ambiguous.
+
+---
+
 ## Three defensible capabilities
+
+> ⚠️ Capability 1 below is **necessary but not sufficient** — see the competitive-reality table above. The defensible part is *cross-vendor* + *work-item attribution*, not metering itself.
 
 ### 1. Cross-vendor exact token metering
 The gateway (`gateway/server.mjs`) is a transparent same-wire proxy in front of every provider call.

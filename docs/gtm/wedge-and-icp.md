@@ -22,6 +22,28 @@ that class of bug structurally impossible rather than patched one harness at a t
 
 ---
 
+## ⚠️ Qualifier: single-vendor shops are NOT the ICP (verified 2026-07-19)
+
+Anthropic and OpenAI both ship org-level usage/cost reporting and per-workspace/project spend
+controls (full detail + citations in `battle-card.md` → "Competitive reality"). **A team on one
+vendor is already served** — their vendor's own console answers "what did we spend," and a FinOps
+partner (Vantage, CloudZero, Datadog, Grafana, Honeycomb) will chart it for them.
+
+The ICP therefore requires **at least one** of these to be true:
+1. **More than one vendor in play** (nobody aggregates across competitors), or
+2. **They need cost per unit of work** — per task, per PR, per project — which no vendor exposes
+   (their dimensions are key/workspace/model/tier/geo; there is no job or user-defined tag), or
+3. **They need the call stopped, not reported** — vendor data is ~5 min delayed, and OpenAI's
+   project budget is documented as soft ("requests will continue to be processed").
+
+**Shadow IDE spend — hypothesis, and one caution.** "Devs use AI in their editor and nobody can see
+the cost" is a much larger population than agent-fleet operators, and it happened in-house (two of
+our own build sessions ran through a DeepSeek-configured IDE and produced no ledger row anywhere).
+**But Anthropic already ships per-user monthly spend limits and per-user cost analytics for the
+Claude Code workspace specifically** — so the story is weakest exactly where it sounds strongest.
+It holds for *mixed-vendor* and *BYO-key* IDE setups; it does not hold for a Claude-Code-only shop.
+Test this in conversation before building toward it.
+
 ## ICP (draft — needs founder validation against real prospect conversations)
 
 **Who this is for**, based strictly on what the product actually does today (a same-wire metering/
