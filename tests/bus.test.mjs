@@ -15,7 +15,17 @@ import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
 // etc.) — those modules derive their agent set from config.domain.agents, so the injected
 // roster here must match the fixture literals below (a per-test inline override of
 // FIXTURE_DOMAIN, per the fixture-domain module's own doc comment).
-const config = resolvePaths({ domain: { ...FIXTURE_DOMAIN, agents: ['claude', 'antigravity'] } });
+// `root` is an explicit throwaway temp dir rather than the ambient/computed default: this file's
+// shared `config` backs `store.docs`/`store.intake` (doc-store.mjs), which do real filesystem I/O
+// scoped to `config.repoRoot` (e.g. the "inbox override still bypasses..." test below calls
+// `store.intake.list()` for real). Relying on config.mjs's computed default here would couple this
+// suite to running from inside an installed `node_modules/@gravity-7/meridianos-core/` layout —
+// standalone (this repo checked out directly, not as a dependency) that computed default resolves
+// to an ancestor OUTSIDE the repo, which doc-store.mjs's root-escape guard then (correctly) rejects
+// (BUG-1). Every other real-I/O test in this file already injects its own `mkdtempSync` root; this
+// makes the shared top-level `config` do the same instead of being the one holdout on the ambient
+// default.
+const config = resolvePaths({ root: mkdtempSync(join(tmpdir(), 'aios-bus-test-')), domain: { ...FIXTURE_DOMAIN, agents: ['claude', 'antigravity'] } });
 // Local wrapper: every real call site threads the injected config explicitly (DI-3c) — this
 // keeps the test bodies below byte-identical to their pre-DI form. `dispatch` is FLIPPED (D2
 // bite #2, stage 2b) to receive a ProjectStore `store` instead of a raw `db`.
