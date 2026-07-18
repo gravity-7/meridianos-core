@@ -1004,3 +1004,72 @@ Newest at the bottom.
   mos-worktree roots. C7 is fully dispatchable.
 - **Instruction:** set the mos-dev policy's USD cost cap to $10/week (and a sensible per-5h slice),
   keep token caps as belt-and-suspenders, and quote actual USD spend in every checkpoint.
+
+## 2026-07-18 — Day 2 (orchestrator session #28, RESUME)
+
+### D-039 · Committed session #27's uncommitted infra (boot-cost rule, cool-down, mos-dev dir access, C6-merged bookkeeping)
+- **Decision:** Session #27 left `RESUME-PROMPT.md`'s cheap-boot rule, `conductor.mjs`'s 60-min
+  spawn cool-down + `--add-dir C:\projects\mos-dev`, `OWNERSHIP.md`'s C6-merged row, and two
+  checkpoints uncommitted in the working tree (visible as `M`/`??` at this session's boot). Reviewed
+  the diffs line-by-line (all additive/documentation, no chokepoint content), staged, and committed
+  (`081af97`). Left `.ai/state/continuity.json`/`orchestrator.lease`/`conductor-last-spawn` untracked,
+  consistent with every prior session's treatment of that machine-local state.
+- **Rationale:** These are durable orchestrator infra (the whole continuity protocol depends on
+  `RESUME-PROMPT.md`/`conductor.mjs` on `main` being current) rather than scratch state — leaving them
+  uncommitted risks a future session reading a stale `RESUME-PROMPT.md` from `main` while a newer copy
+  only exists in one working tree.
+- **Reversibility:** High — plain doc/infra commit, easily revertable.
+
+### D-040 · Deleted stale local branch `worktree-agent-afa3f40bbc434ff6c`
+- **Decision:** `git branch -d` on a leftover local branch whose tip (`410c17e`) was already an
+  ancestor of `main` (confirmed via `git branch -d`'s own fast-forward-safety check, which refuses
+  non-merged branches). Pure housekeeping, no PR/worktree associated with it.
+- **Reversibility:** High — tip commit is on `main`; recoverable via reflog regardless.
+
+### D-041 · C7 NOT dispatched — discovered `/c/projects/mos-dev` is not a separate repo, it's a stale checkout of `meridianos-core` itself; this contradicts C7's premise and crosses a §6 hard-stop
+- **Decision:** Before dispatching C7 (now nominally unblocked per F-001: Gate-2 approved,
+  `--add-dir` grants access), inspected `/c/projects/mos-dev`'s own git state instead of assuming the
+  card's framing ("mos-dev repo", "separate repo — no core chokepoint" per `OWNERSHIP.md`) was still
+  accurate. Found: `git -C mos-dev remote -v` points at
+  `https://github.com/gravity-7/meridianos-core.git` (the SAME repo this orchestrator runs in, not a
+  distinct `mos-dev` GitHub repo — `gh repo view gravity-7/mos-dev` 404s, no such repo exists);
+  `mos-dev/package.json`'s `name` is literally `@gravity-7/meridianos-core`; and after `git fetch`,
+  `mos-dev`'s `main` was simply 22 commits **behind** this checkout's `main` (fast-forwardable, same
+  lineage) — i.e. `/c/projects/mos-dev` is a second, stale clone of this exact repo (138 tracked
+  files), not an npm consumer of it. C7's AC (a) ("mos-dev imports core from node_modules, no vendored
+  core `.mjs` files remain") therefore means deleting the great majority of that checkout's 138
+  tracked files and re-pointing its git identity to an actual separate `mos-dev` project/repo that
+  does not yet exist — a `>10 files deleted` + repo-identity change is squarely a §6 hard-stop
+  (destructive, and its shared remote makes an errant `git push`/PR from a subagent land in
+  `meridianos-core` itself, not an isolated tenant repo). Did NOT dispatch a subagent into this
+  directory. Also checked C10 (landing page, Track C/Antigravity): `agy` **is** on PATH now (it
+  wasn't checked before), but invoking it (`agy --help`) is blocked by this session's tool-permission
+  allowlist (only `Bash(git|gh|npm|node|npx:*)` granted, no `agy`) — did not retry per the standing
+  "don't re-poke an identical block" guidance. With C7 held for founder clarification and C10 blocked
+  on a tooling grant, nothing further was dispatchable this session; `main` advanced only via D-039/
+  D-040's housekeeping commit.
+- **Rationale:** C7's own risk_tags (`separate-repo`, `git-history`) presuppose a distinct repo to
+  restructure; the discovery that it is in fact the *same* repo, sharing this orchestrator's own
+  remote, changes the blast radius entirely — a subagent told "delete vendored core files, this is a
+  separate repo" would be operating on a false premise the card never anticipated, with a shared
+  remote making the failure mode "corrupts/PRs against the live core repo," not "breaks an isolated
+  tenant." That is exactly the kind of destructive, hard-to-reverse action the autonomy contract
+  reserves for the founder, independent of the Gate-2 spend sign-off already given (Gate-2 approved
+  spend/cadence, not repo restructuring or a >10-file deletion).
+- **Alternatives:** (a) Dispatch C7 as scoped since Gate-2 + working-dir access are both granted —
+  rejected: Gate-2's sign-off text only mentions spend/cadence, not this repo-identity issue, which
+  the founder likely doesn't know about yet. (b) Silently reinterpret C7 (e.g. treat `/c/projects/
+  mos-dev` as "the" thin-tenant target and just delete/rewrite in place) — rejected: this is the "no
+  two in-flight cards touch the same file" spirit taken to its logical extreme (this isn't even the
+  same *card*, it's the same *repo*), and picking a reinterpretation autonomously risks doing
+  significant, hard-to-reverse work against the wrong assumption. (c) Try `agy` anyway via a different
+  invocation to route around the tool-permission gate — rejected, matches prior sessions'
+  well-established "don't keep poking an identical block" guidance from the resolved tool-permission
+  saga (D-013 onward).
+- **Founder action needed:** clarify what `/c/projects/mos-dev` actually is (a genuinely separate
+  `mos-dev` repo that needs to be created/pushed-to first, or intentionally the same repo used as a
+  local dogfood checkout, in which case C7's card text needs rewriting) before C7 is safe to dispatch;
+  separately, add `agy` to a future session's allowed-tools list if C10 (Antigravity landing page) is
+  wanted this window.
+- **Reversibility:** N/A (investigation only; no destructive action taken; `mos-dev` checkout
+  untouched beyond a `git fetch`).
