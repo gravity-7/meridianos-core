@@ -1,0 +1,76 @@
+# MeridianOS core — L2 packaging (Docker Compose)
+#
+# Runs the standalone gateway sidecar (gateway/cli.mjs) — the one entrypoint in this repo that
+# needs no tenant DomainPlugin (see Dockerfile + docs/DEPLOY.md for why the full daemon,
+# scheduler.mjs, can't run standalone from this image).
+#
+# Tenant-agnostic by construction: no tenant paths, no tenant config, and no secret literals are
+# hardcoded here. Every knob is an env var with a name only — the value is supplied by the
+# operator at `docker compose up` time (a `.env` file next to this compose file, or the shell
+# environment), never committed.
+
+services:
+  gateway:
+    build: .
+    image: meridianos-core-gateway
+    ports:
+      - "${GATEWAY_PORT:-8787}:8787"
+    environment:
+      # BYO-key: name the provider key env var(s) your policy/route table references (see
+      # providers.mjs `keyEnv`) so Compose forwards them from the host/`.env` into the container.
+      # Never put a literal key value in this file — only the NAME is declared, the VALUE comes
+      # from your shell env or an untracked `.env` file.
+      - DEEPSEEK_KEY
+      - ANTHROPIC_API_KEY
+      - OPENROUTER_KEY
+    volumes:
+      # Ledger persistence (SQLite) — survives container restarts/recreates.
+      - gateway-ledger:/app/.ai/gateway
+      # Optional: mount your own policy.yaml read-only to enforce real budget caps instead of the
+      # CLI's empty default policy. Uncomment and point at your tenant's policy file:
+      # - ./policy.yaml:/app/policy.yaml:ro
+    command:
+      - "--port=8787"
+      - "--tenant=${GATEWAY_TENANT:-default}"
+      - "--ledger=/app/.ai/gateway/ledger.db"
+      # Uncomment once the policy.yaml volume above is mounted:
+      # - "--policy=/app/policy.yaml"
+      # Uncomment to register one default run at boot (see gateway/README.md flags):
+      # - "--provider=deepseek"
+      # - "--model=deepseek-chat"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------------------------
+  # daemon (reference only — commented out; not runnable as-is)
+  # ---------------------------------------------------------------------------------------------
+  # The full autonomous daemon (scheduler.mjs) requires an injected DomainPlugin that this
+  # tenant-agnostic core does not and will not ship (docs/README.md, "no default tenant"). To run
+  # it under Docker, build your OWN image FROM this one that adds your tenant entrypoint, e.g.:
+  #
+  #   FROM meridianos-core-gateway
+  #   COPY my-tenant-domain.mjs my-entry.mjs ./
+  #   CMD ["node", "my-entry.mjs"]
+  #
+  # where `my-entry.mjs` imports `start` from `scheduler.mjs` and calls
+  # `start({ domain: myDomainPlugin })`. Then add a service here (or in your own compose file)
+  # pointing `build:`/`image:` at that derived image, with volumes for your `.ai/` state dir and
+  # `AIOS_ROOT`/`AIOS_WORKTREE_ROOT`/`AIOS_DB` env vars set to match. See docs/DEPLOY.md.
+  #
+  # daemon:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.daemon   # your own tenant Dockerfile, not part of this repo
+  #   ports:
+  #     - "${DASHBOARD_PORT:-4317}:4317"
+  #   environment:
+  #     - AIOS_ROOT=/app
+  #     - AIOS_DASHBOARD_PORT=4317
+  #     - AIOS_DASH_TOKEN
+  #     - AIOS_ESCALATION_WEBHOOK
+  #     - AIOS_DRY_RUN
+  #   volumes:
+  #     - ./tenant-state/.ai:/app/.ai
+  #   restart: unless-stopped
+
+volumes:
+  gateway-ledger:
