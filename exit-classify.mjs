@@ -8,10 +8,19 @@
  * structured `resetAt`, both persisted on the run record; every consumer keys on the enum, never
  * on the prose.
  *
- * reason ∈ 'ok' | 'quota' | 'timeout' | 'signal' | 'spawn_error' | 'nonzero'
- *   quota → the provider refused because a session/usage window is exhausted (Anthropic:
- *           "You've hit your session limit"; Antigravity: quota/rate wording). resetAt is the
- *           wall-clock the window reopens, when the provider prints it.
+ * reason ∈ 'ok' | 'quota' | 'budget' | 'timeout' | 'signal' | 'spawn_error' | 'nonzero'
+ *   quota  → the PROVIDER refused because a session/usage window is exhausted (Anthropic:
+ *            "You've hit your session limit"; Antigravity: quota/rate wording). resetAt is the
+ *            wall-clock the window reopens, when the provider prints it. Retrying later succeeds.
+ *   budget → OUR OWN gateway sidecar refused the call (gateway/server.mjs's non-retryable 403,
+ *            see PR #29) because this agent is over its policy.yaml cap. Deliberately a SEPARATE
+ *            reason from 'quota': a quota window reopens on its own (resetInstant/cooldown apply);
+ *            a budget halt does NOT clear within the run — retrying is never correct, and
+ *            runner.mjs's quotaHold must never treat the two as interchangeable. Also deliberately
+ *            separate from the generic 'nonzero' catch-all: a budget deny is an EXPECTED,
+ *            governance-driven exit (the run did exactly what #29 designed it to do), not a crash
+ *            — collapsing it into 'nonzero' would make it indistinguishable from a real bug in the
+ *            run log / dashboard.
  */
 
 /** Provider fingerprints for an exhausted quota window. Add new wordings HERE, nowhere else. */
@@ -23,6 +32,23 @@ const QUOTA_PATTERNS = [
   /quota (?:exceeded|exhausted)/i,
   /\b429\b.*\b(quota|rate|limit)\b/i,
 ];
+
+/** Fingerprint for OUR OWN gateway's budget-deny message (gateway/server.mjs's `denyBody`:
+ *  `gateway: over budget (${capWindow})`, on both the anthropic and openai wire shapes). This is a
+ *  literal string WE control (not a provider's own wording), so it's a precise, low-risk match —
+ *  unlike QUOTA_PATTERNS's provider-wording heuristics, this can't collide with a real provider
+ *  error. Empirically confirmed (offline, real `claude` CLI spawn against a local denying gateway,
+ *  2026-07-18): claude-code surfaces the gateway's message verbatim as
+ *  "Failed to authenticate. API Error: 403 gateway: over budget (5h)" on stdout. */
+const BUDGET_PATTERNS = [
+  /gateway:\s*over budget/i,
+];
+
+/** Is this output OUR OWN gateway's budget-deny refusal (PR #29's non-retryable 403)? */
+export function isBudgetText(text) {
+  const s = String(text ?? '');
+  return BUDGET_PATTERNS.some((re) => re.test(s));
+}
 
 /** Pull a human reset time ("resets 6:20pm", "resets at 11:40pm (Asia/Karachi)") if present. */
 export function parseResetAt(text) {
@@ -75,6 +101,11 @@ export function classifyExit({ code, signal, stdout = '', stderr = '', timedOut 
   if (isQuotaText(blob)) {
     const resetAt = parseResetAt(blob);
     return { reason: 'quota', outcome: 'failed', note: `quota exhausted${resetAt ? ` · resets ${resetAt}` : ''}`, resetAt };
+  }
+  // Checked AFTER quota (no pattern overlap either way) and BEFORE the generic nonzero fallback —
+  // a gateway budget halt (#29) is a distinct, expected, governance-driven exit, not a crash.
+  if (isBudgetText(blob)) {
+    return { reason: 'budget', outcome: 'failed', note: 'gateway budget halt (non-retryable deny, #29)', resetAt: null };
   }
   if (signal === 'SIGTERM' || signal === 'SIGKILL') {
     return { reason: 'signal', outcome: 'failed', note: `killed by signal ${signal}`, resetAt: null };
