@@ -170,6 +170,39 @@ The daemon (`scheduler.mjs` `start()`) can assemble and run the gateway sidecar 
 
 ---
 
+---
+
+## Standalone quickstart
+
+The wedge (card C1): run the gateway as ONE command — no tenant, no daemon loop, no `DomainPlugin`.
+Full flag reference in `gateway/README.md`.
+
+```sh
+export DEEPSEEK_KEY=sk-...                                          # 1. set a provider key env var
+node gateway/cli.mjs --port 8787 --provider deepseek --model deepseek-chat   # 2. boot it
+# or once published: npx meridian-gateway --port 8787 --provider deepseek --model deepseek-chat
+```
+
+Prints the bound URL and a minted gateway token:
+
+```
+meridian-gateway listening at http://127.0.0.1:8787
+gateway token (send as x-gateway-token, x-api-key, or Authorization: Bearer): <token>
+```
+
+Point an agent's base URL at that URL, send the token on `x-gateway-token` — same lifecycle as
+above. A ledger row after one call:
+
+```js
+import { openLedger, listEvents } from './gateway/ledger.mjs';
+console.log(listEvents(openLedger('.ai/gateway/ledger.db'), { tenant: 'pv' })[0]);
+// { provider: 'deepseek', totalTokens: 10, costUsd: null, enforcementDecision: 'allow', ... }
+```
+
+Ctrl+C shuts it down cleanly; importing `gateway/cli.mjs` (not running it) starts no server.
+
+---
+
 ## Known follow-ups (not yet built)
 - **Cross-wire translation** (anthropic-in → openai-out) — deliberately deferred; v1 is a
   same-wire transparent metering proxy.
