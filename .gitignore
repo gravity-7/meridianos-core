@@ -1,3 +1,15 @@
 node_modules/
 # transient publish-time npmrc (holds only an env-var reference, never a token) — belt-and-suspenders
 .npmrc.publish
+
+# Isolated per-run worktrees for the Track-A subagent swarm (never committed to core).
+.mos-worktrees/
+
+# Orchestrator runtime state that is machine-local, not durable memory (DBs, logs, secrets).
+# The DURABLE orchestrator memory (.ai/memory, .ai/contracts, .ai/cards, OWNERSHIP.md) IS committed.
+.ai/state/*.db
+.ai/state/*.db-shm
+.ai/state/*.db-wal
+.ai/gateway/
+.ai/logs/
+.ai/secrets/
