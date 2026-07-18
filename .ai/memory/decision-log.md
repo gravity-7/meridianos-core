@@ -888,3 +888,119 @@ Newest at the bottom.
 - **Rationale:** With no live lease to negotiate with and git already reflecting the correct end state, rewriting or deleting the other entry would destroy a legitimate account for no benefit; appending a reconciliation note is cheaper and preserves both histories.
 - **Alternatives:** Overwrite D-034/checkpoint-21 to match this session's account exactly — rejected, no factual conflict worth destroying history over. Halt and escalate to founder about concurrent sessions — rejected, no live conflict remained (lease absent, no diverging git tips) and the underlying facts already agreed.
 - **Reversibility:** Append-only; no history destroyed.
+
+## D-036 (session #26, 2026-07-18)
+- **Decision:** Resumed session, boot found no in-flight cards, all PRs merged, and — mid-boot — a
+  concurrency artifact: `.ai/state/orchestrator.lease` held a live PID (29848) at first check, then
+  was gone by the next check, and `continuity.json`/`OWNERSHIP.md`/`decision-log.md` had already been
+  rewritten by a second, self-consistent "session #25" pass (checkpoint-22, D-035) that had already
+  committed the previously-uncommitted `.ai/` bookkeeping + C8 kit to `main` (`512ff68`, pushed).
+  Reconciled by trusting `git log`/`gh pr list` as ground truth rather than any file narrative, per
+  RESUME-PROMPT's own rule; left D-034/checkpoint-21 and D-035/checkpoint-22 both intact as accurate,
+  non-conflicting history. Re-verified `npm test` independently: 854/854 pass (1 new intermittent
+  flake, `tests/worktree.test.mjs`, EPERM on temp-dir cleanup under full-suite load, 11/11 clean in
+  isolation — same shape as the known `harness-adapters.test.mjs` flake, logged, not blocking).
+  Updated `continuity.json` to session 26 and flagged the concurrency wrinkle plus the new flake.
+  Confirmed C7 (mos-dev thin-tenant rebuild) is not dispatchable from this session at all —
+  `/c/projects/mos-dev` is outside this session's allowed working directories, on top of its
+  still-open Gate-2 real-spend sign-off. Proceeding to dispatch C6 (L2 packaging) solo via Track-A,
+  `isolation:'worktree'` — no chokepoint, no unmet dependency.
+- **Rationale:** Two orchestrator passes running concurrently is a process gap worth flagging to the
+  founder (conductor cadence vs. a still-open interactive session), but by the time it was fully
+  observed there was no live conflict (lease already released, no diverging git tips, no contradictory
+  merges) — nothing to halt or roll back. Dispatching C6 now is squarely inside "decide, log, proceed":
+  it has no chokepoint, no unmet dependency, and the backlog (`next_dispatch_intentions` from both the
+  #25 and #25b passes) already named it as the next safe solo card.
+- **Alternatives:** (a) Halt and escalate the concurrency finding as a hard-stop — rejected, none of
+  the §6 hard-stop conditions apply (no spend, no public deploy, no schema change, no external send/
+  intake write-back, no legal text, no mass deletion) and no actual state conflict existed to resolve.
+  (b) Attempt C7 anyway by working around the working-directory restriction — rejected, that's a
+  session-configuration boundary, not a judgment call to route around. (c) Rewrite D-034/checkpoint-21
+  to match the reconciled account exactly — rejected, per D-035's own reasoning: no factual conflict
+  worth destroying append-only history over.
+- **Reversibility:** N/A for the reconciliation itself (no state changed, append-only log entries and
+  a continuity.json field update). C6 dispatch uses an isolated worktree and opens a PR only — nothing
+  lands on `main` without independent orchestrator AC verification per the standing rule.
+
+## D-037 (session #27, 2026-07-18)
+- **Decision:** Resumed session. Boot found `continuity.json`/`OWNERSHIP.md` claiming C6 (L2 packaging)
+  was dispatched by session #26 and awaiting a PR in an isolated worktree. Checked git/gh directly
+  (`git branch -a`, `git ls-remote --heads origin`, `git worktree list`, `gh pr list`, `gh pr list
+  --search "c6"`) and found no branch, worktree, or PR for C6 anywhere — the session #26 dispatch never
+  produced durable evidence and is presumed lost (session likely ended before the subagent committed
+  anything). Redispatched C6 fresh this session, same scope (Dockerfile/docker-compose.yml/
+  .dockerignore/docs/DEPLOY.md, no chokepoint), Track-A, `isolation:'worktree'`, background. Separately,
+  `.ai/state/orchestrator.lease` showed an `acquired_at` only ~1 minute before boot — the same shape
+  that indicated a genuine concurrent orchestrator in sessions #25/#26 (D-035/D-036). This time,
+  `tasklist`/`ps -W` were blocked by the sandbox, so PID liveness could not be checked directly; instead
+  read `conductor.mjs`'s `decide()`/`inspectLease()`/spawn logic and confirmed the conductor itself
+  writes the lease with the just-spawned child's PID *before* handing off to the LLM session — so a
+  ~1-minute-old lease at boot is the expected, benign shape of a normal conductor-spawn, not a second
+  concurrent orchestrator. Did not touch the lease file. Re-verified `npm test` from the primary
+  checkout: 853/862 pass, 1 fail (`tests/harness-adapters.test.mjs`), confirmed clean 29/29 in
+  isolation — the already-known flake, not a regression. `worktree.test.mjs` (the other known flake)
+  did not fail this run. Main confirmed green and unchanged at `410c17e`.
+- **Rationale:** A prior session's claimed Agent dispatch is not itself evidence that work survived —
+  disposable sessions can end mid-dispatch with nothing durable committed. Checking git/gh directly
+  before trusting `in_flight_cards` prevented silently treating C6 as "in progress" indefinitely with
+  nothing actually happening. For the lease: RESUME-PROMPT's own rule is to trust git/ground-truth over
+  file narratives when in doubt, and reading the actual lease-acquisition code in `conductor.mjs` is a
+  legitimate ground-truth check when direct process inspection is unavailable — re-litigating the
+  concurrency concern via a third mechanism (reading source) rather than repeatedly retrying blocked
+  process-list commands (which would burn calls without new information; the tool denial was already
+  clear after the first couple of attempts).
+- **Alternatives:** (a) Keep retrying `tasklist`/`ps` variants until one worked — rejected, repeated
+  identical-shape denials are a signal to change approach, not to retry harder. (b) Treat the fresh
+  lease as a hard-stop and halt/escalate without further investigation — rejected, cheap ground-truth
+  alternatives (reading conductor.mjs) were available and resolved it without founder interruption,
+  which is the cheaper and more autonomous path per the standing autonomy contract. (c) Assume C6's
+  session #26 dispatch was still silently running somewhere and wait rather than redispatch — rejected,
+  no mechanism exists for a background Agent dispatch to survive past its parent session ending, and
+  waiting indefinitely on work that git shows no trace of would stall the card for no reason.
+- **Reversibility:** N/A for the verification/reconciliation (read-only checks, no state destroyed).
+  C6 redispatch uses an isolated worktree and opens a PR only — nothing lands on `main` without
+  independent orchestrator AC verification per the standing rule; if session #26's original dispatch
+  somehow does surface a PR later, it can simply be reviewed/closed as a duplicate.
+
+## D-038 (session #27, 2026-07-18)
+- **Decision:** Reviewed and merged C6 (#41, L2 Docker/compose packaging) after the redispatch logged
+  in D-037. Verified: PR touched exactly the 4 owned files (`Dockerfile`, `docker-compose.yml`,
+  `.dockerignore`, `docs/DEPLOY.md`) with no chokepoint touched; BYO-key invariant held (only `keyEnv`
+  NAMEs referenced -- `DEEPSEEK_KEY`/`ANTHROPIC_API_KEY`/`OPENROUTER_KEY` -- never literal values, both
+  in the Dockerfile/compose comments and `docs/DEPLOY.md`'s instructions); `.dockerignore` excludes
+  `.ai/`, `node_modules/`, `.git/`, and tests so no session/secret state or dev cruft is ever baked into
+  a layer. The image correctly scopes itself to the gateway sidecar only (not the full daemon), since
+  `config.mjs` throws without an injected `DomainPlugin` and this core ships none by design -- the PR
+  documents the tenant-layered-image extension pattern for the daemon rather than papering over that
+  constraint. `docker build .` itself could not be verified (`docker --version` was blocked by this
+  session's own sandbox, the same restriction the subagent independently hit) -- accepted per AC5's own
+  fallback clause since the subagent verified the exact `ENTRYPOINT`/`CMD` path by running
+  `gateway/cli.mjs` directly outside Docker. Squash-merged via `gh pr merge 41 --squash --delete-branch`
+  (remote branch delete succeeded; local worktree/branch cleanup needed a follow-up `git worktree
+  remove --force` + `git branch -d` since the subagent's worktree still held the branch checked out).
+  Pulled to the primary checkout (`45cb3b0`) and re-ran `npm test` there: 853/862 pass, 1 fail = the
+  already-known `harness-adapters.test.mjs` flake (29/29 clean in isolation), not a regression.
+- **Rationale:** This is squarely the orchestrator's standing authority -- author (subagent) never
+  merges own work, orchestrator verifies >=1 AC and runs the full suite from the primary checkout
+  before merging, and merging a Track-A PR with no chokepoint/schema/spend/deploy implications is not
+  a §6 hard-stop. Docker-build-unverifiable is a sandbox limitation shared by both the reviewer and the
+  author, not a reason to block an otherwise well-scoped, correctly-invariant-respecting PR indefinitely
+  -- the PR is honest about the gap rather than claiming false verification, which is what the AC
+  actually asked for.
+- **Alternatives:** (a) Hold the PR open until a session with Docker access can verify `docker build .`
+  -- rejected, no such session is known to exist yet and the fallback verification (direct
+  `gateway/cli.mjs` run matching the exact ENTRYPOINT/CMD) is a reasonable substitute per the card's own
+  AC5 wording. (b) Ask the founder to verify the Docker build before merging -- rejected, not a §6
+  hard-stop condition, and batching it into a checkpoint digest is enough if it turns out to matter.
+- **Reversibility:** Squash-merge to `main` is not trivially reversible (would need a revert PR), but
+  the change is purely additive (4 new files, nothing modified/deleted) and low-risk; full suite
+  confirmed no regression before considering the card done.
+
+### F-001 · FOUNDER SIGN-OFF — Gate-2 APPROVED (2026-07-18, via Claude/Cowork)
+- **Decision:** Gate-2 (real DeepSeek spend) is APPROVED. Weekly cap: **$10 USD**, enforced by the
+  gateway (cost-based cap in mos-dev policy). C7 (mos-dev rebuild + cadence on) is UNBLOCKED.
+- **Also fixed by founder side:** working-directory access granted — `.claude/settings.local.json`
+  `additionalDirectories` + conductor `--add-dir` now include `C:\projects\mos-dev` and the
+  mos-worktree roots. C7 is fully dispatchable.
+- **Instruction:** set the mos-dev policy's USD cost cap to $10/week (and a sensible per-5h slice),
+  keep token caps as belt-and-suspenders, and quote actual USD spend in every checkpoint.

@@ -97,11 +97,20 @@ async function main() {
 
   if (!shouldSpawn) { console.log(`[conductor] skip: ${reason}`); return; }
 
+  // COOL-DOWN (2026-07-18): a session boot is expensive (full durable-state read). Respawning every
+  // 5 min turned one blocker into 26 boots that burned the whole window. Minimum 60 min between
+  // spawns — a healthy session lives for hours; anything that dies faster needs a founder look anyway.
+  const SPAWN_STAMP = join(dirname(LEASE_PATH), 'conductor-last-spawn');
+  const lastSpawn = (() => { try { return Number(readFileSync(SPAWN_STAMP, 'utf8')); } catch { return 0; } })();
+  if (now - lastSpawn < 60 * 60_000) { console.log('[conductor] skip: cool-down (last spawn < 60 min ago)'); return; }
+  try { writeFileSync(SPAWN_STAMP, String(now)); } catch { /* best-effort */ }
+
   const cmd = 'claude';
   // acceptEdits alone DENIES Bash execution in headless mode — sessions #5–#24 (2026-07-18) burned a
   // whole night unable to run `npm test`/`git add`. Execution tools must be explicitly allowed
   // (mirrored in .claude/settings.local.json as belt-and-suspenders).
   const args = ['-p', `@${RESUME_PROMPT}`, '--permission-mode', 'acceptEdits',
+    '--add-dir', 'C:\\projects\\mos-dev', '--add-dir', 'C:\\projects\\.mos-worktrees',
     '--allowedTools', 'Bash(git:*)', 'Bash(gh:*)', 'Bash(npm:*)', 'Bash(node:*)', 'Bash(npx:*)'];
   if (dry) { console.log(`[conductor] DRY-RUN would spawn (${reason}); in_flight=${(continuity.in_flight_cards || []).map(c => c.card).join(',') || 'none'}\n  ${cmd} ${args.join(' ')}`); return; }
 
