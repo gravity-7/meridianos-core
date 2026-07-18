@@ -1,0 +1,35 @@
+# L2 packaging (C6) — keep the image small, and keep session/secret state OUT of every layer.
+
+# Dependency / VCS / editor cruft — reinstalled by `npm ci` inside the build, never copied in.
+node_modules/
+.git/
+.github/
+.claude/
+.vscode/
+*.log
+
+# Tests, docs, and repo-hygiene files with no runtime purpose in the image.
+tests/
+test/
+gateway/tests/
+docs/
+*.test.mjs
+README.md
+RESUME-PROMPT.md
+OWNERSHIP.md
+.npmignore
+.npmrc.publish
+
+# Orchestrator/session state — NEVER bake secrets, run history, or machine-local DBs into an
+# image. `.ai/memory`, `.ai/contracts`, `.ai/cards` are durable orchestrator bookkeeping with no
+# runtime purpose in a tenant container either; a tenant supplies its OWN `.ai/` at runtime via a
+# mounted volume (see docker-compose.yml + docs/DEPLOY.md).
+.ai/
+.mos-worktrees/
+
+# Local dev artifacts.
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
