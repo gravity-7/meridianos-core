@@ -99,9 +99,10 @@ concurrency, not just unit-mocked:
   `openLedger`), and every aggregate query (`queryWindow`) only ever sums non-null columns — a
   malformed or partial row degrades to an `unknownRuns`/`costUnknownRuns` counter rather than being
   silently coerced into the sum.
-- Grep count across the repo: **849 `test()` cases across 78 `*.test.mjs` files** (counted directly
-  from source in this drafting pass; not independently re-executed here — running the full suite to
-  confirm current pass/fail state is a `TBD` for whoever ships this card).
+- Suite size and status, **executed and verified** (Node 24.15.0, at the `0.2.1` release commit,
+  2026-07-18): **860 tests — 851 pass, 0 fail, 9 skipped.** The 9 skips are provider/harness e2e tests
+  that self-skip without a live key or the relevant CLI on PATH (by design; they are the live-provider
+  conformance battery, not dead tests). This is a real run, not a grep.
 
 ---
 
@@ -145,9 +146,11 @@ This section is not optional. A battle card that overclaims is worse than none.
   tested to onboard a new OpenAI-wire endpoint quickly — see `tests/ollama-e2e.test.mjs`'s framing of
   its own conformance battery as "onboard any new provider in a minute"), not yet a long list of
   shipped, pre-wired integrations.
-- **Test-suite pass/fail status is `TBD` for this draft.** The 849-test count above is a static grep,
-  not a fresh `npm test` run in this drafting session — do not quote a pass rate without running the
-  suite fresh.
+- **No primary artifact of a live enforcement denial.** The surviving dogfood ledger was queried
+  directly (2026-07-18): 64 metered calls, **all `allow`, zero denies**. The deny path is proven at
+  the process level offline (`tests/exit-confirm-e2e.test.mjs`) and in unit/integration tests, but
+  enforcement firing against live *paid* traffic has no recoverable evidence. Closing this costs
+  ~$0.006 — see `docs/dogfood-29-confirm.md`. Until then, do not claim a live denial.
 - **No customer-facing performance/latency numbers exist.** Gateway-added latency, throughput under
   load, and any SLA figure are all `TBD` — they would come from a dedicated load-test pass, which has
   not been run and is not in this repo.

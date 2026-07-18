@@ -66,6 +66,29 @@ the gateway, with the actual result recorded in the docs this repo ships:
 And from `docs/PROVIDERS.md`'s DeepSeek section: *"the one we've dogfooded live through the gateway
 (a real call metered exactly: 9 in / 1 out / 10 total)."*
 
+### The strongest artifact: the dogfood ledger itself
+
+Beyond the single reference call above, a **full autonomous agent run** was metered end-to-end and the
+ledger survives as a queryable SQLite database (`.ai/gateway/ledger.db` in the dev tenant). Queried
+directly on 2026-07-18:
+
+| Metric | Value |
+|---|---|
+| Metered calls | **64**, every one with an `enforcement_decision` recorded |
+| Window | `2026-07-16T08:00:52Z` → `08:11:09Z` (~10 min), single task `DOG-1` |
+| Tokens | 33,756 in / 36,587 out |
+| **Real cost** | **$0.04651455** — exact, per call, not estimated |
+| Provider / model | `deepseek` / `deepseek-v4-pro`, anthropic wire |
+
+Every row carries `tenant`, `agent`, `session`, `run_id`, `request_id`, `provider`, `model`, `wire`,
+`upstream_status`, `latency_ms`, the full token breakdown, `cost_usd`, `enforcement_decision`, and
+`cap_window` (`gateway/ledger.mjs` schema). **This is the demo**: not a slide claiming per-call cost
+attribution, but a database a prospect can be walked through, one row per real call, summing to a
+real dollar figure on a real autonomous run.
+
+**What this ledger does NOT contain: any `deny` rows.** All 64 events are `allow` — see the caveat in
+item 3 below. Do not present this ledger as evidence of enforcement firing.
+
 ### What it proved, concretely, and where each claim lives in the code
 
 1. **Exact per-call metering on live traffic.** The gateway parsed DeepSeek's real Anthropic-shaped
@@ -82,13 +105,23 @@ And from `docs/PROVIDERS.md`'s DeepSeek section: *"the one we've dogfooded live 
    in the real traffic path is positioned to catch.
 3. **Inline enforcement denial semantics, engineered and testable (see caveat).** The deny path
    (non-retryable 403, `x-should-retry: false`, wire-shaped `permission_error`) is implemented and
-   unit/integration-tested in `gateway/tests/server.test.mjs`. **Caveat, stated plainly:** the
-   `docs/GATEWAY.md`/`docs/PROVIDERS.md` dogfood description names one successful metered call; it
-   does not itself document a live run that crossed a cap and got denied. Whether an actual denial
-   was demonstrated live (versus proven only in tests) is `TBD` — verify against the live session
-   transcript/PR before stating "we saw a live denial" to a prospect. What we can say without caveat:
-   the denial code path is real, wired into the request handler before forwarding
-   (`gateway/server.mjs`'s `handleRequest`), and covered by `gateway/tests/server.test.mjs`.
+   unit/integration-tested in `gateway/tests/server.test.mjs`. **Caveat — checked, not assumed:** the
+   surviving dogfood ledger was queried directly (2026-07-18) and contains **64 rows, all
+   `enforcement_decision = 'allow'`, zero denies**. A live capped run is described in session notes,
+   but its events are not in this ledger and could not be recovered, so **we have no primary artifact
+   of enforcement firing against live paid traffic.** Do not tell a prospect "we saw a live denial."
+
+   What we *can* say without caveat: the deny path is real, runs before forwarding
+   (`gateway/server.mjs`'s `handleRequest` → `checkVerdict` → `sendDeny`), and is proven at the
+   process level — a **real `claude` CLI**, spawned through the production path against a real gateway
+   past its cap, exits non-zero in under 2.5s with `API Error: 403 gateway: over budget (5h)`, upstream
+   never dialed (`tests/exit-confirm-e2e.test.mjs`, shipped in `0.2.1`). That is a live process
+   confirmation against a stub provider, not against paid traffic.
+
+   **Closing this gap costs ~$0.006.** `docs/dogfood-29-confirm.md` is the exact recipe — set a small
+   cap, run one throwaway card, expect a `deny` row in the ledger. Running it converts this caveat
+   into the single most persuasive artifact the product has. It is the highest-ROI unfinished item in
+   this document.
 4. **`cost_usd` recorded per event.** `gateway/ledger.mjs`'s `appendEvent` writes a `cost_usd` column
    per token-event, computed via `pricing.mjs`'s `costFor()` and injected as a seam
    (`docs/PRICING.md`: *"Every `token-event`'s `costUsd` is that real dollar figure, or `null` when
