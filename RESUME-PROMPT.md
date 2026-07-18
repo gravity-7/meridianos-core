@@ -7,13 +7,12 @@ by the conductor because a work window is open. **Assume you are a resume, not a
 
 ## Boot sequence (do this in order, before any new dispatch)
 
-1. **Read durable state** (these are ground truth, in this order):
-   - `.ai/state/continuity.json` — session #, phase, `in_flight_cards`, `held_chokepoints`,
-     `resume_at`, `exit_class`, `next_dispatch_intentions`.
-   - The newest `.ai/memory/checkpoint-*.md` — last posted digest.
-   - `.ai/memory/decision-log.md` — autonomous decisions taken so far (append-only; newest last).
-   - `OWNERSHIP.md` — the file-ownership map + which cards are 🟡 in-flight and what chokepoints they hold.
-   - `.ai/cards/README.md` + `.ai/contracts/*` — the backlog and interface contracts.
+1. **Read durable state — CHEAPLY (boot-cost rule, 2026-07-18).** Boot reads are capped: read ONLY
+   `.ai/state/continuity.json` + the single newest `.ai/memory/checkpoint-*.md` + `OWNERSHIP.md`.
+   Read the decision log via `tail -c 4000` (never the whole file — it is >80KB), and open older
+   checkpoints, cards, or contracts ONLY when a specific dispatch needs that specific file. A boot
+   that re-reads everything costs more than the work it enables — 26 such boots once burned an
+   entire 5h window.
 2. **Reconcile leases & in-flight work.** For each `in_flight_cards` entry, check its branch/PR
    (`git branch -a`, `gh pr list`). A dead subagent resumes from its branch — do not restart from
    scratch. Clear any stale `.ai/state/orchestrator.lease` whose PID is dead.
