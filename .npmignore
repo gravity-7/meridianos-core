@@ -1,0 +1,9 @@
+# Orchestrator/dev bookkeeping — git-tracked (durable across disposable sessions per the
+# continuity protocol) but MUST NOT ship in the published @gravity-7/meridianos-core tarball.
+# NOTE: when this file exists, npm uses it INSTEAD of .gitignore for packaging. node_modules,
+# .git, and friends are always auto-excluded by npm regardless.
+.npmrc.publish
+.ai/
+.mos-worktrees/
+OWNERSHIP.md
+RESUME-PROMPT.md

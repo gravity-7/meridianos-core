@@ -1,0 +1,402 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: #050a15;
+    color: #fff;
+    font-family: 'Inter', sans-serif;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+#animation-container {
+    position: relative;
+    width: 1920px;
+    height: 1080px;
+    max-width: 100vw;
+    max-height: 100vh;
+    background: radial-gradient(circle at center, #0a1128 0%, #02040a 100%);
+    overflow: hidden;
+    box-shadow: 0 0 50px rgba(0,0,0,0.8);
+}
+
+.scene {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.scene.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+.glass-panel {
+    background: rgba(20, 30, 50, 0.4);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 24px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+}
+
+/* Scene 1 */
+#chaos-particles {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+}
+
+.particle {
+    position: absolute;
+    width: 4px;
+    height: 20px;
+    background: linear-gradient(to bottom, transparent, #00f0ff);
+    border-radius: 2px;
+    filter: blur(1px);
+    box-shadow: 0 0 10px #00f0ff;
+}
+
+#cost-counter-container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    z-index: 10;
+}
+
+.counter-label {
+    font-size: 24px;
+    letter-spacing: 4px;
+    color: #ff3366;
+    margin-bottom: 10px;
+    opacity: 0.8;
+}
+
+#cost-counter {
+    font-size: 120px;
+    font-weight: 800;
+    color: #ff3366;
+    text-shadow: 0 0 40px rgba(255, 51, 102, 0.6);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Scene 2 */
+#organized-streams {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+}
+
+.stream-line {
+    position: absolute;
+    height: 2px;
+    width: 100%;
+    background: linear-gradient(90deg, transparent, rgba(0, 240, 255, 0.2), transparent);
+}
+
+.stream-packet {
+    position: absolute;
+    width: 60px;
+    height: 4px;
+    background: #00f0ff;
+    box-shadow: 0 0 15px #00f0ff, 0 0 30px #00f0ff;
+    border-radius: 2px;
+    top: -1px;
+}
+
+#meridian-hub {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    width: 300px;
+    height: 300px;
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 20;
+    box-shadow: 0 0 60px rgba(0, 240, 255, 0.2), inset 0 0 30px rgba(0, 240, 255, 0.1);
+}
+
+.hub-core {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #fff, #00f0ff 40%, transparent 80%);
+    box-shadow: 0 0 50px #00f0ff;
+    animation: pulse 2s infinite alternate;
+}
+
+@keyframes pulse {
+    from { transform: scale(0.9); opacity: 0.8; }
+    to { transform: scale(1.1); opacity: 1; }
+}
+
+.hub-label {
+    margin-top: 20px;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    color: #fff;
+}
+
+#shockwave {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 4px solid #00f0ff;
+    transform: translate(-50%, -50%);
+    opacity: 0;
+    z-index: 15;
+}
+
+/* Scene 3 */
+#vendor-nodes {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    z-index: 10;
+}
+
+.vendor-node {
+    position: absolute;
+    width: 100px;
+    height: 100px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #e0e0e0;
+    font-size: 16px;
+    font-weight: 600;
+    opacity: 0;
+    text-align: center;
+    padding: 10px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    backdrop-filter: blur(10px);
+}
+
+#connections-svg-container {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    z-index: 5;
+}
+
+.connection-path {
+    fill: none;
+    stroke: rgba(0, 240, 255, 0.3);
+    stroke-width: 2;
+    stroke-dasharray: 10, 10;
+    animation: dash 20s linear infinite;
+}
+
+@keyframes dash {
+    to { stroke-dashoffset: -1000; }
+}
+
+/* Scene 4 */
+#dashboard {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 800px;
+    padding: 40px;
+    z-index: 30;
+    opacity: 0;
+}
+
+.dash-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    padding-bottom: 20px;
+    margin-bottom: 30px;
+}
+
+.dash-header h2 {
+    font-weight: 400;
+    color: #e0e0e0;
+}
+
+.dash-status {
+    background: rgba(0, 255, 100, 0.2);
+    color: #00ff64;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
+.meter-row {
+    margin-bottom: 25px;
+    display: flex;
+    align-items: center;
+    position: relative;
+}
+
+.meter-label {
+    width: 200px;
+    font-size: 18px;
+    color: #aaa;
+}
+
+.meter-bar-bg {
+    flex-grow: 1;
+    height: 12px;
+    background: rgba(0,0,0,0.4);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.meter-bar {
+    height: 100%;
+    width: 0%;
+    border-radius: 6px;
+}
+
+.meter-bar.green {
+    background: linear-gradient(90deg, #00f0ff, #00ff64);
+    box-shadow: 0 0 10px rgba(0, 255, 100, 0.5);
+}
+
+.meter-bar.orange {
+    background: linear-gradient(90deg, #ff9900, #ff3300);
+    box-shadow: 0 0 10px rgba(255, 51, 0, 0.5);
+}
+
+.alert-icon {
+    position: absolute;
+    right: -20px;
+    background: #ff3300;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+    padding: 4px 8px;
+    border-radius: 4px;
+    opacity: 0;
+    transform: translateX(20px);
+}
+
+/* Scene 5 */
+#shield-icon {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    width: 200px;
+    height: 200px;
+    color: #00f0ff;
+    filter: drop-shadow(0 0 30px rgba(0, 240, 255, 0.6));
+    z-index: 40;
+}
+
+#city-bg {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    background: 
+        linear-gradient(to top, rgba(5, 10, 21, 1), transparent),
+        url('data:image/svg+xml;utf8,<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"><rect x="10" y="40" width="20" height="60" fill="rgba(255,255,255,0.03)"/><rect x="40" y="20" width="30" height="80" fill="rgba(255,255,255,0.02)"/><rect x="80" y="50" width="15" height="50" fill="rgba(255,255,255,0.04)"/></svg>') 
+        repeat-x bottom;
+    background-size: 400px auto;
+    opacity: 0;
+    z-index: 5;
+}
+
+#final-logo {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    opacity: 0;
+    z-index: 50;
+}
+
+#final-logo h1 {
+    font-size: 100px;
+    font-weight: 800;
+    letter-spacing: -2px;
+    background: linear-gradient(to right, #fff, #00f0ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 20px;
+}
+
+#final-logo p {
+    font-size: 24px;
+    color: #aaa;
+    letter-spacing: 4px;
+}
+
+/* Subtitles */
+#subtitles {
+    position: absolute;
+    bottom: 60px;
+    left: 10%;
+    width: 80%;
+    text-align: center;
+    font-size: 32px;
+    font-weight: 300;
+    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.9);
+    text-shadow: 0 2px 10px rgba(0,0,0,0.8);
+    z-index: 100;
+    opacity: 0;
+}
+
+#subtitles span.highlight {
+    color: #00f0ff;
+    font-weight: 600;
+}
+
+#subtitles span.danger {
+    color: #ff3366;
+    font-weight: 600;
+}
+
+#play-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: #00f0ff;
+    color: #000;
+    font-size: 24px;
+    font-weight: 800;
+    padding: 20px 40px;
+    border-radius: 40px;
+    cursor: pointer;
+    z-index: 1000;
+    transition: all 0.3s;
+    box-shadow: 0 0 30px rgba(0, 240, 255, 0.4);
+}
+
+#play-btn:hover {
+    transform: translate(-50%, -50%) scale(1.05);
+    box-shadow: 0 0 50px rgba(0, 240, 255, 0.6);
+}

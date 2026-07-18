@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MeridianOS Animation</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="animation-container">
+        <!-- Background -->
+        <div class="bg-layer"></div>
+        
+        <!-- Scene 1: Chaos -->
+        <div id="scene-1" class="scene active">
+            <div id="chaos-particles"></div>
+            <div id="cost-counter-container">
+                <div class="counter-label">UNMANAGED COMPUTE SPEND</div>
+                <div id="cost-counter">$0.00</div>
+            </div>
+        </div>
+
+        <!-- Scene 2: Hub & Order -->
+        <div id="scene-2" class="scene">
+            <div id="organized-streams"></div>
+            <div id="meridian-hub" class="glass-panel">
+                <div class="hub-core"></div>
+                <div class="hub-label">MeridianOS</div>
+            </div>
+            <div id="shockwave"></div>
+        </div>
+
+        <!-- Scene 3: Scalability -->
+        <div id="scene-3" class="scene">
+            <div id="vendor-nodes"></div>
+            <div id="connections-svg-container">
+                <svg id="connections-svg" width="100%" height="100%"></svg>
+            </div>
+        </div>
+
+        <!-- Scene 4: Cost Governance -->
+        <div id="scene-4" class="scene">
+            <div id="dashboard" class="glass-panel">
+                <div class="dash-header">
+                    <h2>Live Spend Governance</h2>
+                    <div class="dash-status">ACTIVE</div>
+                </div>
+                <div class="dash-body">
+                    <div class="meter-row">
+                        <div class="meter-label">Model A (GPT-4)</div>
+                        <div class="meter-bar-bg"><div class="meter-bar green" id="meter-1"></div></div>
+                    </div>
+                    <div class="meter-row">
+                        <div class="meter-label">Model B (Claude 3)</div>
+                        <div class="meter-bar-bg"><div class="meter-bar green" id="meter-2"></div></div>
+                    </div>
+                    <div class="meter-row alert-row">
+                        <div class="meter-label">Model C (Llama 3)</div>
+                        <div class="meter-bar-bg"><div class="meter-bar orange" id="meter-3"></div></div>
+                        <div class="alert-icon" id="gate-block">BLOCK</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scene 5: Shield & Conclusion -->
+        <div id="scene-5" class="scene">
+            <div id="shield-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+            </div>
+            <div id="city-bg"></div>
+            <div id="final-logo">
+                <h1>MeridianOS</h1>
+                <p>Limitless Power. Absolute Control.</p>
+            </div>
+        </div>
+
+        <!-- UI Overlays -->
+        <div id="subtitles"></div>
+        <div id="play-btn">START ANIMATION</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
