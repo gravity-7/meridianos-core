@@ -25,7 +25,7 @@ import { handleAction } from './actions.mjs';
 import { readSpec, writeSpec } from './spec-file.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const INDEX = join(HERE, 'index.html');
+const INDEX = join(HERE, 'index_control.html');
 const ALLOWED = new Set(LEVER_PATHS);
 const ACTION_PATHS = new Set(['/api/run', '/api/task', '/api/verify', '/api/escalation']);
 const STATUS_TTL_MS = 2000; // dedupe bursty polls; buildStatus rescans transcripts, so don't do it per-request
