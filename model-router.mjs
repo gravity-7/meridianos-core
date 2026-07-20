@@ -19,11 +19,11 @@
  *   critical    → whole-repo migration, release audit, multi-service refactor (top 1–2%)
  */
 import { parseJsonArray } from './state.mjs';
-import { resolveProvider, modelForTier } from './providers.mjs';
+import { resolveProvider, modelForTier, TIERS } from './providers.mjs';
 
 // ─── Complexity tiers ──────────────────────────────────────────────────────
 
-export const TIERS = ['simple', 'medium', 'medium_high', 'complex', 'critical'];
+export { TIERS };
 const TIER_INDEX = Object.fromEntries(TIERS.map((t, i) => [t, i]));
 
 // ─── Task categories ──────────────────────────────────────────────────────

@@ -10,11 +10,16 @@
  * since usage-readers.mjs doesn't currently split cached vs fresh input tokens per run.
  */
 import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_PRICING_PATH = join(HERE, 'pricing.json');
 
 /** Parsed catalog, or {} if the file is missing/malformed — callers then see null costs, never a crash.
- *  `config` is the injected AiosConfig (REQUIRED); it only matters when `path` itself is omitted. */
+ *  `config` is the injected AiosConfig; it only matters when `path` itself is omitted. */
 export function loadPricing(path = undefined, config) {
-  const p = path ?? config.pricingPath;
+  const p = path ?? config?.pricingPath ?? DEFAULT_PRICING_PATH;
   try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return {}; }
 }
 

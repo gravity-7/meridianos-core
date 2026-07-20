@@ -13,7 +13,8 @@
  * model-router.mjs. Absent policy → code defaults. This module never writes policy.yaml.
  */
 import { loadPolicy } from './budget.mjs';
-import { TIERS } from './model-router.mjs';
+
+export const TIERS = ['simple', 'medium', 'medium_high', 'complex', 'critical'];
 
 const VALID_WIRES = ['anthropic', 'openai'];
 
