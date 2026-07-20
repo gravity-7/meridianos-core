@@ -23,6 +23,13 @@ import { loadPolicy } from '../budget.mjs';
 import { validatePolicy, applyDottedUpdates } from '../policy-validate.mjs';
 import { handleAction } from './actions.mjs';
 import { readSpec, writeSpec } from './spec-file.mjs';
+import {
+  getSpendSummary,
+  getAgentSpend,
+  getModelSpend,
+  getDenialEvents,
+  getRecentEvents,
+} from './gateway-api.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.html');
@@ -171,6 +178,23 @@ export function createDashboardServer(config) {
         const t = Date.now();
         if (t - statusCache.t >= STATUS_TTL_MS) statusCache = { t, body: JSON.stringify(buildStatus({ config })) };
         return send(res, 200, statusCache.body);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/summary') {
+        return send(res, 200, JSON.stringify(getSpendSummary(config)));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/agents') {
+        return send(res, 200, JSON.stringify(getAgentSpend(config)));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/models') {
+        return send(res, 200, JSON.stringify(getModelSpend(config)));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/denials') {
+        const limit = Number(url.searchParams.get('limit')) || 50;
+        return send(res, 200, JSON.stringify(getDenialEvents(config, limit)));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/events') {
+        const limit = Number(url.searchParams.get('limit')) || 50;
+        return send(res, 200, JSON.stringify(getRecentEvents(config, limit)));
       }
       if (req.method === 'GET' && url.pathname === '/api/spec') {
         const path = url.searchParams.get('path');

@@ -428,6 +428,93 @@ button:active { transform: translateY(0); box-shadow: none; }
     <div class="grid" id="providerCostGrid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"></div>
   </div>
 
+  <!-- Gateway Spend Dashboard (F004) -->
+  <div class="card live" id="gatewaySpendCard" style="margin-bottom: 1.5rem;">
+    <div class="h" style="justify-content: space-between;">
+      <span>gateway spend dashboard <span class="badge b-accent">ledger.db</span></span>
+      <span style="font-size: 11px; font-weight: normal; color: var(--text-muted);" id="gatewayRefreshTimer">auto-refreshes every 10s</span>
+    </div>
+
+    <!-- Summary Metrics -->
+    <div class="grid" id="gatewaySummaryGrid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 1.25rem;">
+      <div class="tile">
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Total Spend</div>
+        <div style="font-size: 20px; font-weight: 600; color: var(--text-primary); margin-top: 4px;" id="gwTotalCost">$0.00</div>
+      </div>
+      <div class="tile">
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Total Tokens</div>
+        <div style="font-size: 20px; font-weight: 600; color: var(--text-primary); margin-top: 4px;" id="gwTotalTokens">0</div>
+      </div>
+      <div class="tile">
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Total Calls</div>
+        <div style="font-size: 20px; font-weight: 600; color: var(--text-primary); margin-top: 4px;" id="gwTotalCalls">0</div>
+      </div>
+      <div class="tile">
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Enforced Denials</div>
+        <div style="font-size: 20px; font-weight: 600; color: var(--text-danger); margin-top: 4px;" id="gwDenyCount">0</div>
+      </div>
+      <div class="tile">
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Active Fleet</div>
+        <div style="font-size: 20px; font-weight: 600; color: var(--text-accent); margin-top: 4px;" id="gwActiveAgents">0</div>
+      </div>
+    </div>
+
+    <!-- Split view for Agent Breakdown and Model Distribution -->
+    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem;">
+      <div class="tile" style="padding: 1rem;">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text-secondary);">Per-Agent Breakdown</div>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 12px;" id="gwAgentTable">
+            <thead>
+              <tr style="text-align: left; border-bottom: 1px solid var(--border); color: var(--text-muted);">
+                <th style="padding: 6px;">Agent</th>
+                <th style="padding: 6px;">Calls</th>
+                <th style="padding: 6px;">Tokens (In/Out)</th>
+                <th style="padding: 6px;">Spend</th>
+                <th style="padding: 6px;">Denies</th>
+              </tr>
+            </thead>
+            <tbody><tr><td colspan="5" style="padding: 10px; color: var(--text-muted);">Loading agent data...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="tile" style="padding: 1rem;">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text-secondary);">Model &amp; Provider Usage</div>
+        <div id="gwModelList" style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="font-size: 12px; color: var(--text-muted);">Loading model breakdown...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Denials Timeline -->
+    <div class="tile" id="gwDenialsSection" style="padding: 1rem; margin-bottom: 1.25rem; display: none; background: var(--bg-danger); border-color: rgba(220, 38, 38, 0.3);">
+      <div style="font-size: 13px; font-weight: 600; color: var(--text-danger); margin-bottom: 8px;">Policy Enforcement Denials</div>
+      <div id="gwDenialsList" style="display: flex; flex-direction: column; gap: 6px;"></div>
+    </div>
+
+    <!-- Recent Metered Calls Log -->
+    <div style="margin-top: 8px;">
+      <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary);">Recent Metered Calls (Audit Trail)</div>
+      <div style="max-height: 250px; overflow-y: auto; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius);">
+        <table style="width: 100%; border-collapse: collapse; font-size: 12px;" id="gwEventsTable">
+          <thead style="position: sticky; top: 0; background: var(--surface-1); border-bottom: 1px solid var(--border);">
+            <tr style="text-align: left; color: var(--text-muted);">
+              <th style="padding: 6px 8px;">Time</th>
+              <th style="padding: 6px 8px;">Agent</th>
+              <th style="padding: 6px 8px;">Provider / Model</th>
+              <th style="padding: 6px 8px;">Tokens</th>
+              <th style="padding: 6px 8px;">Cost</th>
+              <th style="padding: 6px 8px;">Latency</th>
+              <th style="padding: 6px 8px;">Verdict</th>
+            </tr>
+          </thead>
+          <tbody><tr><td colspan="7" style="padding: 10px; color: var(--text-muted);">Loading metered calls...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
     <div class="card live">
       <div class="h">active now</div>
@@ -1222,6 +1309,117 @@ function render(s){
   if(!controlsInit){ populateControls(s.policy||{}); controlsInit=true; }
 }
 
+async function refreshGatewaySpendDashboard() {
+  try {
+    const [sumRes, agentRes, modelRes, denialRes, eventsRes] = await Promise.all([
+      fetch('/api/summary'),
+      fetch('/api/agents'),
+      fetch('/api/models'),
+      fetch('/api/denials'),
+      fetch('/api/events?limit=50')
+    ]);
+
+    if (sumRes.ok) {
+      const sum = await sumRes.json();
+      if ($('gwTotalCost')) $('gwTotalCost').textContent = '$' + Number(sum.totalCost || 0).toFixed(2);
+      if ($('gwTotalTokens')) $('gwTotalTokens').textContent = fmt(sum.totalTokens || 0);
+      if ($('gwTotalCalls')) $('gwTotalCalls').textContent = fmt(sum.totalCalls || 0);
+      if ($('gwDenyCount')) $('gwDenyCount').textContent = fmt(sum.denyCount || 0);
+      if ($('gwActiveAgents')) $('gwActiveAgents').textContent = fmt(sum.activeAgents || 0);
+    }
+
+    if (agentRes.ok) {
+      const agents = await agentRes.json();
+      const tbody = $('gwAgentTable')?.querySelector('tbody');
+      if (tbody) {
+        if (!agents.length) {
+          tbody.innerHTML = '<tr><td colspan="5" style="padding:10px;color:var(--text-muted)">No metered agent activity recorded</td></tr>';
+        } else {
+          tbody.innerHTML = agents.map(a => `
+            <tr style="border-bottom: 1px solid var(--border);">
+              <td style="padding: 6px;"><span class="badge b-accent">${esc(a.agent)}</span></td>
+              <td style="padding: 6px;">${fmt(a.calls)}</td>
+              <td style="padding: 6px;" class="mono">${fmt(a.inputTokens)} / ${fmt(a.outputTokens)}</td>
+              <td style="padding: 6px; font-weight: 500;">$${Number(a.costUsd || 0).toFixed(2)}</td>
+              <td style="padding: 6px;">${a.denyCount > 0 ? `<span class="badge b-danger">${a.denyCount}</span>` : '<span class="badge b-muted">0</span>'}</td>
+            </tr>
+          `).join('');
+        }
+      }
+    }
+
+    if (modelRes.ok) {
+      const models = await modelRes.json();
+      const listEl = $('gwModelList');
+      if (listEl) {
+        if (!models.length) {
+          listEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">No model usage recorded</div>';
+        } else {
+          listEl.innerHTML = models.map(m => `
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px;">
+                <span class="model">${esc(m.provider)} / ${esc(m.model)}</span>
+                <span class="mono" style="font-weight:500;">$${Number(m.costUsd || 0).toFixed(2)} (${m.percentage}%)</span>
+              </div>
+              <div class="meter"><span style="width:${Math.min(m.percentage, 100)}%;background:var(--fill-accent)"></span></div>
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-top:2px;">
+                <span>${fmt(m.calls)} calls</span>
+                <span class="mono">${fmt(m.inputTokens + m.outputTokens)} tokens</span>
+              </div>
+            </div>
+          `).join('');
+        }
+      }
+    }
+
+    if (denialRes.ok) {
+      const denials = await denialRes.json();
+      const section = $('gwDenialsSection');
+      const listEl = $('gwDenialsList');
+      if (section && listEl) {
+        if (!denials.length) {
+          section.style.display = 'none';
+        } else {
+          section.style.display = 'block';
+          listEl.innerHTML = denials.map(d => `
+            <div style="font-size:12px;display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:rgba(0,0,0,0.05);border-radius:4px;">
+              <span><strong>${esc(d.agent)}</strong> denied by cap window <code>${esc(d.capWindow || 'window')}</code> (${esc(d.provider)} / ${esc(d.model)})</span>
+              <span style="font-size:11px;color:var(--text-muted);">${esc((d.ts || '').replace('T', ' ').slice(0, 19))}</span>
+            </div>
+          `).join('');
+        }
+      }
+    }
+
+    if (eventsRes.ok) {
+      const events = await eventsRes.json();
+      const tbody = $('gwEventsTable')?.querySelector('tbody');
+      if (tbody) {
+        if (!events.length) {
+          tbody.innerHTML = '<tr><td colspan="7" style="padding:10px;color:var(--text-muted)">No token events metered yet</td></tr>';
+        } else {
+          tbody.innerHTML = events.map(e => {
+            const verdictBadge = e.enforcementDecision === 'deny' ? 'b-danger' : (e.enforcementDecision === 'warn' ? 'b-warn' : 'b-ok');
+            return `
+              <tr style="border-bottom: 1px solid var(--border);">
+                <td style="padding: 4px 8px; font-size:11px;" class="mono">${esc((e.ts || '').replace('T', ' ').slice(11, 19))}</td>
+                <td style="padding: 4px 8px;">${esc(e.agent)}</td>
+                <td style="padding: 4px 8px;"><span class="model">${esc(e.provider)}/${esc(e.model)}</span></td>
+                <td style="padding: 4px 8px;" class="mono">${fmt(e.totalTokens)}</td>
+                <td style="padding: 4px 8px;" class="mono">${e.costUsd != null ? '$' + Number(e.costUsd).toFixed(4) : '—'}</td>
+                <td style="padding: 4px 8px;" class="mono">${e.latencyMs != null ? e.latencyMs + 'ms' : '—'}</td>
+                <td style="padding: 4px 8px;"><span class="badge ${verdictBadge}">${esc(e.enforcementDecision)}</span></td>
+              </tr>
+            `;
+          }).join('');
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error refreshing Gateway Spend Dashboard:', err);
+  }
+}
+
 async function poll(){
   try{ 
     const r=await fetch('/api/status'); 
@@ -1235,6 +1433,7 @@ async function poll(){
     if(!kill)$('dot').style.background='#0ca30c'; 
   }
   catch(e){ $('dot').style.background='#e34948'; $('clock').textContent='offline'; }
+  refreshGatewaySpendDashboard();
 }
 async function save(){
   try{ const r=await fetch('/api/policy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(collectLevers())});
