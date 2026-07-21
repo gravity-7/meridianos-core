@@ -1,19 +1,34 @@
 # MeridianOS core
 
-Provider/harness-agnostic autonomous agent-orchestration core. Tenant behavior
-(agents, prompts, guardrails, board title, risk taxonomy, budget meter, default
-models, agent harness, task categories) is injected via a `DomainPlugin` passed
-to `createAios`/`resolvePaths` in `config.mjs` — this package contains no
-product-specific defaults.
+Provider/harness-agnostic autonomous agent-orchestration core with **cost governance**.
+Tenant behavior is injected via a `DomainPlugin` — this package carries no product defaults.
 
-Extracted from the `propertyverdict` monorepo (`packages/aios-core/`) at source
-commit `8586747`.
+## Quickstart: Gateway (standalone)
+
+```sh
+export DEEPSEEK_KEY=sk-...
+npx meridian-gateway --port 8787 --provider deepseek --model deepseek-v4-flash
+# → http://127.0.0.1:8787 — every LLM call metered, costed, enforced inline
+```
+
+Point your AI tool's base URL at the gateway. Every call is metered into the ledger.
+Set caps in policy to enforce budgets. Dashboard at `localhost:4317`.
+
+See [docs/GATEWAY.md](./docs/GATEWAY.md) for the full request lifecycle.
+
+## Quickstart: Full MeridianOS (daemon + agents)
+
+```sh
+npm install @gravity-7/meridianos-core
+# Create a DomainPlugin + policy.yaml for your tenant
+node scheduler.mjs
+```
 
 ## Documentation
 
 Full docs live in [`docs/`](./docs/):
 
-- [docs/README.md](./docs/README.md) — overview + architecture (the subsystems and how they fit)
-- [docs/PROVIDERS.md](./docs/PROVIDERS.md) — per-provider reference (endpoints, auth, models, pricing, quirks, doc links)
-- [docs/PRICING.md](./docs/PRICING.md) — pricing source-of-truth + the `aios:pricing:refresh` mechanism
+- [docs/README.md](./docs/README.md) — overview + architecture
 - [docs/GATEWAY.md](./docs/GATEWAY.md) — the gateway sidecar (meter → verdict → enforce, key custody, streaming)
+- [docs/PROVIDERS.md](./docs/PROVIDERS.md) — per-provider reference
+- [docs/PRICING.md](./docs/PRICING.md) — pricing source-of-truth

@@ -169,3 +169,173 @@ export function clearPushed() {
 export function pushedCount() {
   return pushed.size;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F007 — Slack Integration
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Resolve Slack configuration from env vars and policy.yaml.
+ * Priority: $SLACK_WEBHOOK_URL (env) > policy.integrations.slack.webhook_url > null.
+ * Returns `{ enabled, webhookUrl }` — `enabled` is true only when a valid URL exists
+ * AND `integrations.slack.enabled` is not explicitly false.
+ *
+ * @param {object} config - the injected AiosConfig
+ * @param {object} [policy] - parsed policy (or loaded from disk)
+ * @returns {{ enabled: boolean, webhookUrl: string|null }}
+ */
+export function resolveSlackConfig(config, policy = loadPolicy(undefined, config)) {
+  const slack = policy?.integrations?.slack ?? {};
+  const fromEnv = process.env.SLACK_WEBHOOK_URL;
+  const webhookUrl = (fromEnv && /^https?:\/\//i.test(fromEnv))
+    ? fromEnv
+    : ((typeof slack.webhook_url === 'string' && /^https?:\/\//i.test(slack.webhook_url))
+      ? slack.webhook_url
+      : null);
+  const explicitlyDisabled = slack.enabled === false;
+  return { enabled: !!webhookUrl && !explicitlyDisabled, webhookUrl };
+}
+
+/**
+ * Send a Slack Block Kit message to a webhook URL.
+ * Zero npm dependencies — uses Node built-in fetch().
+ *
+ * @param {string} webhookUrl - the Slack incoming webhook URL
+ * @param {object} message - a Slack Block Kit payload ({ blocks: [...], text: "..." })
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function pushToSlack(webhookUrl, message) {
+  if (!webhookUrl || !message) return { ok: false, error: 'missing webhook URL or message' };
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.ok) return { ok: true };
+    const body = await res.text().catch(() => '');
+    return { ok: false, error: `HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}` };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+/**
+ * Format verifier failures as a Slack Block Kit message.
+ *
+ * @param {string} domain - the tenant/domain name (e.g. "mos-dev")
+ * @param {Array<{ task: string, disposition: string, detail: string }>} failures - from verifyCycle results.failed
+ * @returns {{ blocks: Array, text: string }}
+ */
+export function formatVerifierFailure(domain, failures) {
+  const ts = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const blocks = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: ` MeridianOS — Verifier Failure (${failures.length})` },
+    },
+  ];
+
+  for (const f of failures.slice(0, 10)) {
+    const dispEmoji = f.disposition === 'blocked' ? '🔴' : f.disposition === 'bounced' ? '🟡' : '⚪';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `${dispEmoji} *${f.task}*\n>Status: \`${f.disposition}\`\n>${f.detail || 'no detail'}`,
+      },
+    });
+  }
+
+  if (failures.length > 10) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `_...and ${failures.length - 10} more failure(s)_` },
+    });
+  }
+
+  blocks.push({
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text: `${domain} | ${ts}` }],
+  });
+
+  return { blocks, text: `MeridianOS: ${failures.length} verifier failure(s) in ${domain}` };
+}
+
+/**
+ * Format a budget threshold alert as a Slack Block Kit message.
+ * Fires when an agent's usage exceeds the warn threshold (>80% by default).
+ *
+ * @param {string} domain - the tenant/domain name (e.g. "mos-dev")
+ * @param {string} agentName - the agent whose budget is in warning/halt state
+ * @param {object} agentBudget - the budgetStatus()[agent] entry with { state, windows[], usage }
+ * @returns {{ blocks: Array, text: string }} | null if state is 'ok'
+ */
+export function formatBudgetAlert(domain, agentName, agentBudget) {
+  if (!agentBudget || agentBudget.state === 'ok') return null;
+
+  const ts = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const emoji = agentBudget.state === 'halt' ? '🔴' : '🟡';
+  const label = agentBudget.state === 'halt' ? 'BUDGET HALT' : 'Budget Warning';
+
+  const blocks = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: `${emoji} MeridianOS — ${label}` },
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Agent:* \`${agentName}\`  |  *State:* \`${agentBudget.state.toUpperCase()}\``,
+      },
+    },
+  ];
+
+  if (agentBudget.windows) {
+    for (const w of agentBudget.windows) {
+      const capText = w.cap != null ? `${w.cap.toLocaleString('en-US')}` : 'no cap';
+      const usedText = w.used != null ? `${w.used.toLocaleString('en-US')}` : '—';
+      const pctText = w.pct != null ? ` (${w.pct}%)` : '';
+      const wEmoji = w.state === 'halt' ? '🔴' : w.state === 'warn' ? '🟡' : '🟢';
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `${wEmoji} *${w.window} window:* ${usedText} / ${capText} tokens${pctText}`,
+        },
+      });
+    }
+  }
+
+  blocks.push({
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text: `${domain} | ${ts}` }],
+  });
+
+  return { blocks, text: `MeridianOS: ${agentName} budget ${agentBudget.state} in ${domain}` };
+}
+
+/**
+ * Determine whether a given event type should be routed to Slack.
+ * Checks that Slack is configured + enabled, and optionally filters by
+ * `integrations.slack.events` whitelist in policy.yaml.
+ *
+ * @param {object} config - the injected AiosConfig
+ * @param {'verifier_failure'|'budget_breach'|'escalation'} event - the event type
+ * @param {object} [policy] - parsed policy (or loaded from disk)
+ * @returns {{ route: boolean, webhookUrl: string|null }}
+ */
+export function routeToSlack(config, event, policy = loadPolicy(undefined, config)) {
+  const slackCfg = resolveSlackConfig(config, policy);
+  if (!slackCfg.enabled || !slackCfg.webhookUrl) return { route: false, webhookUrl: null };
+
+  const allowedEvents = policy?.integrations?.slack?.events;
+  // If no events whitelist is configured, route ALL event types
+  if (!allowedEvents || !Array.isArray(allowedEvents) || allowedEvents.length === 0) {
+    return { route: true, webhookUrl: slackCfg.webhookUrl };
+  }
+
+  return { route: allowedEvents.includes(event), webhookUrl: slackCfg.webhookUrl };
+}

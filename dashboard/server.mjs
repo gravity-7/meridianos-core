@@ -23,6 +23,8 @@ import { loadPolicy } from '../budget.mjs';
 import { validatePolicy, applyDottedUpdates } from '../policy-validate.mjs';
 import { handleAction } from './actions.mjs';
 import { readSpec, writeSpec } from './spec-file.mjs';
+import { openLedger, listEvents } from '../gateway/ledger.mjs';
+import { openLicenseStore, validateLicense, createLicense, heartbeat } from '../license.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.html');
@@ -171,6 +173,78 @@ export function createDashboardServer(config) {
         const t = Date.now();
         if (t - statusCache.t >= STATUS_TTL_MS) statusCache = { t, body: JSON.stringify(buildStatus({ config })) };
         return send(res, 200, statusCache.body);
+      }
+      // ── Gateway spend dashboard (F004) ──
+      // All data comes from the gateway's own SQLite ledger (.ai/gateway/ledger.db).
+      // Read-only. No auth required (local-only dashboard, same as /api/status).
+      if (req.method === 'GET' && url.pathname === '/api/gateway/summary') {
+        try {
+          const ledger = openLedger(undefined, { config });
+          const totals = ledger.prepare(`SELECT COUNT(*) as calls, SUM(input_tokens) as tokens_in, SUM(output_tokens) as tokens_out, SUM(cost_usd) as cost, COUNT(CASE WHEN enforcement_decision='deny' THEN 1 END) as denies FROM token_events`).get();
+          ledger.close();
+          return send(res, 200, JSON.stringify({
+            calls: totals?.calls ?? 0, tokensIn: totals?.tokens_in ?? 0, tokensOut: totals?.tokens_out ?? 0,
+            costUsd: totals?.cost ?? 0, denies: totals?.denies ?? 0,
+          }));
+        } catch (e) { return send(res, 200, JSON.stringify({ calls:0, tokensIn:0, tokensOut:0, costUsd:0, denies:0, error: e.message })); }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/gateway/agents') {
+        try {
+          const ledger = openLedger(undefined, { config });
+          const rows = ledger.prepare(`SELECT agent, COUNT(*) as calls, SUM(input_tokens) as tokens_in, SUM(output_tokens) as tokens_out, SUM(cost_usd) as cost, COUNT(CASE WHEN enforcement_decision='deny' THEN 1 END) as denies, MAX(ts) as last_seen FROM token_events GROUP BY agent ORDER BY cost DESC`).all();
+          ledger.close();
+          return send(res, 200, JSON.stringify(rows));
+        } catch (e) { return send(res, 200, JSON.stringify([])); }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/gateway/models') {
+        try {
+          const ledger = openLedger(undefined, { config });
+          const rows = ledger.prepare(`SELECT provider, model, COUNT(*) as calls, SUM(input_tokens) as tokens_in, SUM(output_tokens) as tokens_out, SUM(cost_usd) as cost FROM token_events GROUP BY provider, model ORDER BY cost DESC`).all();
+          ledger.close();
+          return send(res, 200, JSON.stringify(rows));
+        } catch (e) { return send(res, 200, JSON.stringify([])); }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/gateway/denials') {
+        try {
+          const ledger = openLedger(undefined, { config });
+          const rows = ledger.prepare(`SELECT ts, agent, cap_window, request_id FROM token_events WHERE enforcement_decision='deny' ORDER BY ts DESC LIMIT 50`).all();
+          ledger.close();
+          return send(res, 200, JSON.stringify(rows));
+        } catch (e) { return send(res, 200, JSON.stringify([])); }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/gateway/events') {
+        try {
+          const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
+          const ledger = openLedger(undefined, { config });
+          const rows = listEvents(ledger, { limit });
+          ledger.close();
+          return send(res, 200, JSON.stringify(rows));
+        } catch (e) { return send(res, 200, JSON.stringify([])); }
+      }
+      // ── License management (F005) ──
+      if (req.method === 'GET' && url.pathname === '/api/license') {
+        try {
+          const key = process.env.MERIDIAN_LICENSE_KEY || '';
+          const db = openLicenseStore();
+          const hb = heartbeat(db, key);
+          db.close();
+          return send(res, 200, JSON.stringify({ key: key ? key.slice(0,8)+'...' : null, ...hb, tierLabel: hb.tier === 'free' ? 'Free' : hb.tier === 'pro' ? 'Pro' : 'Enterprise' }));
+        } catch (e) { return send(res, 200, JSON.stringify({ valid: false, tier: 'free', agentLimit: 1, providerLimit: 1, reason: e.message })); }
+      }
+      if (req.method === 'POST' && url.pathname === '/api/license/activate') {
+        if (!authorized(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'forbidden' }));
+        try {
+          const { key } = JSON.parse((await readBody(req)) || '{}');
+          if (!key) throw new Error('key required');
+          const db = openLicenseStore();
+          const result = validateLicense(db, key);
+          if (!result.valid) { db.close(); return send(res, 200, JSON.stringify({ ok: false, error: result.reason })); }
+          process.env.MERIDIAN_LICENSE_KEY = key;
+          // Update last_validated_at
+          db.prepare('UPDATE licenses SET last_validated_at = ? WHERE key = ?').run(new Date().toISOString(), key);
+          db.close();
+          return send(res, 200, JSON.stringify({ ok: true, tier: result.tier, agentLimit: result.agentLimit }));
+        } catch (e) { return send(res, 200, JSON.stringify({ ok: false, error: e.message })); }
       }
       if (req.method === 'GET' && url.pathname === '/api/spec') {
         const path = url.searchParams.get('path');

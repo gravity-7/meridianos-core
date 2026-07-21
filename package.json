@@ -1,9 +1,9 @@
 {
   "name": "@gravity-7/meridianos-core",
-  "version": "0.2.1",
+  "version": "0.3.7",
   "private": false,
   "type": "module",
-  "description": "MeridianOS — provider/harness-agnostic autonomous agent-orchestration core. Tenant behavior injected via a DomainPlugin.",
+  "description": "MeridianOS — provider/harness-agnostic autonomous agent-orchestration core with cost governance. npx meridian-gateway in 60s.",
   "main": "./config.mjs",
   "exports": {
     ".": "./config.mjs",
@@ -12,11 +12,25 @@
   "bin": {
     "meridian-gateway": "./gateway/cli.mjs"
   },
+  "files": [
+    "*.mjs",
+    "gateway/",
+    "dashboard/",
+    "schema.sql",
+    "pricing.json",
+    "README.md",
+    "docs/GATEWAY.md",
+    "docs/PROVIDERS.md",
+    "docs/PRICING.md"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "dependencies": {
     "better-sqlite3": "12.11.1"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org/"
   },
   "repository": {
     "type": "git",

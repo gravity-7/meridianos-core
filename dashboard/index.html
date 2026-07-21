@@ -424,6 +424,11 @@ button:active { transform: translateY(0); box-shadow: none; }
   </div>
 
   <div class="live">
+    <div class="h">gateway spend · all time <span style="color:var(--text-muted);font-weight:400">· from ledger</span></div>
+    <div class="grid" id="gatewaySpendGrid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"></div>
+  </div>
+
+  <div class="live">
     <div class="h">provider spend · last 7d</div>
     <div class="grid" id="providerCostGrid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"></div>
   </div>
@@ -470,22 +475,8 @@ button:active { transform: translateY(0); box-shadow: none; }
   </div>
 
   <div class="card" id="ctrls">
-    <div class="h">budget &amp; limits</div>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
-      <div class="tile">
-        <div style="font-size:13px;font-weight:500;margin-bottom:6px">claude</div>
-        <div class="lev"><label>model</label><select id="selC" style="flex:1"><option value="claude-opus-4-8">claude-opus-4-8</option><option value="claude-sonnet-5">claude-sonnet-5</option><option value="claude-haiku-4-5">claude-haiku-4-5</option><option value="claude-fable-5">claude-fable-5</option></select></div>
-        <div class="lev"><label>5h cap</label><input type="range" id="capC5" min="500000" max="5000000" step="100000" style="flex:1"><output id="outC5">—</output></div>
-        <div class="lev"><label>week cap</label><input type="range" id="capCW" min="5000000" max="30000000" step="500000" style="flex:1"><output id="outCW">—</output></div>
-      </div>
-      <div class="tile">
-        <div style="font-size:13px;font-weight:500;margin-bottom:6px">antigravity</div>
-        <div class="lev"><label>model</label><select id="selA" style="flex:1"><option value="gemini-3-pro">gemini-3-pro</option><option value="gemini-3-deep-think">gemini-3-deep-think</option></select></div>
-        <div class="lev"><label>5h cap</label><input type="range" id="capA5" min="500000" max="5000000" step="100000" style="flex:1"><output id="outA5">—</output></div>
-        <div class="lev"><label>week cap</label><input type="range" id="capAW" min="5000000" max="30000000" step="500000" style="flex:1"><output id="outAW">—</output></div>
-      </div>
-    </div>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(350px,1fr));margin-top:12px">
+    <div class="h">global budget settings</div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(350px,1fr))">
       <div class="lev g"><label>warn at</label><input type="range" id="warn" min="50" max="95" step="5" style="flex:1"><output id="outWarn">—</output></div>
       <div class="lev g"><label>per-task cap</label><input type="range" id="ptask" min="20000" max="400000" step="10000" style="flex:1"><output id="outPtask">—</output></div>
       <div class="lev g"><label>at warn, downgrade model</label><span class="sw"><input type="checkbox" id="autodown"><i></i></span></div>
@@ -936,6 +927,12 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 const LEVERS=[
   ['warn','agent_budget.warn_pct','num'],['ptask','agent_budget.per_task_tokens','num'],
   ['autodown','agent_budget.auto_downgrade_at_warn','bool'],['attrib','agent_budget.attribution','str'],
+  // Agent budget levers — inline in compute budget tiles
+  ['capB5','agent_budget.builder.per_5h_tokens','num'],['capBW','agent_budget.builder.per_week_tokens','num'],
+  ['capR5','agent_budget.reviewer.per_5h_tokens','num'],['capRW','agent_budget.reviewer.per_week_tokens','num'],
+  ['capD5','agent_budget.designer.per_5h_tokens','num'],['capDW','agent_budget.designer.per_week_tokens','num'],
+  ['capDW5','agent_budget.docs-writer.per_5h_tokens','num'],['capDWW','agent_budget.docs-writer.per_week_tokens','num'],
+  // Legacy provider-level (kept for backward compat)
   ['selC','agent_models.claude.default','str'],['capC5','agent_budget.claude.per_5h_tokens','num'],
   ['capCW','agent_budget.claude.per_week_tokens','num'],
   ['selA','agent_models.antigravity.default','str'],['capA5','agent_budget.antigravity.per_5h_tokens','num'],
@@ -997,20 +994,36 @@ function renderFounderUsage(b){
   el.innerHTML=`founder usage (read-only, ${esc(b.attribution==='total'?'counted in the gauges above':'not gated')}) · ${parts.join(' · ')}`;
 }
 function resetIn(ts){ if(!ts) return ''; const ms=Date.parse(ts)-Date.now(); if(ms<=0) return ' · resetting…'; const h=Math.floor(ms/3600000), m=Math.floor(ms%3600000/60000); return ' · resets in '+(h?h+'h ':'')+m+'m'; }
-// Roster-driven budget cards (§4b-ii): one 5h + one week tile per agent in the roster, instead of
-// the old hardcoded claude/antigravity pair. The roster comes from budget.mayClaim's keys — built
-// 1:1 with config.domain.agents inside budgetStatus() (budget.mjs), so it's always in sync and
-// scales to N agents without any client-side agent-name literals.
-function budgetTile(agent, label, w, resetAt){
+// Roster-driven budget cards with INLINE sliders (§4b-ii + UX improvement):
+// each tile shows the usage meter AND a compact cap slider — no separate widget to scroll to.
+function budgetTile(agent, label, w, resetAt, capSliderId, capPolicyPath, capMin, capMax, capStep){
   const pct = w && w.pct != null ? w.pct : '—';
   const barWidth = Math.min((w && w.pct) || 0, 100);
   const barColor = stateColor(w && w.state);
   const sub = w ? (fmt(w.used)+' / '+fmt(w.cap)+resetIn(resetAt)) : '— / —';
-  return `<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">${esc(agent)} · ${label}</div>`+
-    `<div style="display:flex;align-items:baseline;gap:4px"><span style="font-size:24px;font-weight:500">${pct}</span><span style="font-size:13px;color:var(--text-muted)">%</span></div>`+
-    `<div class="meter"><span style="width:${barWidth}%;background:${barColor}"></span></div>`+
-    `<div class="mono" style="font-size:11px;color:var(--text-muted)">${sub}</div></div>`;
+  const currentCap = (w && w.cap) || 0;
+  // Inline slider for adjusting the cap — compact, same row as the meter
+  const sliderHtml = capSliderId ? `
+    <div class="lev" style="margin-top:6px;gap:4px">
+      <input type="range" id="${capSliderId}" min="${capMin}" max="${capMax}" step="${capStep}" value="${currentCap}" style="flex:1;height:4px"
+        oninput="document.getElementById('out${capSliderId.toUpperCase()}').textContent=fmt(this.value);setDirty(true)"
+        onchange="setDirty(true)">
+      <output id="out${capSliderId.toUpperCase()}" style="font-size:10px;min-width:45px;text-align:right" class="mono">${fmt(currentCap)}</output>
+    </div>` : '';
+  return `<div class="tile">
+    <div style="font-size:12px;color:var(--text-secondary)">${esc(agent)} · ${label}</div>
+    <div style="display:flex;align-items:baseline;gap:4px"><span style="font-size:24px;font-weight:500">${pct}</span><span style="font-size:13px;color:var(--text-muted)">%</span></div>
+    <div class="meter"><span style="width:${barWidth}%;background:${barColor}"></span></div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted)">${sub}</div>${sliderHtml}
+  </div>`;
 }
+// Config for per-agent budget sliders rendered inline in compute budget tiles
+const AGENT_SLIDERS = {
+  builder:       { id5:'capB5',idW:'capBW',path5:'agent_budget.builder.per_5h_tokens',pathW:'agent_budget.builder.per_week_tokens',min5:100000,max5:8000000,minW:500000,maxW:30000000},
+  reviewer:      { id5:'capR5',idW:'capRW',path5:'agent_budget.reviewer.per_5h_tokens',pathW:'agent_budget.reviewer.per_week_tokens',min5:10000, max5:2000000,minW:50000, maxW:10000000},
+  designer:      { id5:'capD5',idW:'capDW',path5:'agent_budget.designer.per_5h_tokens',pathW:'agent_budget.designer.per_week_tokens',min5:50000, max5:3000000,minW:200000, maxW:15000000},
+  'docs-writer': { id5:'capDW5',idW:'capDWW',path5:'agent_budget.docs-writer.per_5h_tokens',pathW:'agent_budget.docs-writer.per_week_tokens',min5:10000, max5:1500000,minW:50000, maxW:8000000},
+};
 function renderBudgetCards(budget){
   const el=$('budgetGrid'); if(!el||!budget) return;
   const roster=Object.keys(budget.mayClaim||{});
@@ -1019,7 +1032,11 @@ function renderBudgetCards(budget){
   el.innerHTML=roster.map(agent=>{
     const windows=(budget[agent]&&budget[agent].windows)||[];
     const w5=windows.find(w=>w.window==='5h'), wk=windows.find(w=>w.window==='week');
-    return budgetTile(agent,'5h',w5,resets[agent+'_5h_at']) + budgetTile(agent,'week',wk,resets[agent+'_week_at']);
+    const cfg=AGENT_SLIDERS[agent];
+    const step5 = cfg ? Math.floor(cfg.max5/30) : 50000;
+    const stepW = cfg ? Math.floor(cfg.maxW/40) : 500000;
+    return budgetTile(agent,'5h',w5,resets[agent+'_5h_at'], cfg?cfg.id5:null, cfg?cfg.path5:null, cfg?cfg.min5:0, cfg?cfg.max5:0, step5)
+         + budgetTile(agent,'week',wk,resets[agent+'_week_at'], cfg?cfg.idW:null, cfg?cfg.pathW:null, cfg?cfg.minW:0, cfg?cfg.maxW:0, stepW);
   }).join('');
 }
 function renderProviderCost(last7d){
@@ -1032,6 +1049,26 @@ function renderProviderCost(last7d){
       `<div style="display:flex;align-items:baseline;gap:4px"><span class="mono" style="font-size:22px;font-weight:500">${costStr}</span></div>`+
       `<div class="mono" style="font-size:11px;color:var(--text-muted)">${fmt(p.billable)} tok · ${p.runs} run${p.runs===1?'':'s'}</div></div>`;
   }).join('');
+}
+async function renderGatewaySpend(){
+  const el=$('gatewaySpendGrid'); if(!el) return;
+  try {
+    const [sum, agents] = await Promise.all([
+      fetch('/api/gateway/summary').then(r=>r.json()).catch(()=>null),
+      fetch('/api/gateway/agents').then(r=>r.json()).catch(()=>null),
+    ]);
+    if (!sum || sum.calls===0) { el.innerHTML='<div style="font-size:12px;color:var(--text-muted)">no gateway events yet — start the daemon with gateway enabled</div>'; return; }
+    const tiles = [
+      `<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">total calls</div><div style="font-size:22px;font-weight:500">${sum.calls.toLocaleString()}</div></div>`,
+      `<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">total tokens</div><div style="font-size:22px;font-weight:500">${fmt((sum.tokensIn||0)+(sum.tokensOut||0))}</div><div class="mono" style="font-size:11px;color:var(--text-muted)">${fmt(sum.tokensIn||0)} in / ${fmt(sum.tokensOut||0)} out</div></div>`,
+      `<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">total cost</div><div style="font-size:22px;font-weight:500;color:var(--text-ok)">\$${(sum.costUsd||0).toFixed(4)}</div></div>`,
+      sum.denies>0 ? `<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">enforced denies</div><div style="font-size:22px;font-weight:500;color:var(--text-warning)">${sum.denies}</div></div>` : '',
+    ];
+    if (agents && agents.length) {
+      tiles.push(`<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">agents</div><div style="font-size:22px;font-weight:500">${agents.length}</div><div class="mono" style="font-size:11px;color:var(--text-muted)">${agents.map(a=>esc(a.agent)).join(', ')}</div></div>`);
+    }
+    el.innerHTML=tiles.filter(Boolean).join('');
+  } catch { el.innerHTML='<div style="font-size:12px;color:var(--text-muted)">gateway ledger unavailable</div>'; }
 }
 function copySession(sess, agent) {
   const cmd = agent === 'antigravity' ? `agy --session ${sess}` : `claude --session-id ${sess}`;
@@ -1200,9 +1237,11 @@ function renderRuns(runs){
 }
 
 function render(s){
-  renderBudgetCards(s.budget);
+  // Don't overwrite agent budget cards while user is adjusting sliders (dirty)
+  if (!dirty) renderBudgetCards(s.budget);
   renderFounderUsage(s.budget);
   renderProviderCost(s.budget.providerUsage && s.budget.providerUsage.last7d);
+  renderGatewaySpend();
   $('clock').textContent=new Date(s.ts).toLocaleTimeString();
   kill=!!s.kill_switch; $('dot').style.background=kill?'#e34948':'#0ca30c';
   const ha = s.health && s.health.agents ? s.health.agents : {};

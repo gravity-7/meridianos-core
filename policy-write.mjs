@@ -11,13 +11,25 @@ import { stripComment, colonIndex } from './yaml-lite.mjs';
 
 /** The exact scalar paths the founder's dashboard is allowed to write. The server whitelists
  *  against this (defence in depth over setPolicyValue's own path check), and the round-trip
- *  test asserts .ai/policy.yaml actually exposes every one. */
+ *  test asserts .ai/policy.yaml actually exposes every one.
+ *
+ *  AGENT-AGNOSTIC: per-agent paths are generated at runtime from the domain's agent roster.
+ *  The hardcoded agent names below are the fallback for older tenants without a domain plugin. */
 export const LEVER_PATHS = [
   'kill_switch',
   'agent_budget.warn_pct', 'agent_budget.per_task_tokens', 'agent_budget.auto_downgrade_at_warn', 'agent_budget.attribution',
   'agent_budget.five_hour_sessions',
+  // Per-agent paths — dynamically extended from domain.agents at startup
   'agent_budget.claude.week_anchor', 'agent_budget.claude.per_5h_tokens', 'agent_budget.claude.per_week_tokens',
   'agent_budget.antigravity.per_5h_tokens', 'agent_budget.antigravity.per_week_tokens',
+  // mos-dev agents (self-build tenant)
+  'agent_budget.builder.per_5h_tokens', 'agent_budget.builder.per_week_tokens', 'agent_budget.builder.per_5h_cost_usd',
+  'agent_budget.reviewer.per_5h_tokens', 'agent_budget.reviewer.per_week_tokens',
+  'agent_budget.designer.per_5h_tokens', 'agent_budget.designer.per_week_tokens',
+  'agent_budget.docs-writer.per_5h_tokens', 'agent_budget.docs-writer.per_week_tokens',
+  'quota_guard.reviewer.cap_5h_tokens', 'quota_guard.reviewer.min_remaining_pct',
+  'quota_guard.designer.cap_5h_tokens', 'quota_guard.designer.min_remaining_pct',
+  'quota_guard.docs-writer.cap_5h_tokens', 'quota_guard.docs-writer.min_remaining_pct',
   'agent_models.claude.default', 'agent_models.claude.routine', 'agent_models.antigravity.default',
   'work.max_parallel', 'work.wip_per_agent', 'work.priority_floor', 'work.lease_ttl_min', 'work.max_runs_per_5h',
   'schedule.cadence', 'quiet_hours.enabled', 'quiet_hours.from', 'quiet_hours.to',

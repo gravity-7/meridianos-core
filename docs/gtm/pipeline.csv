@@ -1,0 +1,11 @@
+prospect,company,role,icp_fit,contact_method,contacted_date,response,meeting_date,stage,notes
+SLOT-01,,,,,,,,,"UNFILLED. Source: S1 Microsoft/Claude Code HN thread comments (492 pts / 465 comments) - mine commenters, not the article. Microsoft itself is NOT ICP."
+SLOT-02,,,,,,,,,"UNFILLED. Source: S1 HN comment thread, second pass."
+SLOT-03,,,,,,,,,"UNFILLED. Source: S6 github.com/getagentseal/codeburn issues. HIGHEST YIELD - work this before slots 1-2. Issue-filers asking for per-project/cross-provider attribution self-identify on Q1+Q2 in their own words."
+SLOT-04,,,,,,,,,"UNFILLED. Source: S6 github.com/Piebald-AI/splitrail issues. Same rationale as SLOT-03."
+SLOT-05,,,,,,,,,"UNFILLED. Source: S6 stargazers of codeburn/splitrail/ccusage whose profile resolves to a 20-200 dev employer."
+SLOT-06,,,,,,,,,"UNFILLED. Source: S2 GitHub Copilot metered billing switch (2026-06-01). Best Q1 trigger - flat-rate seat became variable alongside existing usage-based vendor."
+SLOT-07,,,,,,,,,"UNFILLED. Source: S2 Copilot metering, second pass."
+SLOT-08,,,,,,,,,"UNFILLED. Source: X/Twitter. Query: ""claude code"" (bill OR budget) min_faves:20 -filter:links"
+SLOT-09,,,,,,,,,"UNFILLED. Source: Reddit r/ExperiencedDevs / r/engineeringmanagers - ""AI budget"", ""Copilot credits""."
+SLOT-10,,,,,,,,,"UNFILLED. RESERVED FOR WARM INTRO - fill this one FIRST. One intro from the existing network likely outperforms the nine cold slots combined."

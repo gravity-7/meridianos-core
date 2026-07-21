@@ -25,6 +25,8 @@ import { readUsage } from './usage-readers.mjs';
 import { classifyExit } from './exit-classify.mjs';
 import { resolveRoute } from './gateway/provider-registry.mjs';
 import { applyGatewayInjection } from './gateway/inject.mjs';
+import { preFlightCheck, formatCheckResult } from './quota-guard.mjs';
+import { loadPolicy } from './budget.mjs';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 min — matches default lease TTL
 
@@ -254,8 +256,9 @@ export async function launchAgent({ agent, model, task, session, provider, harne
     const gwConfig = config.gateway;
     let finalPlan = plan;
     let gatewayToken = null;
+    let route = null;
     if (gwConfig?.enabled === true) {
-      const route = resolveRoute(gwConfig.registry, resolvedProvider?.name);
+      route = resolveRoute(gwConfig.registry, resolvedProvider?.name);
       if (route?.wire === 'anthropic') {
         const ctx = {
           tenant: gwConfig.registry?.tenant,
@@ -270,6 +273,28 @@ export async function launchAgent({ agent, model, task, session, provider, harne
         const injected = applyGatewayInjection({ plan, route, ctx, gatewayUrl: gwConfig.url, runs: gwConfig.runs });
         finalPlan = injected.plan;
         gatewayToken = injected.token;
+      }
+    }
+
+    // Quota guard (OAuth-native harnesses only) — when the gateway has NO route for this
+    // provider (native Anthropic, Antigravity), the call goes through OAuth and cannot be
+    // metered or enforced by the gateway. The quota guard reads the harness's local usage
+    // store and blocks the launch if remaining quota is below the configured threshold.
+    if (!route) {
+      // Load policy on-demand (only when needed; gateway-routed launches skip this I/O)
+      const pol = config._policy ?? loadPolicy(undefined, config);
+      const qc = preFlightCheck(agent, { policy: pol });
+      if (!qc.canLaunch) {
+        console.warn(formatCheckResult(qc));
+        return {
+          outcome: 'skipped',
+          reason: 'quota',
+          note: `${qc.harness} quota exhausted: ${qc.used5h?.toLocaleString() ?? '?'}/${qc.cap5h?.toLocaleString() ?? '?'} tokens used (${qc.remainingPct}% remaining < ${qc.minRemainingPct}% threshold)`,
+          tokens: null, usage: null, branch: null,
+        };
+      }
+      if (qc.reason !== 'no-quota-guard-configured') {
+        console.log(formatCheckResult(qc));
       }
     }
 

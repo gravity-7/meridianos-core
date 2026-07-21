@@ -29,14 +29,14 @@
  *     so the daemon is diagnosable even when launched without a console.
  */
 import { openDb } from './db.mjs';
-import { loadPolicy } from './budget.mjs';
+import { loadPolicy, budgetStatus } from './budget.mjs';
 import { executeRun, cadenceMs, runnerStatus } from './runner.mjs';
 import { tick } from './watchdog.mjs';
 import { launchAgent } from './launcher.mjs';
 import { createProjectStore } from './project-store.mjs';
 import { createDashboardServer } from './dashboard/server.mjs';
 import { verifyCycle } from './verify-loop.mjs';
-import { pushEscalations } from './escalation-push.mjs';
+import { pushEscalations, pushToSlack, formatVerifierFailure, formatBudgetAlert, routeToSlack } from './escalation-push.mjs';
 import { selectModel } from './router.mjs';
 import { plannerCycle } from './planner.mjs';
 import { pruneAllWorktrees } from './worktree.mjs';
@@ -47,6 +47,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAios } from './config.mjs';
 import { assembleGateway } from './gateway/index.mjs';
+import { runBootChecks, formatBootCheckResults } from './boot-check.mjs';
+import { resolveAdoConfig, syncToBoard, syncFromBoard } from './azure-devops-source.mjs';
 
 // Composition root: as of ★③.2 Part B, a DomainPlugin is a REQUIRED, explicitly-injected
 // dependency (there is no baked-in default tenant) — so the AIOS config can no longer be
@@ -251,11 +253,88 @@ export async function runWatchdogTick(deps) {
       if (vr.failed.length) {
         logger.log('verifier', `failed: ${vr.failed.map(f => f.task).join(', ')}`);
         events.warn('verifier', 'check-fail', { tasks: vr.failed.map(f => f.task) });
+
+        // F007: Slack push for verifier failures
+        try {
+          const slackRoute = routeToSlack(cfg, 'verifier_failure', policy);
+          if (slackRoute.route) {
+            const domain = cfg.domain?.boardTitle || cfg.domain?.agents?.[0] || 'meridianos';
+            const msg = formatVerifierFailure(domain, vr.failed);
+            const slackRes = await pushToSlack(slackRoute.webhookUrl, msg);
+            if (!slackRes.ok) {
+              logger.log('slack', `verifier push error: ${slackRes.error}`);
+            }
+          }
+        } catch (slackErr) {
+          // Slack failures never crash the daemon
+          logger.log('slack', `verifier push error: ${slackErr?.message ?? String(slackErr)}`);
+        }
       }
       if (vr.pending.length) logger.log('verifier', `pending: ${vr.pending.join(', ')}`);
     } catch (verifyErr) {
       logger.error('verifier', `cycle-error: ${verifyErr?.message ?? String(verifyErr)}`, verifyErr);
       events.error('verifier', 'cycle-error', { error: verifyErr?.message ?? String(verifyErr) });
+    }
+
+    // ADO bi-directional sync (F006): pull ADO → board, then push board → ADO.
+    // Isolated so a network/auth failure in the ADO connector never takes down
+    // the daemon or skips the render below.
+    try {
+      const adoCfg = resolveAdoConfig(policy);
+      if (adoCfg) {
+        // Pull: ADO work items → MeridianOS board
+        const toResult = await syncToBoard(adoCfg, store);
+        if (toResult.created > 0 || toResult.updated > 0) {
+          logger.log('ado', `sync→board: +${toResult.created} ~${toResult.updated} (${toResult.skipped} skipped)`);
+          events.info('ado', 'sync-to-board', { created: toResult.created, updated: toResult.updated, skipped: toResult.skipped });
+        }
+        if (toResult.errors.length > 0) {
+          for (const err of toResult.errors) logger.log('ado', `sync→board error: ${err}`);
+        }
+
+        // Push: MeridianOS board status changes → ADO
+        const fromResult = await syncFromBoard(adoCfg, store);
+        if (fromResult.pushed > 0) {
+          logger.log('ado', `sync←board: pushed ${fromResult.pushed} status update(s) (${fromResult.skipped} skipped)`);
+          events.info('ado', 'sync-from-board', { pushed: fromResult.pushed, skipped: fromResult.skipped });
+        }
+        if (fromResult.errors.length > 0) {
+          for (const err of fromResult.errors) logger.log('ado', `sync←board error: ${err}`);
+        }
+      }
+    } catch (adoErr) {
+      logger.error('ado', `sync error: ${adoErr?.message ?? String(adoErr)}`, adoErr);
+      events.error('ado', 'sync-error', { error: adoErr?.message ?? String(adoErr) });
+    }
+
+    // F007: Budget threshold check — push Slack alerts when any agent exceeds warn/halt threshold.
+    // Isolated so a budget query or Slack failure never skips the render below.
+    try {
+      const budget = budgetStatus({ config: cfg, policy });
+      if (budget) {
+        for (const agent of (cfg.domain.agents ?? [])) {
+          const agentBudget = budget[agent];
+          if (agentBudget && agentBudget.state !== 'ok') {
+            // Only alert on warn/halt — not 'no-cap' or 'ok'
+            const slackRoute = routeToSlack(cfg, 'budget_breach', policy);
+            if (slackRoute.route) {
+              const domain = cfg.domain?.boardTitle || 'meridianos';
+              const msg = formatBudgetAlert(domain, agent, agentBudget);
+              if (msg) {
+                const slackRes = await pushToSlack(slackRoute.webhookUrl, msg);
+                if (!slackRes.ok) {
+                  logger.log('slack', `budget push error: ${slackRes.error}`);
+                } else {
+                  logger.log('slack', `budget alert sent for ${agent} (${agentBudget.state})`);
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (budgetSlackErr) {
+      // Slack/budget failures never crash the daemon
+      logger.log('slack', `budget check error: ${budgetSlackErr?.message ?? String(budgetSlackErr)}`);
     }
 
     // Re-render after state changes
@@ -434,10 +513,20 @@ export async function start({ domain } = {}) {
     if (existsSync(envPath) && typeof process.loadEnvFile === 'function') process.loadEnvFile(envPath);
   } catch { /* best-effort */ }
 
+  // ── Pre-flight checks ──
+  // Run BEFORE binding ports or touching git. Fatal issues → clean exit with actionable fixes.
+  const port = Number(process.env.AIOS_DASHBOARD_PORT) || 4317;
+  const bootPolicy = loadPolicy(undefined, config);
+  const checks = await runBootChecks({ config, policy: bootPolicy, dashboardPort: port });
+  console.log(formatBootCheckResults(checks));
+  if (!checks.allClear) {
+    console.error('Pre-flight checks failed. Fix the issues above and restart.');
+    process.exit(1);
+  }
+
   db = openDb(undefined, config);
   store = createProjectStore({ db, config });
   events = store.events;
-  const port = Number(process.env.AIOS_DASHBOARD_PORT) || 4317;
 
   // 1. Dashboard — bind the :4317 socket FIRST, before the (potentially slow, git-heavy) boot
   // recovery below, so the control panel is reachable as early as possible on startup rather than
