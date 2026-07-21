@@ -1,6 +1,6 @@
 {
   "name": "@gravity-7/meridianos-core",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "private": false,
   "type": "module",
   "description": "MeridianOS — provider/harness-agnostic autonomous agent-orchestration core with cost governance. npx meridian-gateway in 60s.",

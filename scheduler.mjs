@@ -49,6 +49,7 @@ import { createAios } from './config.mjs';
 import { assembleGateway } from './gateway/index.mjs';
 import { runBootChecks, formatBootCheckResults } from './boot-check.mjs';
 import { resolveAdoConfig, syncToBoard, syncFromBoard } from './azure-devops-source.mjs';
+import { runSetupWizard } from './setup-wizard.mjs';
 
 // Composition root: as of ★③.2 Part B, a DomainPlugin is a REQUIRED, explicitly-injected
 // dependency (there is no baked-in default tenant) — so the AIOS config can no longer be
@@ -512,6 +513,17 @@ export async function start({ domain } = {}) {
     const envPath = join(config.repoRoot, '.env');
     if (existsSync(envPath) && typeof process.loadEnvFile === 'function') process.loadEnvFile(envPath);
   } catch { /* best-effort */ }
+
+  // ── First-run setup wizard ──
+  // If .ai/policy.yaml doesn't exist, run the interactive wizard before anything else.
+  // On first run the wizard generates a working policy and exits — the user restarts
+  // and boot checks run normally on subsequent starts.
+  const ranWizard = await runSetupWizard({ root: config.repoRoot });
+  if (ranWizard) {
+    logger.log('setup', 'First-run wizard completed. Restart the daemon to begin.');
+    console.log('[meridianos] Setup complete — restart the daemon (node scheduler.mjs) to begin autonomous work.');
+    process.exit(0);
+  }
 
   // ── Pre-flight checks ──
   // Run BEFORE binding ports or touching git. Fatal issues → clean exit with actionable fixes.
