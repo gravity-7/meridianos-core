@@ -1121,8 +1121,10 @@ async function openSpec(id, path, reason, taskStatus, taskOwner){
   status.textContent=''; specDirty=false; overlay.style.display='flex';
   const hasTaskInfo = !!(taskStatus || taskOwner);
   summary.style.display='none'; ta.style.display=''; saveBtn.style.display='';
-  // G2: show Bounce button only for stages the agent can be re-run on
-  const bounceable = new Set(['spec','designing','ready-for-impl','in-review']);
+  // G2: show Bounce button only where taskAction can actually bounce — see the bounceMap in
+  // dashboard/actions.mjs, which mirrors machine.mjs's backward edges. Offering it on the further
+  // upstream stages (designing, spec) just produced an "illegal transition" toast.
+  const bounceable = new Set(['ready-for-impl','in-review']);
   if(bounceBtn) bounceBtn.style.display = (taskStatus && bounceable.has(taskStatus)) ? '' : 'none';
   if(bounceBtn) bounceBtn.dataset.taskId = id;
   if(bounceBtn) bounceBtn.dataset.taskStatus = taskStatus || '';

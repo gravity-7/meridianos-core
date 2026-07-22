@@ -28,6 +28,19 @@ test('illegal skips throw', () => {
   assert.throws(() => assertTransition('ready-for-impl', 'done'), /illegal transition/);
 });
 
+// The pipeline is forward-only apart from exactly TWO bounce edges (see the machine.mjs header).
+// The upstream ones stay illegal on purpose: plannerCycle auto-promotes proposed→spec and
+// spec→designing every tick, so `designing → spec` or `spec → proposed` would be reverted before
+// the agent it was meant for could claim the task. Adding either is a design change, not a
+// one-liner; this test is here so it can't happen by accident.
+test('in-review→in-progress and ready-for-impl→designing are the ONLY backward edges', () => {
+  assert.ok(isLegalTransition('in-review', 'in-progress'));
+  assert.ok(isLegalTransition('ready-for-impl', 'designing'));
+  for (const [from, to] of [['spec', 'proposed'], ['designing', 'spec'], ['in-progress', 'ready-for-impl']]) {
+    assert.equal(isLegalTransition(from, to), false, `${from} -> ${to} should NOT be legal`);
+  }
+});
+
 test('same-state is an allowed no-op; unknown states are rejected', () => {
   assert.doesNotThrow(() => assertTransition('in-progress', 'in-progress'));
   assert.throws(() => assertTransition('in-progress', 'shipped'), /unknown target state/);
