@@ -18,7 +18,7 @@
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { createWorktree, agentEnv } from './worktree.mjs';
+import { createWorktree, agentEnv, gitIdentityEnv } from './worktree.mjs';
 import { resolveProvider } from './providers.mjs';
 import { buildSpawnPlan, resolveOpencodeCmd } from './harness-adapters.mjs';
 import { readUsage } from './usage-readers.mjs';
@@ -274,7 +274,10 @@ export async function launchAgent({ agent, model, task, session, provider, harne
     }
 
     for (const file of finalPlan.files ?? []) writePlanFile(wt.path, file);
-    const env = { ...agentEnv(process.env, {}, config), ...finalPlan.env };
+    // gitIdentityEnv stamps the model into the commit identity so every PR the agent opens is
+    // self-attributing (provenance gap: all autonomous commits landed as an anonymous
+    // `AIOS Builder`). finalPlan.env still wins — an explicit gateway/plan override is intentional.
+    const env = { ...agentEnv(process.env, {}, config), ...gitIdentityEnv(process.env, { agent, model }), ...finalPlan.env };
     try {
       const result = await _spawn(finalPlan.cmd, finalPlan.args, { cwd: wt.path, env });
       const usage = readUsage(harnessName, { agent, model, task, session, provider: resolvedProvider, harness: harnessName, worktreePath: wt.path }, result);

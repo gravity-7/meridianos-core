@@ -81,6 +81,44 @@ export function agentEnv(base = process.env, extra = {}, config) {
 }
 
 /**
+ * Stamp WHICH model produced a commit into the git identity, so an agent-opened PR is
+ * self-attributing: `git log --format='%an %ae'` (and the commit list on GitHub) answers "which
+ * model wrote this?" without a run-log cross-reference. This closed a real provenance gap — every
+ * autonomous `aios/*` commit landed as the same `AIOS Builder` regardless of the model, and the one
+ * artifact that mapped session→model (the run log) was incomplete and unlinkable (the branch suffix
+ * is a one-way hash of the session), so which model authored a given F-PR was unrecoverable.
+ *
+ * Returns GIT_AUTHOR_ / GIT_COMMITTER_ overrides to merge into the agent's spawn env. Git reads
+ * these natively in whatever `git commit` the agent runs, so this is fully daemon-controlled and
+ * agent-independent — it needs no cooperation from claude/agy/opencode — and it is scoped to the
+ * agent's own subprocess env, so it never touches the founder's working tree.
+ *
+ * Design choices:
+ *  - The model is appended to the NAME as `<base> (<model>)` so it shows everywhere a name shows.
+ *  - The email is plus-addressed (`local+<slug>@domain`) so `%ae` is machine-parseable — but ONLY
+ *    when the daemon already supplied an email. Core is tenant-agnostic (ships no identity), so it
+ *    must never FABRICATE an email domain; if none is inherited, only the name is stamped.
+ *  - No model/agent tag ⇒ returns `{}` (identity untouched), so nothing changes for callers that
+ *    don't pass one.
+ */
+export function gitIdentityEnv(base = process.env, { agent, model } = {}) {
+  const tag = String(model || agent || '').trim();
+  if (!tag) return {};
+  const baseName = base.GIT_AUTHOR_NAME || base.GIT_COMMITTER_NAME || 'AIOS Builder';
+  const name = `${baseName} (${tag})`;
+  const out = { GIT_AUTHOR_NAME: name, GIT_COMMITTER_NAME: name };
+
+  const baseEmail = base.GIT_AUTHOR_EMAIL || base.GIT_COMMITTER_EMAIL || '';
+  const slug = tag.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
+  // Skip if already plus-addressed (idempotent — a re-launch must not stack `+a+b`).
+  if (slug && baseEmail.includes('@') && !baseEmail.includes('+')) {
+    const [local, domain] = baseEmail.split('@');
+    out.GIT_AUTHOR_EMAIL = out.GIT_COMMITTER_EMAIL = `${local}+${slug}@${domain}`;
+  }
+  return out;
+}
+
+/**
  * Create an isolated worktree on a fresh branch based on the freshest origin/main (falls back to
  * local HEAD when origin is unreachable). Returns { ok, path, branch, base, error, cleanup }.
  * `cleanup()` removes the worktree (and the local branch once it is safely on origin). `config` is

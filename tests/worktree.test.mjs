@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { branchName, worktreeDir, agentEnv, createWorktree, createReviewWorktree, pruneAllWorktrees } from '../worktree.mjs';
+import { branchName, worktreeDir, agentEnv, gitIdentityEnv, createWorktree, createReviewWorktree, pruneAllWorktrees } from '../worktree.mjs';
 import { buildPrompt } from '../launcher.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
@@ -58,6 +58,47 @@ test('agentEnv points the agent CLI at the CANONICAL state DB', () => {
   const env = agentEnv({ PATH: '/usr/bin' }, {}, config);
   assert.equal(env.AIOS_DB, config.defaultDbPath);
   assert.equal(env.PATH, '/usr/bin', 'preserves the base env');
+});
+
+test('gitIdentityEnv stamps the model into the commit identity (name + plus-addressed email)', () => {
+  const env = gitIdentityEnv(
+    { GIT_AUTHOR_NAME: 'AIOS Builder', GIT_AUTHOR_EMAIL: 'builder@mos.dev' },
+    { agent: 'claude', model: 'claude-opus-4-8' },
+  );
+  assert.equal(env.GIT_AUTHOR_NAME, 'AIOS Builder (claude-opus-4-8)');
+  assert.equal(env.GIT_COMMITTER_NAME, 'AIOS Builder (claude-opus-4-8)');
+  assert.equal(env.GIT_AUTHOR_EMAIL, 'builder+claude-opus-4-8@mos.dev', 'model slug is machine-parseable from %ae');
+  assert.equal(env.GIT_COMMITTER_EMAIL, 'builder+claude-opus-4-8@mos.dev');
+});
+
+test('gitIdentityEnv prefers the model but falls back to the agent name', () => {
+  const byAgent = gitIdentityEnv({ GIT_AUTHOR_EMAIL: 'b@x.io' }, { agent: 'antigravity' });
+  assert.equal(byAgent.GIT_AUTHOR_NAME, 'AIOS Builder (antigravity)', 'default base name when none inherited');
+  assert.equal(byAgent.GIT_AUTHOR_EMAIL, 'b+antigravity@x.io');
+});
+
+test('gitIdentityEnv leaves the identity untouched when no model/agent is given', () => {
+  assert.deepEqual(gitIdentityEnv({ GIT_AUTHOR_NAME: 'x', GIT_AUTHOR_EMAIL: 'y@z.io' }, {}), {});
+});
+
+test('gitIdentityEnv never fabricates an email domain (tenant-agnostic)', () => {
+  // Core ships no identity — with no inherited email, stamp only the name, never invent a domain.
+  const env = gitIdentityEnv({}, { model: 'deepseek-v4-pro' });
+  assert.equal(env.GIT_AUTHOR_NAME, 'AIOS Builder (deepseek-v4-pro)');
+  assert.ok(!('GIT_AUTHOR_EMAIL' in env), 'no email invented');
+  assert.ok(!('GIT_COMMITTER_EMAIL' in env), 'no committer email invented');
+});
+
+test('gitIdentityEnv is idempotent — a re-launch does not stack +model+model', () => {
+  const once = gitIdentityEnv({ GIT_AUTHOR_EMAIL: 'builder+claude@mos.dev' }, { model: 'claude' });
+  assert.ok(!('GIT_AUTHOR_EMAIL' in once), 'already plus-addressed → email left as-is');
+  assert.equal(once.GIT_AUTHOR_NAME, 'AIOS Builder (claude)', 'name still stamped');
+});
+
+test('gitIdentityEnv slugifies a model id with spaces/case for the email local-part', () => {
+  const env = gitIdentityEnv({ GIT_AUTHOR_EMAIL: 'b@x.io' }, { model: 'Gemini 3 Pro (High)' });
+  assert.equal(env.GIT_AUTHOR_NAME, 'AIOS Builder (Gemini 3 Pro (High))', 'name keeps the human-readable form');
+  assert.equal(env.GIT_AUTHOR_EMAIL, 'b+gemini-3-pro-high@x.io', 'email local-part is a clean slug');
 });
 
 test('buildPrompt includes the isolated-branch workspace instructions when a branch is given', () => {
