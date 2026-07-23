@@ -17,6 +17,7 @@ import { decide } from './router.mjs';
 import { resolveProvider } from './providers.mjs';
 import { appendRun, readRuns, newRunId } from './runlog.mjs';
 import { isQuotaText, parseResetAt, resetInstant } from './exit-classify.mjs';
+import { branchPrefix } from './worktree.mjs';
 
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
@@ -128,7 +129,7 @@ export function planRun({ store, config, policy = loadPolicy(undefined, config),
  * With no `launch` callback this is a DRY RUN — nothing is claimed, nothing is spawned.
  * `config` is the injected AiosConfig (REQUIRED), threaded to planRun.
  */
-export async function executeRun({ store, config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents, runs, launch, runsPath = undefined, sessionFor, findPr } = {}) {
+export async function executeRun({ store, config, policy = loadPolicy(undefined, config), budget, now = Date.now(), agents, runs, launch, runsPath = undefined, sessionFor, findPr, findTaskPr } = {}) {
   const plan = planRun({ store, policy, budget, now, agents, runs, config });
 
   // Missing-key skips (router.decide()'s cost-safety guard) are denials, not claimable — but the
@@ -177,9 +178,11 @@ export async function executeRun({ store, config, policy = loadPolicy(undefined,
           // RCA-3: the agent finished but never transitioned the task. Before treating this as lost
           // work, try to RECOVER a PR it opened but forgot to record — the honor-system gap must not
           // silently drop a real PR (which would strand or re-duplicate the work).
-          const rec = recoverPr(store, { task: d.task, branch: r.branch, actor: d.agent, now: nowIso, findPr });
+          const rec = recoverPr(store, { task: d.task, branch: r.branch, actor: d.agent, now: nowIso, findPr, findTaskPr });
           if (rec.ok) {
-            note = `recovered PR #${rec.pr} → in-review (agent skipped its own transition)`;
+            note = rec.fromEarlierRun
+              ? `duplicate run — task already had open PR #${rec.pr} from an earlier run; adopted it → in-review`
+              : `recovered PR #${rec.pr} → in-review (agent skipped its own transition)`;
           } else {
             outcome = 'failed';
             reason = 'no_transition';
@@ -213,29 +216,63 @@ export async function executeRun({ store, config, policy = loadPolicy(undefined,
 /**
  * Recover a PR the agent opened but never recorded on the task (the honor-system gap, RCA-3).
  * Only meaningful for implement-stage tasks (ready-for-impl / in-progress) whose transition target
- * is in-review. Looks up an OPEN PR on the run's branch via `gh`; if found, records it and walks
- * the task to `in-review` through legal transitions so the verifier can pick it up. Best-effort —
- * returns { ok:false, reason } when there is no branch, no gh, or no open PR (caller then fails).
+ * is in-review. Looks up an OPEN PR via `gh`; if found, records it and walks the task to
+ * `in-review` through legal transitions so the verifier can pick it up. Best-effort — returns
+ * { ok:false, reason } when there is no gh or no open PR at all (caller then fails the run).
+ *
+ * TWO lookups, in order, and the second one is what stops duplicate PRs:
+ *   1. the CURRENT run's branch — the agent just opened it and forgot to record it;
+ *   2. ANY open PR on an earlier branch for the SAME TASK (`aios/<taskId>-*`).
+ *
+ * Without (2) the runner had a duplication loop: a run that ends `no_transition` releases the lease
+ * (by design — unrecorded work must not be stranded), the next cycle re-claims the task, the agent
+ * redoes the whole job on a FRESH session/branch, and opens ANOTHER PR. Observed in the wild as 5
+ * open PRs for DOG-1 and 3 for F006 — each a full, paid agent run producing a redundant PR. Since
+ * every branch for a task shares the `aios/<taskId>-` prefix, an earlier run's PR is findable, so
+ * the task can be walked to `in-review` instead of being worked a second time.
  */
-function recoverPr(store, { task, branch, actor, now = new Date().toISOString(), findPr } = {}) {
+function recoverPr(store, { task, branch, actor, now = new Date().toISOString(), findPr, findTaskPr } = {}) {
   if (task.status !== 'ready-for-impl' && task.status !== 'in-progress') return { ok: false, reason: 'not an implement stage' };
-  if (!branch) return { ok: false, reason: 'no branch to inspect' };
-  const lookup = findPr ?? ((b) => {
+  const ghPrList = (args) => {
     try {
-      const r = spawnSync('gh', ['pr', 'list', '--head', b, '--state', 'open', '--json', 'number'], { timeout: 30_000, stdio: 'pipe', windowsHide: true, encoding: 'utf8' });
+      const r = spawnSync('gh', ['pr', 'list', ...args, '--state', 'open', '--json', 'number,headRefName'], { timeout: 30_000, stdio: 'pipe', windowsHide: true, encoding: 'utf8' });
       const arr = JSON.parse(r.stdout || '[]');
-      return Array.isArray(arr) && arr[0]?.number != null ? arr[0].number : null;
-    } catch { return null; }
+      return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+  };
+  const lookup = findPr ?? ((b) => ghPrList(['--head', b])[0]?.number ?? null);
+  // Lowest PR number = the EARLIEST run's PR, so a task with several strays converges on one.
+  const lookupByTask = findTaskPr ?? ((id) => {
+    const prefix = branchPrefix(id);
+    const nums = ghPrList(['--limit', '100'])
+      .filter((p) => typeof p.headRefName === 'string' && p.headRefName.startsWith(prefix))
+      .map((p) => p.number)
+      .filter((n) => n != null);
+    return nums.length ? Math.min(...nums) : null;
   });
+
   let pr = null;
-  try { pr = lookup(branch); } catch { /* best-effort */ }
-  if (pr == null) return { ok: false, reason: 'no open PR on branch' };
+  if (branch) { try { pr = lookup(branch); } catch { /* best-effort */ } }
+  let fromEarlierRun = false;
+  if (pr == null) {
+    try { pr = lookupByTask(task.id); } catch { /* best-effort */ }
+    fromEarlierRun = pr != null;
+  }
+  if (pr == null) return { ok: false, reason: branch ? 'no open PR on branch or for this task' : 'no open PR for this task' };
   try {
     if (task.status === 'ready-for-impl') {
       store.state.transition({ taskId: task.id, to: 'in-progress', actor, note: 'auto: PR recovery (agent skipped transition)', now });
     }
-    store.state.transition({ taskId: task.id, to: 'in-review', actor, pr: String(pr), note: 'auto-recovered PR — agent skipped its own transition', now });
-    return { ok: true, pr };
+    const note = fromEarlierRun
+      ? `auto-recovered PR #${pr} from an EARLIER run of this task — this run's work is a duplicate`
+      : 'auto-recovered PR — agent skipped its own transition';
+    store.state.transition({ taskId: task.id, to: 'in-review', actor, pr: String(pr), note, now });
+    // A duplicate run is not free — surface it so the founder sees the waste rather than only the
+    // stray PRs it leaves on GitHub.
+    if (fromEarlierRun) {
+      try { store.events.warn('runner', 'duplicate-run-recovered', { task: task.id, pr, branch: branch ?? null }); } catch { /* best-effort */ }
+    }
+    return { ok: true, pr, fromEarlierRun };
   } catch (e) {
     return { ok: false, reason: String((e && e.message) || e) };
   }
