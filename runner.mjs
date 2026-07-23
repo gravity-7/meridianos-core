@@ -17,6 +17,7 @@ import { decide } from './router.mjs';
 import { resolveProvider } from './providers.mjs';
 import { appendRun, readRuns, newRunId } from './runlog.mjs';
 import { isQuotaText, parseResetAt, resetInstant } from './exit-classify.mjs';
+import { pushPrLink } from './azure-devops-source.mjs';
 import { branchPrefix } from './worktree.mjs';
 
 const MIN = 60 * 1000;
@@ -187,6 +188,24 @@ export async function executeRun({ store, config, policy = loadPolicy(undefined,
             outcome = 'failed';
             reason = 'no_transition';
             note = `agent exited ok but did not transition the task from ${d.task.status}${rec.reason ? ` (${rec.reason})` : ''}`;
+          }
+        }
+        const finalTask = store.state.getTask(d.task.id);
+        if (finalTask && finalTask.pr && (finalTask.id.startsWith('ADO-') || finalTask.adoId)) {
+          const adoCfg = policy?.integrations?.azure_devops;
+          if (adoCfg?.enabled && adoCfg.write_back_pr !== false) {
+            const patEnv = adoCfg.pat_env || 'ADO_PAT';
+            const pat = process.env[patEnv];
+            if (pat) {
+              const adoId = finalTask.adoId || finalTask.id.replace(/^ADO-/, '');
+              const repo = policy?.github?.repo ?? 'org/repo';
+              const prUrl = finalTask.pr.startsWith('http') ? finalTask.pr : `https://github.com/${repo}/pull/${finalTask.pr}`;
+              try {
+                await pushPrLink({ org: adoCfg.org, project: adoCfg.project, pat, id: adoId, prUrl, state: 'Resolved' });
+              } catch (prErr) {
+                console.warn(`[aios] ADO PR write-back failed for ${finalTask.id}: ${prErr.message}`);
+              }
+            }
           }
         }
       }
