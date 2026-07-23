@@ -7,6 +7,15 @@
  *
  * `done` is terminal. `blocked` is reachable from any active state and unblocks back into
  * an active state. Any other move is illegal and fails CI (validate) / throws at runtime.
+ *
+ * Progress is otherwise FORWARD-ONLY — agents advance a task by claiming and completing it. The
+ * only exceptions are two BOUNCE edges, both of which send work back for another pass:
+ *   in-review      → in-progress   (verifier on a failed check, or the founder rejecting a review)
+ *   ready-for-impl → designing     (the founder rejecting a design before anyone builds on it)
+ * There are deliberately no bounces further upstream: plannerCycle auto-promotes proposed→spec and
+ * spec→designing on every watchdog tick, so a `designing → spec` or `spec → proposed` edge would be
+ * reverted before the agent it was meant for could claim the task. Adding one means teaching the
+ * planner about bounces first — it is not just an entry in TRANSITIONS.
  */
 export const STATES = [
   'proposed', 'spec', 'designing', 'ready-for-impl',
@@ -20,7 +29,7 @@ const TRANSITIONS = {
   proposed: ['spec', 'blocked'],
   spec: ['designing', 'blocked'],
   designing: ['ready-for-impl', 'blocked'],
-  'ready-for-impl': ['in-progress', 'blocked'],
+  'ready-for-impl': ['in-progress', 'designing', 'blocked'], // forward, or bounce back for a design redo
   'in-progress': ['in-review', 'blocked'],
   'in-review': ['done', 'in-progress', 'blocked'], // done, or bounce back on changes requested
   done: [],

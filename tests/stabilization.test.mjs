@@ -86,11 +86,58 @@ test('executeRun marks no_transition (typed) when the agent skips the transition
   const store = createProjectStore({ db, config });
   const runsPath = join(mkdtempSync(join(tmpdir(), 'aios-runs-')), 'log.jsonl');
   const launch = () => ({ outcome: 'ok', note: 'done', branch: 'aios/F-impl-abcd1234' });
-  const r = await executeRun({ store, policy: policy(), budget: budget(), now: localAt(12), runs: [], runsPath, launch, agents: ['claude'], findPr: () => null, config });
+  const r = await executeRun({ store, policy: policy(), budget: budget(), now: localAt(12), runs: [], runsPath, launch, agents: ['claude'], findPr: () => null, findTaskPr: () => null, config });
   const rec = readRuns({ path: runsPath })[0];
   assert.equal(rec.outcome, 'failed');
   assert.equal(rec.reason, 'no_transition');
   assert.equal(getTask(db, 'F-impl').lease_owner, null); // lease freed
+});
+
+// ---- Duplicate-PR re-claim loop -----------------------------------------------------------------
+// A `no_transition` run releases the lease by design (unrecorded work must never be stranded), so
+// the task is re-claimable and the agent redoes the whole job on a FRESH session/branch. Before the
+// task-level lookup that meant a SECOND PR every cycle — observed in the wild as 5 open PRs for
+// DOG-1 and 3 for F006, each one a full paid agent run.
+test('executeRun adopts an EARLIER run\'s PR instead of duplicating the work', async () => {
+  const db = freshDb([impl()]);
+  const store = createProjectStore({ db, config });
+  const runsPath = join(mkdtempSync(join(tmpdir(), 'aios-runs-')), 'log.jsonl');
+  // This run's own branch has no PR (it is the re-claim), but an earlier run left PR #42 behind.
+  const launch = () => ({ outcome: 'ok', note: 'done', branch: 'aios/F-impl-second99' });
+  await executeRun({ store, policy: policy(), budget: budget(), now: localAt(12), runs: [], runsPath, launch, agents: ['claude'], findPr: () => null, findTaskPr: () => 42, config });
+
+  const t = getTask(db, 'F-impl');
+  assert.equal(t.status, 'in-review', 'task moves forward rather than staying re-claimable');
+  assert.equal(t.pr, '42', "the earlier run's PR is adopted");
+  const rec = readRuns({ path: runsPath })[0];
+  assert.equal(rec.outcome, 'ok', 'not a failure — the work exists, it just came from the earlier run');
+  assert.match(rec.note, /duplicate run/i, 'the waste is named in the run log');
+});
+
+test('a duplicate run raises a warn event so the wasted spend is visible', async () => {
+  const db = freshDb([impl()]);
+  const store = createProjectStore({ db, config });
+  const runsPath = join(mkdtempSync(join(tmpdir(), 'aios-runs-')), 'log.jsonl');
+  const launch = () => ({ outcome: 'ok', note: 'done', branch: 'aios/F-impl-second99' });
+  await executeRun({ store, policy: policy(), budget: budget(), now: localAt(12), runs: [], runsPath, launch, agents: ['claude'], findPr: () => null, findTaskPr: () => 42, config });
+
+  const ev = store.events.readEvents({ limit: 50 }).find((e) => e.event === 'duplicate-run-recovered');
+  assert.ok(ev, 'duplicate-run-recovered event emitted');
+  assert.equal(ev.level, 'warn');
+  assert.match(ev.detail, /"pr":42/, 'names the PR that was adopted');
+});
+
+// The current run's own branch wins: that PR is the freshest work, and preferring it keeps the
+// ordinary RCA-3 recovery byte-identical to before the task-level fallback existed.
+test('the current branch\'s PR takes precedence over an earlier run\'s', async () => {
+  const db = freshDb([impl()]);
+  const store = createProjectStore({ db, config });
+  const runsPath = join(mkdtempSync(join(tmpdir(), 'aios-runs-')), 'log.jsonl');
+  const launch = () => ({ outcome: 'ok', note: 'done', branch: 'aios/F-impl-abcd1234' });
+  await executeRun({ store, policy: policy(), budget: budget(), now: localAt(12), runs: [], runsPath, launch, agents: ['claude'], findPr: () => 77, findTaskPr: () => 42, config });
+
+  assert.equal(getTask(db, 'F-impl').pr, '77');
+  assert.doesNotMatch(readRuns({ path: runsPath })[0].note, /duplicate/i);
 });
 
 // ---- RCA-4: boot lease recovery -----------------------------------------------------------------

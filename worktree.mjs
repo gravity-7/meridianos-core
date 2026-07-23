@@ -52,10 +52,20 @@ function hash36(str) {
  * createWorktree, which reuses/replaces a retried run's own branch).
  */
 export function branchName(taskId, session) {
-  const id = String(taskId ?? 'task').replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'task';
   const cleanedSession = String(session ?? '').replace(/[^a-zA-Z0-9]/g, '');
   const short = cleanedSession ? hash36(cleanedSession) : Math.random().toString(36).slice(2, 10);
-  return `aios/${id}-${short}`;
+  return `${branchPrefix(taskId)}${short}`;
+}
+
+/**
+ * The `aios/<taskId>-` prefix that EVERY branch for a task shares, whatever the session. A task
+ * re-claimed after a failed run gets a fresh session and therefore a fresh branch, so this prefix
+ * is the only way to recognize a PR opened by an EARLIER run of the same task — which is what
+ * stops the runner from re-doing work that is already up for review (see recoverPr in runner.mjs).
+ */
+export function branchPrefix(taskId) {
+  const id = String(taskId ?? 'task').replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'task';
+  return `aios/${id}-`;
 }
 
 /** Filesystem-safe worktree directory for a branch (branch slashes → `__`). `config` is the
@@ -68,6 +78,44 @@ export function worktreeDir(branch, config) {
  *  `config` is the injected AiosConfig (REQUIRED). */
 export function agentEnv(base = process.env, extra = {}, config) {
   return { ...base, AIOS_DB: config.defaultDbPath, ...extra };
+}
+
+/**
+ * Stamp WHICH model produced a commit into the git identity, so an agent-opened PR is
+ * self-attributing: `git log --format='%an %ae'` (and the commit list on GitHub) answers "which
+ * model wrote this?" without a run-log cross-reference. This closed a real provenance gap — every
+ * autonomous `aios/*` commit landed as the same `AIOS Builder` regardless of the model, and the one
+ * artifact that mapped session→model (the run log) was incomplete and unlinkable (the branch suffix
+ * is a one-way hash of the session), so which model authored a given F-PR was unrecoverable.
+ *
+ * Returns GIT_AUTHOR_ / GIT_COMMITTER_ overrides to merge into the agent's spawn env. Git reads
+ * these natively in whatever `git commit` the agent runs, so this is fully daemon-controlled and
+ * agent-independent — it needs no cooperation from claude/agy/opencode — and it is scoped to the
+ * agent's own subprocess env, so it never touches the founder's working tree.
+ *
+ * Design choices:
+ *  - The model is appended to the NAME as `<base> (<model>)` so it shows everywhere a name shows.
+ *  - The email is plus-addressed (`local+<slug>@domain`) so `%ae` is machine-parseable — but ONLY
+ *    when the daemon already supplied an email. Core is tenant-agnostic (ships no identity), so it
+ *    must never FABRICATE an email domain; if none is inherited, only the name is stamped.
+ *  - No model/agent tag ⇒ returns `{}` (identity untouched), so nothing changes for callers that
+ *    don't pass one.
+ */
+export function gitIdentityEnv(base = process.env, { agent, model } = {}) {
+  const tag = String(model || agent || '').trim();
+  if (!tag) return {};
+  const baseName = base.GIT_AUTHOR_NAME || base.GIT_COMMITTER_NAME || 'AIOS Builder';
+  const name = `${baseName} (${tag})`;
+  const out = { GIT_AUTHOR_NAME: name, GIT_COMMITTER_NAME: name };
+
+  const baseEmail = base.GIT_AUTHOR_EMAIL || base.GIT_COMMITTER_EMAIL || '';
+  const slug = tag.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
+  // Skip if already plus-addressed (idempotent — a re-launch must not stack `+a+b`).
+  if (slug && baseEmail.includes('@') && !baseEmail.includes('+')) {
+    const [local, domain] = baseEmail.split('@');
+    out.GIT_AUTHOR_EMAIL = out.GIT_COMMITTER_EMAIL = `${local}+${slug}@${domain}`;
+  }
+  return out;
 }
 
 /**

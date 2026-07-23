@@ -1,43 +1,26 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import os from 'node:os';
 import { HARNESS_ADAPTERS, resolveHarness, buildSpawnPlan } from '../harness-adapters.mjs';
 import { resolveProvider } from '../providers.mjs';
 import { launchAgent } from '../launcher.mjs';
-import { agentEnv } from '../worktree.mjs';
+import { agentEnv, gitIdentityEnv } from '../worktree.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
+import { makeHermeticRepo } from './helpers/hermetic-repo.mjs';
 
 // ─── Hermetic temp-repo setup ────────────────────────────────────────────────
-// Each test run gets its own fresh git repo in a temp dir so these tests never
-// touch C:\projects\propertyverdict's git state, never race the live daemon's
-// worktree ops, and always pass unconditionally (no inGitRepo guard needed).
+// Each test run gets its own fresh git repo AND its own isolated worktree root, so these tests
+// never touch the developer's git state, never race the live daemon's worktree ops, never race
+// the OTHER hermetic test file running in parallel (see hermetic-repo.mjs — the shared-root
+// collision was a real flake), and always pass unconditionally (no inGitRepo guard needed).
 
-function makeTempRepo(prefix) {
-  const root = mkdtempSync(join(os.tmpdir(), prefix));
-  const git = (args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' });
-  git(['init', '-b', 'main']);
-  git(['config', 'user.email', 'aios-itest@example.com']);
-  git(['config', 'user.name', 'AIOS itest']);
-  writeFileSync(join(root, 'README.md'), 'hermetic itest repo\n');
-  git(['add', '.']);
-  git(['commit', '-m', 'init']);
-  return root;
-}
-
-const tmpRoot = makeTempRepo('aios-itest-ha-');
-const cfg = resolvePaths({ root: tmpRoot, domain: FIXTURE_DOMAIN }); // named `cfg`, not `config` — a couple of tests below use a local
+const repo = makeHermeticRepo('aios-itest-ha-'); // MUST precede resolvePaths (sets AIOS_WORKTREE_ROOT)
+const cfg = resolvePaths({ root: repo.root, domain: FIXTURE_DOMAIN }); // named `cfg`, not `config` — a couple of tests below use a local
 // `config` for an unrelated JSON.parse() result and shadowing it would be confusing.
 
-// Tear down: remove the worktreeRoot first (it lives outside tmpRoot as a sibling),
-// then the temp repo itself.
-after(() => {
-  rmSync(cfg.worktreeRoot, { recursive: true, force: true });
-  rmSync(tmpRoot, { recursive: true, force: true });
-});
+after(() => repo.cleanup());
 
 const anthropic = () => resolveProvider('anthropic', {});
 const deepseek = () => resolveProvider('deepseek', {});
@@ -260,11 +243,11 @@ test('launchAgent default path (no provider/harness given) spawns claude with no
   assert.ok(captured.args.includes('--session-id'));
   assert.ok(captured.args.includes(session));
   // The native anthropic provider injects nothing (env: {}) — the spawn env must be byte-identical
-  // to plain agentEnv(process.env, {}, cfg), exactly as it was before harnesses/providers existed. (Not asserting the
-  // ANTHROPIC_* keys are absent: a real dev shell may already export them for its own CLI login —
-  // that's inherited via agentEnv(process.env, {}, cfg)'s process.env spread today AND before this change, so it's not
-  // a regression to check for here.)
-  assert.deepEqual(captured.opts.env, agentEnv(process.env, {}, cfg));
+  // to plain agentEnv(process.env, {}, cfg) plus the model-provenance git identity overlay. (Not
+  // asserting the ANTHROPIC_* keys are absent: a real dev shell may already export them for its own
+  // CLI login — that's inherited via agentEnv(process.env, {}, cfg)'s process.env spread today AND
+  // before this change, so it's not a regression to check for here.)
+  assert.deepEqual(captured.opts.env, { ...agentEnv(process.env, {}, cfg), ...gitIdentityEnv(process.env, { agent: 'claude', model: 'claude-opus-4-8' }) });
 });
 
 test('launchAgent maps agent "antigravity" to the antigravity harness by default', async () => {
@@ -324,15 +307,24 @@ test('launchAgent selects the opencode harness and writes opencode.json into the
   const prevKey = process.env.DEEPSEEK_KEY;
   process.env.DEEPSEEK_KEY = 'sk-test-789';
   let expectedEnv;
+  let launchResult;
   try {
-    await launchAgent({ agent: 'claude', task, session, provider: deepseek(), harness: 'opencode', _spawn: fakeSpawn, config: cfg });
+    launchResult = await launchAgent({ agent: 'claude', task, session, provider: deepseek(), harness: 'opencode', _spawn: fakeSpawn, config: cfg });
     // Snapshot agentEnv(process.env, {}, cfg) here, before restoring DEEPSEEK_KEY below, so it matches what
     // launchAgent actually saw at spawn time.
-    expectedEnv = agentEnv(process.env, {}, cfg);
+    // No `model` was passed, so the provenance overlay falls back to the agent name ('claude').
+    expectedEnv = { ...agentEnv(process.env, {}, cfg), ...gitIdentityEnv(process.env, { agent: 'claude', model: undefined }) };
   } finally {
     if (hadKey) process.env.DEEPSEEK_KEY = prevKey;
     else delete process.env.DEEPSEEK_KEY;
   }
+
+  // launchAgent SWALLOWS a worktree-setup failure into its return value and never calls _spawn, so
+  // without this `captured` would still be null and the real cause would surface below as an
+  // inscrutable "Cannot read properties of null (reading 'cmd')". Assert the outcome first so any
+  // future infra failure reports itself by name.
+  assert.equal(launchResult.outcome, 'ok', `launchAgent did not reach spawn: ${launchResult.note ?? ''}`);
+  assert.ok(captured, 'fakeSpawn was never invoked');
 
   assert.equal(captured.cmd, 'opencode');
   assert.ok(captured.args.includes('run'));
@@ -429,7 +421,7 @@ test('launchAgent leaves a provider with no route (native anthropic) alone even 
 
   await launchAgent({ agent: 'claude', model: 'claude-opus-4-8', task, session, _spawn: fakeSpawn, config: { ...cfg, gateway: gwConfig } });
 
-  assert.deepEqual(captured.opts.env, agentEnv(process.env, {}, cfg));
+  assert.deepEqual(captured.opts.env, { ...agentEnv(process.env, {}, cfg), ...gitIdentityEnv(process.env, { agent: 'claude', model: 'claude-opus-4-8' }) });
   assert.equal(runs.calls.length, 0, 'no route ⇒ no injection ⇒ nothing registered/unregistered');
 });
 
@@ -480,7 +472,7 @@ test('launchAgent is byte-identical to the no-gateway path when config.gateway i
   await launchAgent({ agent: 'claude', model: 'claude-opus-4-8', task: taskB, session: sessionB, _spawn: spawnCapture(absentSlot), config: { ...cfg, gateway: disabledGwConfig } });
   capturedAbsent = absentSlot.value;
 
-  const baselineEnv = agentEnv(process.env, {}, cfg);
+  const baselineEnv = { ...agentEnv(process.env, {}, cfg), ...gitIdentityEnv(process.env, { agent: 'claude', model: 'claude-opus-4-8' }) };
   assert.deepEqual(capturedWithout.opts.env, baselineEnv);
   assert.deepEqual(capturedAbsent.opts.env, baselineEnv);
   assert.deepEqual(capturedWithout.opts.env, capturedAbsent.opts.env);
