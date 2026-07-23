@@ -39,6 +39,34 @@ test('buildPrompt for designing tasks transitions to ready-for-impl', () => {
   assert.ok(prompt.includes('design work'));
 });
 
+// ---- model provenance in the PR body (companion to gitIdentityEnv's commit-identity stamp) ----
+test('buildPrompt hands the implement stage an exact provenance line for the PR body', () => {
+  const prompt = buildPrompt(
+    { id: 'F-42', title: 'Impl task', status: 'ready-for-impl' },
+    { config, model: 'claude-opus-4-8', agent: 'claude' },
+  );
+  assert.ok(prompt.includes('## PR description'));
+  assert.ok(prompt.includes('VERBATIM'), 'tells the agent to copy the line as-is');
+  assert.ok(prompt.includes('model `claude-opus-4-8`'), 'the exact model is interpolated');
+  assert.ok(prompt.includes('agent `claude`'));
+  assert.ok(prompt.includes('task `F-42`'));
+});
+
+test('buildPrompt omits the provenance line when no model is given (byte-identical to before)', () => {
+  const withModel = buildPrompt({ id: 'F-43', title: 'x', status: 'ready-for-impl' }, { config, model: 'gemini-3-pro', agent: 'antigravity' });
+  const without = buildPrompt({ id: 'F-43', title: 'x', status: 'ready-for-impl' }, { config });
+  assert.ok(withModel.includes('## PR description'));
+  assert.ok(!without.includes('## PR description'), 'no model ⇒ no provenance block');
+});
+
+test('buildPrompt adds no PR-body provenance to non-PR stages even with a model', () => {
+  // spec/designing stages never open a PR, so the footer would be nonsense there.
+  for (const status of ['spec', 'designing']) {
+    const prompt = buildPrompt({ id: 'F-44', title: 'x', status }, { config, model: 'claude-opus-4-8', agent: 'claude' });
+    assert.ok(!prompt.includes('## PR description'), `${status} stage must not get a PR provenance line`);
+  }
+});
+
 // ---- domain prompt prose (2.1c) --------------------------------------------------------------
 // buildPrompt reads config.domain.prompts.implRules from the injected config, so its '## Rules'
 // block is byte-identical to whatever the injected DomainPlugin's implRules say — proven here with
