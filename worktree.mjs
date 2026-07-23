@@ -52,10 +52,20 @@ function hash36(str) {
  * createWorktree, which reuses/replaces a retried run's own branch).
  */
 export function branchName(taskId, session) {
-  const id = String(taskId ?? 'task').replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'task';
   const cleanedSession = String(session ?? '').replace(/[^a-zA-Z0-9]/g, '');
   const short = cleanedSession ? hash36(cleanedSession) : Math.random().toString(36).slice(2, 10);
-  return `aios/${id}-${short}`;
+  return `${branchPrefix(taskId)}${short}`;
+}
+
+/**
+ * The `aios/<taskId>-` prefix that EVERY branch for a task shares, whatever the session. A task
+ * re-claimed after a failed run gets a fresh session and therefore a fresh branch, so this prefix
+ * is the only way to recognize a PR opened by an EARLIER run of the same task — which is what
+ * stops the runner from re-doing work that is already up for review (see recoverPr in runner.mjs).
+ */
+export function branchPrefix(taskId) {
+  const id = String(taskId ?? 'task').replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'task';
+  return `aios/${id}-`;
 }
 
 /** Filesystem-safe worktree directory for a branch (branch slashes → `__`). `config` is the
