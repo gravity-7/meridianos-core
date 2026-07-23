@@ -47,6 +47,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAios } from './config.mjs';
 import { assembleGateway } from './gateway/index.mjs';
+import { syncFromAdo } from './azure-devops-source.mjs';
 
 // Composition root: as of ★③.2 Part B, a DomainPlugin is a REQUIRED, explicitly-injected
 // dependency (there is no baked-in default tenant) — so the AIOS config can no longer be
@@ -151,6 +152,7 @@ export async function runWatchdogTick(deps) {
     _loadPolicy     = loadPolicy,
     _pruneEvents    = store.events.pruneEvents,
     _pruneHistory   = store.state.pruneHistory,
+    _syncFromAdo    = syncFromAdo,
   } = deps;
   const events = store.events;
 
@@ -174,6 +176,18 @@ export async function runWatchdogTick(deps) {
     } catch (tickErr) {
       logger.error('watchdog', `tick-error: ${tickErr?.message ?? String(tickErr)}`, tickErr);
       events.error('watchdog', 'tick-error', { error: tickErr?.message ?? String(tickErr) });
+    }
+
+    // Azure DevOps sync (if enabled): pull ADO features into board tasks before planner cycle
+    try {
+      if (policy?.integrations?.azure_devops?.enabled) {
+        const syncRes = await _syncFromAdo({ store, config: cfg, policy });
+        if (syncRes.created > 0 || syncRes.updated > 0) {
+          logger.log('scheduler', `ADO sync: created=${syncRes.created}, updated=${syncRes.updated}, skipped=${syncRes.skipped}`);
+        }
+      }
+    } catch (syncErr) {
+      logger.error('scheduler', `ADO sync error: ${syncErr?.message ?? String(syncErr)}`, syncErr);
     }
 
     // Planner: auto-promote proposed → spec → designing. Isolated so a throw
