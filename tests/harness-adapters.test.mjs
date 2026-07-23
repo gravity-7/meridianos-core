@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { HARNESS_ADAPTERS, resolveHarness, buildSpawnPlan } from '../harness-adapters.mjs';
 import { resolveProvider } from '../providers.mjs';
 import { launchAgent } from '../launcher.mjs';
-import { agentEnv } from '../worktree.mjs';
+import { agentEnv, gitIdentityEnv } from '../worktree.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
 import { makeHermeticRepo } from './helpers/hermetic-repo.mjs';
@@ -243,11 +243,11 @@ test('launchAgent default path (no provider/harness given) spawns claude with no
   assert.ok(captured.args.includes('--session-id'));
   assert.ok(captured.args.includes(session));
   // The native anthropic provider injects nothing (env: {}) — the spawn env must be byte-identical
-  // to plain agentEnv(process.env, {}, cfg), exactly as it was before harnesses/providers existed. (Not asserting the
-  // ANTHROPIC_* keys are absent: a real dev shell may already export them for its own CLI login —
-  // that's inherited via agentEnv(process.env, {}, cfg)'s process.env spread today AND before this change, so it's not
-  // a regression to check for here.)
-  assert.deepEqual(captured.opts.env, agentEnv(process.env, {}, cfg));
+  // to plain agentEnv(process.env, {}, cfg) plus the model-provenance git identity overlay. (Not
+  // asserting the ANTHROPIC_* keys are absent: a real dev shell may already export them for its own
+  // CLI login — that's inherited via agentEnv(process.env, {}, cfg)'s process.env spread today AND
+  // before this change, so it's not a regression to check for here.)
+  assert.deepEqual(captured.opts.env, { ...agentEnv(process.env, {}, cfg), ...gitIdentityEnv(process.env, { agent: 'claude', model: 'claude-opus-4-8' }) });
 });
 
 test('launchAgent maps agent "antigravity" to the antigravity harness by default', async () => {
@@ -312,7 +312,8 @@ test('launchAgent selects the opencode harness and writes opencode.json into the
     launchResult = await launchAgent({ agent: 'claude', task, session, provider: deepseek(), harness: 'opencode', _spawn: fakeSpawn, config: cfg });
     // Snapshot agentEnv(process.env, {}, cfg) here, before restoring DEEPSEEK_KEY below, so it matches what
     // launchAgent actually saw at spawn time.
-    expectedEnv = agentEnv(process.env, {}, cfg);
+    // No `model` was passed, so the provenance overlay falls back to the agent name ('claude').
+    expectedEnv = { ...agentEnv(process.env, {}, cfg), ...gitIdentityEnv(process.env, { agent: 'claude', model: undefined }) };
   } finally {
     if (hadKey) process.env.DEEPSEEK_KEY = prevKey;
     else delete process.env.DEEPSEEK_KEY;
@@ -420,7 +421,7 @@ test('launchAgent leaves a provider with no route (native anthropic) alone even 
 
   await launchAgent({ agent: 'claude', model: 'claude-opus-4-8', task, session, _spawn: fakeSpawn, config: { ...cfg, gateway: gwConfig } });
 
-  assert.deepEqual(captured.opts.env, agentEnv(process.env, {}, cfg));
+  assert.deepEqual(captured.opts.env, { ...agentEnv(process.env, {}, cfg), ...gitIdentityEnv(process.env, { agent: 'claude', model: 'claude-opus-4-8' }) });
   assert.equal(runs.calls.length, 0, 'no route ⇒ no injection ⇒ nothing registered/unregistered');
 });
 
@@ -471,7 +472,7 @@ test('launchAgent is byte-identical to the no-gateway path when config.gateway i
   await launchAgent({ agent: 'claude', model: 'claude-opus-4-8', task: taskB, session: sessionB, _spawn: spawnCapture(absentSlot), config: { ...cfg, gateway: disabledGwConfig } });
   capturedAbsent = absentSlot.value;
 
-  const baselineEnv = agentEnv(process.env, {}, cfg);
+  const baselineEnv = { ...agentEnv(process.env, {}, cfg), ...gitIdentityEnv(process.env, { agent: 'claude', model: 'claude-opus-4-8' }) };
   assert.deepEqual(capturedWithout.opts.env, baselineEnv);
   assert.deepEqual(capturedAbsent.opts.env, baselineEnv);
   assert.deepEqual(capturedWithout.opts.env, capturedAbsent.opts.env);
