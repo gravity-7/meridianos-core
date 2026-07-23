@@ -1,40 +1,25 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
 import { branchName, worktreeDir, agentEnv, createWorktree, createReviewWorktree, pruneAllWorktrees } from '../worktree.mjs';
 import { buildPrompt } from '../launcher.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
+import { makeHermeticRepo } from './helpers/hermetic-repo.mjs';
 
 // ─── Hermetic temp-repo setup ────────────────────────────────────────────────
-// Each test run gets its own fresh git repo in a temp dir so these tests never
-// touch C:\projects\propertyverdict's git state, never race the live daemon's
-// worktree ops, and always pass unconditionally (no inGitRepo guard needed).
+// Each test run gets its own fresh git repo AND its own isolated worktree root, so these tests
+// never touch the developer's git state and never race the live daemon's worktree ops. The
+// isolated root matters especially here: `pruneAllWorktrees()` below sweeps EVERYTHING under it,
+// which on the old shared root wiped a parallel test file's in-flight worktrees (see
+// hermetic-repo.mjs).
 
-function makeTempRepo(prefix) {
-  const root = mkdtempSync(join(os.tmpdir(), prefix));
-  const git = (args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' });
-  git(['init', '-b', 'main']);
-  git(['config', 'user.email', 'aios-itest@example.com']);
-  git(['config', 'user.name', 'AIOS itest']);
-  writeFileSync(join(root, 'README.md'), 'hermetic itest repo\n');
-  git(['add', '.']);
-  git(['commit', '-m', 'init']);
-  return root;
-}
+const repo = makeHermeticRepo('aios-itest-wt-'); // MUST precede resolvePaths (sets AIOS_WORKTREE_ROOT)
+const config = resolvePaths({ root: repo.root, domain: FIXTURE_DOMAIN });
 
-const tmpRoot = makeTempRepo('aios-itest-wt-');
-const config = resolvePaths({ root: tmpRoot, domain: FIXTURE_DOMAIN });
-
-// Tear down: remove the worktreeRoot first (it lives outside tmpRoot as a sibling),
-// then the temp repo itself.
-after(() => {
-  rmSync(config.worktreeRoot, { recursive: true, force: true });
-  rmSync(tmpRoot, { recursive: true, force: true });
-});
+after(() => repo.cleanup());
 
 // ─── Pure-logic tests (no git I/O) ────────────────────────────────────────────
 
