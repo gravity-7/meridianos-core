@@ -3,7 +3,7 @@
  * small, safe operation on the state DB, invoked from localhost only, pure over an injected db so
  * it's unit-tested without a socket. These back the dashboard-v2 contract's control endpoints:
  *   POST /api/run         → runNow (a DRY-RUN plan; spawning stays the founder's launcher)
- *   POST /api/task        → taskAction (block / unblock / snooze / skip / unsnooze / unskip)
+ *   POST /api/task        → taskAction (block / unblock / snooze / skip / unsnooze / unskip / bounce)
  *   POST /api/verify      → verifyAction (approve → merge, reject → bounce back)
  *   POST /api/escalation  → escalationAction (ack — escalations are recomputed each poll)
  */
@@ -68,20 +68,30 @@ export function taskAction(store, { id, action, now = Date.now(), days, reason }
       store.state.setGovernanceFlags({ taskId: id, skippedAt: null, skipReason: null }, { actor: 'founder', op: 'unskip', now: nowIso });
       return { ok: true, task: id };
     }
-    // G2: Bounce — send a task ONE stage backward so the spec/design agent gets another pass.
-    // The system will pick it up again on the next runner cycle without founder intervention.
-    // Allowed: in-review→in-progress, ready-for-impl→designing, designing→spec, spec→proposed.
+    // G2: Bounce — send a task ONE stage backward so the agent gets another pass. The system picks
+    // it up again on the next runner cycle without founder intervention (both targets are
+    // claimable, so an unleased bounced task is re-eligible immediately).
+    //
+    // This map must mirror machine.mjs's backward edges EXACTLY — it may never advertise a move the
+    // state machine will refuse, or the founder gets `illegal transition` instead of a clean no.
+    // Deliberately absent: designing→spec and spec→proposed. plannerCycle auto-promotes
+    // proposed→spec (on spec-entry) and spec→designing (once a spec file exists) on every watchdog
+    // tick, so either bounce would be silently reverted before the agent it was meant for could
+    // claim the task — worse than refusing it. See the note in machine.mjs.
     if (action === 'bounce') {
       const bounceMap = {
-        'in-review':      'in-progress',
+        'in-review': 'in-progress',
         'ready-for-impl': 'designing',
-        'designing':      'spec',
-        'spec':           'proposed',
       };
       const to = bounceMap[t0.status];
       if (!to) return { ok: false, error: `cannot bounce from status '${t0.status}'` };
       const note = reason ? `bounced by founder: ${reason}` : 'bounced from dashboard';
-      const r = store.state.transition({ taskId: id, to, actor: 'founder', note, now: nowIso });
+      // Free any live lease: the founder has just declared this work invalid, so "an agent is
+      // working this" is no longer true. Without it a bounced ready-for-impl task sits unclaimable
+      // behind its own stale lease until the TTL reaper frees it (inflating reap_count and raising
+      // a false "stalling" escalation on the way). A no-op for in-review, which already frees the
+      // lease on entry.
+      const r = store.state.transition({ taskId: id, to, actor: 'founder', note, releaseLease: true, now: nowIso });
       return (r && r.ok) ? { ok: true, task: id, status: to } : { ok: false, error: r?.reason ?? 'transition failed' };
     }
     return { ok: false, error: `unsupported action: ${action}` };

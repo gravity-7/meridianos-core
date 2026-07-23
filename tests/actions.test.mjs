@@ -156,6 +156,62 @@ test('verifyAction approve merges (overrides founder_only), reject bounces back'
   assert.equal(store2.state.getTask('F-b').status, 'in-progress');
 });
 
+test('taskAction bounce sends in-review back to in-progress, with the reason in the note', () => {
+  const store = freshStore([impl({ status: 'in-review' })]);
+  const r = taskAction(store, { id: 'F-impl', action: 'bounce', reason: 'missing tests', now: T0 });
+  assert.deepEqual(r, { ok: true, task: 'F-impl', status: 'in-progress' });
+  const t = store.state.getTask('F-impl');
+  assert.equal(t.status, 'in-progress');
+  assert.equal(t.note, 'bounced by founder: missing tests');
+});
+
+test('taskAction bounce without a reason still records that it was a dashboard bounce', () => {
+  const store = freshStore([impl({ status: 'in-review' })]);
+  assert.equal(taskAction(store, { id: 'F-impl', action: 'bounce', now: T0 }).ok, true);
+  assert.equal(store.state.getTask('F-impl').note, 'bounced from dashboard');
+});
+
+test('taskAction bounce sends ready-for-impl back to designing for a design redo', () => {
+  const store = freshStore([impl({ status: 'ready-for-impl' })]);
+  const r = taskAction(store, { id: 'F-impl', action: 'bounce', reason: 'wrong data model', now: T0 });
+  assert.deepEqual(r, { ok: true, task: 'F-impl', status: 'designing' });
+  const t = store.state.getTask('F-impl');
+  assert.equal(t.status, 'designing');
+  assert.equal(t.note, 'bounced by founder: wrong data model');
+});
+
+// A bounce declares the in-flight work invalid, so the lease ("an agent is working this") must go
+// with it — otherwise the task sits unclaimable behind its own stale lease until the TTL reaper
+// frees it, inflating reap_count and raising a false "stalling" escalation on the way.
+test('taskAction bounce frees a live lease so the task is immediately re-claimable', () => {
+  const store = freshStore([impl({ status: 'ready-for-impl' })]);
+  const claim = store.state.claimTask({ taskId: 'F-impl', agent: 'claude', session: 'sess-1', now: new Date(T0).toISOString() });
+  assert.equal(claim.won, true);
+  assert.equal(store.state.getTask('F-impl').lease_session, 'sess-1');
+
+  assert.equal(taskAction(store, { id: 'F-impl', action: 'bounce', now: T0 }).ok, true);
+  const t = store.state.getTask('F-impl');
+  assert.equal(t.status, 'designing');
+  assert.equal(t.lease_session, null, 'lease session freed');
+  assert.equal(t.lease_owner, null, 'lease owner freed');
+  assert.equal(t.lease_expires, null, 'lease expiry cleared');
+});
+
+// The bounceMap must never advertise a move machine.mjs would refuse: an entry the state machine
+// rejects surfaces to the founder as a confusing "illegal transition: X -> Y" instead of a clean
+// refusal. designing/spec stay out on purpose — plannerCycle would auto-revert those on the next
+// watchdog tick. Every non-bounceable status refuses by name.
+test('taskAction bounce refuses every non-bounceable status by name, and does not move the task', () => {
+  for (const status of ['proposed', 'spec', 'designing', 'in-progress', 'done', 'blocked']) {
+    const store = freshStore([impl({ status })]);
+    const r = taskAction(store, { id: 'F-impl', action: 'bounce', now: T0 });
+    assert.equal(r.ok, false, `${status} should not be bounceable`);
+    assert.equal(r.error, `cannot bounce from status '${status}'`);
+    assert.doesNotMatch(r.error, /illegal transition/, `${status} must refuse cleanly, not leak a machine error`);
+    assert.equal(store.state.getTask('F-impl').status, status, `${status} must be left untouched`);
+  }
+});
+
 test('escalationAction acks; handleAction routes by path', () => {
   const store = freshStore([impl()]);
   assert.equal(escalationAction(store, { id: 'esc-1', action: 'ack' }).ok, true);
