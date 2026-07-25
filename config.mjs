@@ -129,6 +129,12 @@ function resolveDomain(domain, repoRoot) {
     // the dashboard action map. Default 'tools/aios/cli.mjs' (PV's runner) so existing tenants are
     // unchanged; a non-PV tenant sets an absolute path to its own runner CLI.
     cliPath: domain.cliPath ?? 'tools/aios/cli.mjs',
+    // paths — OPTIONAL { features, policy, inbox, feedback, runs } overrides (repo-relative).
+    // Each key maps to a repo-relative path. Unset ⇒ core defaults. This lets a tenant put its
+    // feature specs at `docs/specs/`, its policy at `config/policy.yaml`, etc. — no hardcoding.
+    // This is the interim D2-predecessor (see docs/adr/0001-planning-and-execution-planes.md);
+    // the future ProjectStore facade will absorb these individual overrides into a DocStore.
+    paths: domain.paths || undefined,
   };
 }
 
@@ -146,11 +152,13 @@ export function resolvePaths({ root, domain } = {}) {
     defaultDbPath,
     boardJson: join(repoRoot, '.ai', 'state', 'board.json'),
     boardMd: join(repoRoot, '.ai', 'board.md'),
-    policyPath: join(repoRoot, '.ai', 'policy.yaml'),
-    runsPath: join(repoRoot, '.ai', 'runs', 'log.jsonl'),
-    inboxDir: join(repoRoot, '.ai', 'inbox'),
-    feedbackDir: join(repoRoot, '.ai', 'feedback'),
-    featuresDir: join(repoRoot, '.ai', 'features'),
+    // Tenant-overridable paths via domain.paths (D2 predecessor — see ADR 0001).
+    // Each falls back to the current hardcoded default when the tenant didn't set it.
+    policyPath: join(repoRoot, resolvedDomain.paths?.policy ?? '.ai', 'policy.yaml'),
+    runsPath: join(repoRoot, resolvedDomain.paths?.runs ?? '.ai', 'runs', 'log.jsonl'),
+    inboxDir: join(repoRoot, resolvedDomain.paths?.inbox ?? '.ai', 'inbox'),
+    feedbackDir: join(repoRoot, resolvedDomain.paths?.feedback ?? '.ai', 'feedback'),
+    featuresDir: join(repoRoot, resolvedDomain.paths?.features ?? '.ai', 'features'),
     secretFile: join(repoRoot, '.ai', 'secrets', 'escalation-webhook'),
     // Inside the repo under `.ai/worktrees/` (gitignored) — every tenant's worktrees live inside
     // its own repo tree, so there is zero risk of cross-tenant collision. The earlier sibling-dir

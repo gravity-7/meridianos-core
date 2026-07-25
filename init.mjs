@@ -82,6 +82,15 @@ riskToAction:
 
 # CLI path agents invoke for task transitions.
 cliPath: tools/aios/cli.mjs
+
+# Path overrides — customize where MeridianOS stores tenant artifacts.
+# All paths are repo-relative. Uncomment to change from .ai/ defaults.
+# paths:
+#   features: docs/specs        # where feature spec.md files live
+#   policy: config/policy.yaml  # budget + routing policy
+#   inbox: intake/inbox         # incoming task drops
+#   feedback: intake/feedback   # agent feedback artifacts
+#   runs: logs/runs.jsonl       # agent run history
 `;
 
   // --- .ai/policy.yaml ---
