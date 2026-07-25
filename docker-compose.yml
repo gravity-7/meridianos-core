@@ -1,8 +1,8 @@
 # MeridianOS core — L2 packaging (Docker Compose)
 #
-# Runs the standalone gateway sidecar (gateway/cli.mjs) — the one entrypoint in this repo that
-# needs no tenant DomainPlugin (see Dockerfile + docs/DEPLOY.md for why the full daemon,
-# scheduler.mjs, can't run standalone from this image).
+# Two services from ONE image:
+#   gateway — standalone sidecar (default `docker compose up`)
+#   daemon  — full autonomous loop (uncomment + mount .ai/tenant.yaml)
 #
 # Tenant-agnostic by construction: no tenant paths, no tenant config, and no secret literals are
 # hardcoded here. Every knob is an env var with a name only — the value is supplied by the
@@ -41,36 +41,36 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------------------------
-  # daemon (reference only — commented out; not runnable as-is)
+  # daemon — the full autonomous loop (scheduler.mjs via daemon-entry.mjs).
   # ---------------------------------------------------------------------------------------------
-  # The full autonomous daemon (scheduler.mjs) requires an injected DomainPlugin that this
-  # tenant-agnostic core does not and will not ship (docs/README.md, "no default tenant"). To run
-  # it under Docker, build your OWN image FROM this one that adds your tenant entrypoint, e.g.:
+  # Uncomment this service and create a `.ai/tenant.yaml` in your repo root to run the full daemon
+  # from the SAME image — no custom Dockerfile or FROM-derived build needed.
   #
-  #   FROM meridianos-core-gateway
-  #   COPY my-tenant-domain.mjs my-entry.mjs ./
-  #   CMD ["node", "my-entry.mjs"]
-  #
-  # where `my-entry.mjs` imports `start` from `scheduler.mjs` and calls
-  # `start({ domain: myDomainPlugin })`. Then add a service here (or in your own compose file)
-  # pointing `build:`/`image:` at that derived image, with volumes for your `.ai/` state dir and
-  # `AIOS_ROOT`/`AIOS_WORKTREE_ROOT`/`AIOS_DB` env vars set to match. See docs/DEPLOY.md.
+  # The daemon auto-discovers its tenant from:
+  #   1. $AIOS_TENANT_CONFIG (env var pointing at a YAML file), or
+  #   2. .ai/tenant.yaml in the repo root (mounted below)
   #
   # daemon:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.daemon   # your own tenant Dockerfile, not part of this repo
+  #   build: .
+  #   image: meridianos-core-gateway
+  #   entrypoint: ["node", "daemon-entry.mjs"]
   #   ports:
   #     - "${DASHBOARD_PORT:-4317}:4317"
   #   environment:
-  #     - AIOS_ROOT=/app
+  #     - AIOS_ROOT=/tenant
   #     - AIOS_DASHBOARD_PORT=4317
   #     - AIOS_DASH_TOKEN
   #     - AIOS_ESCALATION_WEBHOOK
-  #     - AIOS_DRY_RUN
+  #     - DEEPSEEK_KEY
+  #     - ANTHROPIC_API_KEY
+  #     - OPENROUTER_KEY
   #   volumes:
-  #     - ./tenant-state/.ai:/app/.ai
+  #     - ./:/tenant:ro           # mounts .ai/tenant.yaml + policy.yaml
+  #     - daemon-state:/tenant/.ai/state
+  #     - daemon-gateway:/tenant/.ai/gateway
   #   restart: unless-stopped
 
 volumes:
   gateway-ledger:
+  daemon-state:
+  daemon-gateway:

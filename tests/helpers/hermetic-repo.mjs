@@ -2,19 +2,12 @@
  * Hermetic git repo + ISOLATED worktree root for tests that perform real `git worktree` I/O.
  *
  * A throwaway repo in os.tmpdir() keeps these tests off the developer's real git state and away
- * from the live daemon's worktree ops. But the temp repo alone is NOT enough isolation: config.mjs
- * derives `worktreeRoot` as a SIBLING of the repo root (deliberately outside it, so the main tree's
- * `git status` never sees agent worktrees), and every hermetic temp repo lives in os.tmpdir() — so
- * every one of their siblings collapses onto the SAME shared `<tmp>/.aios-worktrees`.
+ * from the live daemon's worktree ops. With the new default (`.ai/worktrees/` inside the repo),
+ * every hermetic temp repo already gets its own isolated worktree root automatically.
  *
- * `node --test` runs test FILES in parallel processes, so a shared root means one file's teardown
- * (`rmSync(worktreeRoot)`) or `pruneAllWorktrees()` deletes another file's worktrees mid-flight.
- * That surfaced as a genuinely confusing flake: `git worktree add` failing with any of
- * "Invalid path '<tmp>/.aios-worktrees': No such file or directory", "not a git repository", or
- * "this operation must be run in a work tree", depending on exactly when the directory vanished.
- *
- * This is the same collision config.mjs already warns about for multi-tenant installs, with the
- * same fix: pin `$AIOS_WORKTREE_ROOT` to a unique per-caller directory.
+ * We still explicitly pin `$AIOS_WORKTREE_ROOT` to a temp dir OUTSIDE the repo so cleanup is
+ * trivial (a single `rmSync` of the worktree root) and the temp repo teardown doesn't have to
+ * traverse into the repo tree.
  */
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';

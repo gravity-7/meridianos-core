@@ -60,7 +60,7 @@ test('resolvePaths() with an injected FIXTURE_DOMAIN matches today\'s literal re
     assert.equal(p.feedbackDir, join(EXPECTED_REPO_ROOT, '.ai', 'feedback'));
     assert.equal(p.featuresDir, join(EXPECTED_REPO_ROOT, '.ai', 'features'));
     assert.equal(p.secretFile, join(EXPECTED_REPO_ROOT, '.ai', 'secrets', 'escalation-webhook'));
-    assert.equal(p.worktreeRoot, join(EXPECTED_REPO_ROOT, '..', '.aios-worktrees'));
+    assert.equal(p.worktreeRoot, join(EXPECTED_REPO_ROOT, '.ai', 'worktrees'));
     assert.equal(p.pricingPath, join(EXPECTED_REPO_ROOT, 'tools', 'aios', 'pricing.json'));
   });
 });
@@ -80,7 +80,7 @@ test('createAios({domain: FIXTURE_DOMAIN}).config matches a plain resolvePaths({
 });
 
 test('AIOS_WORKTREE_ROOT overrides worktreeRoot (multi-tenant isolation) without touching other paths', () => {
-  const isolated = join(EXPECTED_REPO_ROOT, '..', '.aios-worktrees-tenantX');
+  const isolated = join(EXPECTED_REPO_ROOT, '.ai', 'worktrees-tenantX');
   withEnv({ AIOS_ROOT: undefined, AIOS_DB: undefined, AIOS_WORKTREE_ROOT: isolated }, () => {
     const p = resolvePaths({ domain: FIXTURE_DOMAIN });
     assert.equal(p.worktreeRoot, isolated, 'worktreeRoot honors AIOS_WORKTREE_ROOT');
@@ -88,9 +88,9 @@ test('AIOS_WORKTREE_ROOT overrides worktreeRoot (multi-tenant isolation) without
     assert.equal(p.boardJson, join(EXPECTED_REPO_ROOT, '.ai', 'state', 'board.json'));
     assert.equal(p.policyPath, join(EXPECTED_REPO_ROOT, '.ai', 'policy.yaml'));
   });
-  // unset ⇒ back to the default sibling derivation (byte-identical to before)
+  // unset ⇒ back to the default inside-repo derivation
   withEnv({ AIOS_ROOT: undefined, AIOS_DB: undefined, AIOS_WORKTREE_ROOT: undefined }, () => {
-    assert.equal(resolvePaths({ domain: FIXTURE_DOMAIN }).worktreeRoot, join(EXPECTED_REPO_ROOT, '..', '.aios-worktrees'));
+    assert.equal(resolvePaths({ domain: FIXTURE_DOMAIN }).worktreeRoot, join(EXPECTED_REPO_ROOT, '.ai', 'worktrees'));
   });
 });
 
@@ -110,9 +110,8 @@ test('AIOS_ROOT redirects every derived path under the new root', () => {
     assert.equal(p.featuresDir, join(tmpRoot, '.ai', 'features'));
     assert.equal(p.secretFile, join(tmpRoot, '.ai', 'secrets', 'escalation-webhook'));
     assert.equal(p.pricingPath, join(tmpRoot, 'tools', 'aios', 'pricing.json'));
-    // worktreeRoot is deliberately a SIBLING of the repo root (outside it, so the main tree's
-    // `git status` never sees agent worktrees) — it moves with the root, not "under" it.
-    assert.equal(p.worktreeRoot, join(tmpRoot, '..', '.aios-worktrees'));
+    // worktreeRoot is inside the repo under `.ai/worktrees/` (gitignored) — self-isolating per tenant.
+    assert.equal(p.worktreeRoot, join(tmpRoot, '.ai', 'worktrees'));
   });
 });
 

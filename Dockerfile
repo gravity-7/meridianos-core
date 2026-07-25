@@ -1,14 +1,8 @@
 # MeridianOS core — L2 packaging (Docker)
 #
 # This image packages the **gateway sidecar** (`gateway/cli.mjs`, bin `meridian-gateway`) as its
-# default runnable service, because it is the ONLY entrypoint in this repo that is genuinely
-# tenant-agnostic: no `DomainPlugin`, no tenant loop, no baked-in config (see gateway/README.md).
-#
-# The full daemon (`scheduler.mjs`) is NOT runnable standalone from this image: `config.mjs`
-# THROWS if no `DomainPlugin` is injected, and this core ships zero tenant defaults by design
-# (docs/README.md, "no default tenant"). A tenant that wants the daemon builds their OWN image
-# `FROM` this one (or mounts their composition-root entry script as a volume) that imports
-# `scheduler.mjs`'s `start({ domain })` with their own plugin — see docs/DEPLOY.md for the pattern.
+# default runnable service. The full daemon can also run from this same image via
+# `daemon-entry.mjs` when a `.ai/tenant.yaml` is volume-mounted — no custom build required.
 #
 # BYO-key invariant: no API keys or other secret literals are ever baked into this image. Every
 # provider key is supplied at container *runtime* via an env var NAME (e.g. `DEEPSEEK_KEY`),

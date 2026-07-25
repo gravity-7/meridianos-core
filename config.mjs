@@ -60,6 +60,7 @@
  */
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveTenantConfig } from './tenant-config.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const COMPUTED_DEFAULT_ROOT = join(HERE, '..', '..');
@@ -68,15 +69,24 @@ function parseAgentsEnv(v) {
   return v.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-/** Resolve a REQUIRED DomainPlugin — throws if none is supplied (no baked-in tenant to fall back
- *  to). `$AIOS_AGENTS` (comma-separated) overrides `domain.agents`, but ONLY when the plugin
- *  didn't explicitly set `agents` itself, so an explicit `{domain:{agents}}` still wins over the
- *  env var (matching the pre-refactor `agents ?? (env ? ... : default)` precedence: explicit
- *  option > env > plugin-omitted). There is no field-by-field fallback onto any default plugin —
- *  every field not present on `domain` resolves to `undefined`. */
-function resolveDomain(domain) {
+/** Resolve a DomainPlugin. Resolution chain:
+ *   1. Explicit `domain` object passed by the caller (JS DomainPlugin — full power)
+ *   2. `$AIOS_TENANT_CONFIG` env var → YAML file at that path
+ *   3. `.ai/tenant.yaml` in the repo root (zero-config declarative default)
+ *   4. Throw — a DomainPlugin is required
+ *
+ * `$AIOS_AGENTS` (comma-separated) overrides `domain.agents`, but ONLY when the plugin
+ *  didn't explicitly set `agents` itself. There is no field-by-field fallback onto any default
+ *  plugin — every field not present on `domain` resolves to `undefined`. */
+function resolveDomain(domain, repoRoot) {
   if (domain == null) {
-    throw new Error('AIOS: a DomainPlugin is required — pass { domain } (see the tenant module, e.g. tools/aios/pv-domain.mjs)');
+    // Try declarative tenant config before giving up
+    const fromYaml = resolveTenantConfig(repoRoot);
+    if (fromYaml) {
+      domain = fromYaml;
+    } else {
+      throw new Error('AIOS: a DomainPlugin is required — pass { domain }, set $AIOS_TENANT_CONFIG, or create .ai/tenant.yaml');
+    }
   }
   const explicitAgents = 'agents' in domain;
   const agents = explicitAgents
@@ -128,7 +138,7 @@ function resolveDomain(domain) {
 export function resolvePaths({ root, domain } = {}) {
   const repoRoot = root ?? process.env.AIOS_ROOT ?? COMPUTED_DEFAULT_ROOT;
   const defaultDbPath = join(repoRoot, '.ai', 'state', 'aios.db');
-  const resolvedDomain = resolveDomain(domain);
+  const resolvedDomain = resolveDomain(domain, repoRoot);
 
   return {
     repoRoot,
@@ -142,13 +152,11 @@ export function resolvePaths({ root, domain } = {}) {
     feedbackDir: join(repoRoot, '.ai', 'feedback'),
     featuresDir: join(repoRoot, '.ai', 'features'),
     secretFile: join(repoRoot, '.ai', 'secrets', 'escalation-webhook'),
-    // Sibling of the repo root, deliberately OUTSIDE it — so the main tree's `git status` never
-    // sees agent worktrees (see worktree.mjs). `$AIOS_WORKTREE_ROOT` overrides it so MULTIPLE
-    // tenants under the same parent dir don't collide on one shared `.aios-worktrees` — the boot
-    // `pruneAllWorktrees()` sweeps everything under this path, so two tenants sharing it would wipe
-    // each other's live agent worktrees. Each tenant sets its own isolated root (default unchanged
-    // for single-tenant/PV — byte-identical).
-    worktreeRoot: process.env.AIOS_WORKTREE_ROOT || join(repoRoot, '..', '.aios-worktrees'),
+    // Inside the repo under `.ai/worktrees/` (gitignored) — every tenant's worktrees live inside
+    // its own repo tree, so there is zero risk of cross-tenant collision. The earlier sibling-dir
+    // design (`../.aios-worktrees`) silently shared one root for every tenant under the same
+    // parent dir. `$AIOS_WORKTREE_ROOT` still overrides for exotic layouts.
+    worktreeRoot: process.env.AIOS_WORKTREE_ROOT || join(repoRoot, '.ai', 'worktrees'),
     pricingPath: join(repoRoot, 'tools', 'aios', 'pricing.json'),
     domain: resolvedDomain,
   };
