@@ -327,6 +327,30 @@ export function budgetStatus({ config, policy = loadPolicy(undefined, config), n
   };
 }
 
+/** Read-only per-provider spend breakdown sourced from the GATEWAY LEDGER
+ *  (not the run log). Groups by provider+model, with USD cost and token counts.
+ *  Returns { [provider]: { [model]: { calls, tokens, cost } } } or null if the
+ *  ledger is unavailable. */
+export function providerBreakdownFromLedger(config) {
+  try {
+    const gatewayOn = config?.gateway?.enabled === true;
+    const tenant = config?.gateway?.registry?.tenant ?? config?.gateway?.tenant ?? null;
+    if (!gatewayOn || !tenant) return null;
+    const ledger = openLedger(undefined, { config });
+    const rows = ledger.prepare(
+      `SELECT provider, model, COUNT(*) AS calls, SUM(total_tokens) AS tokens, SUM(cost_usd) AS cost
+         FROM token_events WHERE tenant = ? GROUP BY provider, model ORDER BY cost DESC`
+    ).all(tenant);
+    const out = {};
+    for (const r of rows) {
+      const p = r.provider || 'unknown';
+      if (!out[p]) out[p] = {};
+      out[p][r.model || 'unknown'] = { calls: r.calls, tokens: r.tokens ?? 0, cost: r.cost ?? 0 };
+    }
+    return out;
+  } catch { return null; }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   // Diagnostic-only: core has no default tenant, so `node budget.mjs` directly needs SOME
   // DomainPlugin to construct a config. This tiny inline plugin exists ONLY to make this

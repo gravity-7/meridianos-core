@@ -25,6 +25,9 @@ export const PROVIDERS = {
     baseUrl: null, // null = inject nothing; use the CLI's own login (today's behavior)
     wire: 'anthropic',
     keyEnv: null, // no BYO key for the native harness
+    // Declarative harness compatibility — which harnesses can talk to this provider.
+    // 'antigravity' is absent because antigravity runs native Gemini, not via provider routing.
+    harnesses: ['claude-code'],
     models: {
       simple:      'claude-haiku-4-5-20251001',
       medium:      'claude-sonnet-5',
@@ -41,6 +44,7 @@ export const PROVIDERS = {
     wire: 'openai',
     keyEnv: 'DEEPSEEK_KEY',
     anthropicBaseUrl: 'https://api.deepseek.com/anthropic',
+    harnesses: ['claude-code', 'opencode'],
     models: {
       simple:      'deepseek-v4-flash',
       medium:      'deepseek-v4-flash',
@@ -54,6 +58,7 @@ export const PROVIDERS = {
     baseUrl: 'https://openrouter.ai/api/v1',
     wire: 'openai',
     keyEnv: 'OPENROUTER_KEY',
+    harnesses: ['claude-code', 'opencode'],
     // The universal test key for cheap multi-model eval (1.7) — tier-specific model choice on
     // OpenRouter is that task's concern, not this one, so every tier points at the same route.
     models: {
@@ -92,9 +97,14 @@ export function validateProviders(registry) {
     if (!entry.models || typeof entry.models !== 'object') {
       throw new Error(`providers.${key}.models must be an object`);
     }
-    for (const tier of TIERS) {
+    // Tiers are OPTIONAL — a provider may cover only a subset. Missing tiers simply
+    // won't be routable for that provider; model-router falls back to the next provider.
+    for (const tier of Object.keys(entry.models)) {
+      if (!TIERS.includes(tier)) {
+        throw new Error(`providers.${key}.models.${tier}: unknown tier (valid: ${TIERS.join(', ')})`);
+      }
       if (typeof entry.models[tier] !== 'string' || entry.models[tier].length === 0) {
-        throw new Error(`providers.${key}.models is missing a valid model id for tier '${tier}'`);
+        throw new Error(`providers.${key}.models.${tier} must be a non-empty model id`);
       }
     }
   }
@@ -138,4 +148,23 @@ export function providerKeyPresent(descriptor) {
   if (!descriptor) return false;
   if (descriptor.keyEnv === null || descriptor.keyEnv === undefined) return true;
   return Boolean(process.env[descriptor.keyEnv]);
+}
+
+/**
+ * Validate that a harness is compatible with a provider. Checks the provider's declarative
+ * `harnesses` field. Returns { ok, error? } — never throws, so callers can surface the
+ * incompatibility as a diagnosable reason rather than a crash.
+ */
+export function validateHarnessCompatibility(harness, providerDescriptor) {
+  if (!providerDescriptor) return { ok: false, error: 'unknown provider' };
+  if (!harness) return { ok: true }; // no harness constraint
+  // 'antigravity' runs native Gemini — it's not routed through providers
+  if (harness === 'antigravity') return { ok: true };
+  const compatible = providerDescriptor.harnesses;
+  if (!compatible || compatible.length === 0) return { ok: true }; // no compatibility declared → assume compatible
+  if (compatible.includes(harness)) return { ok: true };
+  return {
+    ok: false,
+    error: `harness '${harness}' is not compatible with provider '${providerDescriptor.name}'. Compatible harnesses: ${compatible.join(', ')}`,
+  };
 }

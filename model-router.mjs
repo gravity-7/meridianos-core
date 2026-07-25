@@ -19,7 +19,8 @@
  *   critical    → whole-repo migration, release audit, multi-service refactor (top 1–2%)
  */
 import { parseJsonArray } from './state.mjs';
-import { resolveProvider, modelForTier } from './providers.mjs';
+import { resolveProvider, modelForTier, PROVIDERS } from './providers.mjs';
+import { loadPolicy } from './budget.mjs';
 
 // ─── Complexity tiers ──────────────────────────────────────────────────────
 
@@ -336,6 +337,44 @@ export function routeModel(agent, task, policy, budgetState = 'ok', domain) {
       ? `${category} (${tier}) → ${providerName}${effectiveTier !== tier ? ` → downgraded to ${effectiveTier} (budget warn)` : ''}`
       : `complexity=${task.complexity ?? '?'} → ${tier} → ${providerName}${effectiveTier !== tier ? ` → ${effectiveTier} (budget warn)` : ''}`,
   };
+}
+
+/** Which providers can handle a given complexity tier? Returns provider names sorted
+ *  by tier match quality (exact match first, then higher-tier fallbacks). */
+export function providersForTier(tier, policy, config) {
+  const results = [];
+  const p = policy ?? loadPolicy(undefined, config);
+  // Collect all resolvable providers: code defaults + policy overlay
+  const names = new Set([...Object.keys(PROVIDERS)]);
+  if (p?.providers) for (const n of Object.keys(p.providers)) names.add(n);
+
+  for (const name of names) {
+    const provider = resolveProvider(name, p, config);
+    if (!provider?.models) continue;
+    if (provider.models[tier]) {
+      results.push({ provider: name, model: provider.models[tier], exact: true });
+    } else {
+      // Try higher tiers as fallback
+      const tierIdx = TIERS.indexOf(tier);
+      for (let i = tierIdx + 1; i < TIERS.length; i++) {
+        if (provider.models[TIERS[i]]) {
+          results.push({ provider: name, model: provider.models[TIERS[i]], exact: false, fallbackTier: TIERS[i] });
+          break;
+        }
+      }
+    }
+  }
+  results.sort((a, b) => {
+    if (a.exact !== b.exact) return a.exact ? -1 : 1;
+    return TIERS.indexOf(a.fallbackTier || tier) - TIERS.indexOf(b.fallbackTier || tier);
+  });
+  return results;
+}
+
+/** List all models for a provider, keyed by tier. Returns null if the provider is unknown. */
+export function listProviderModels(providerName, policy, config) {
+  const p = resolveProvider(providerName, policy, config);
+  return p ? { ...p.models } : null;
 }
 
 /**

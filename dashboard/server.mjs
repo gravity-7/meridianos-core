@@ -19,10 +19,12 @@ import { openDb } from '../db.mjs';
 import { createProjectStore } from '../project-store.mjs';
 import { createAios } from '../config.mjs';
 import { writePolicy, LEVER_PATHS } from '../policy-write.mjs';
-import { loadPolicy } from '../budget.mjs';
+import { loadPolicy, providerBreakdownFromLedger } from '../budget.mjs';
 import { validatePolicy, applyDottedUpdates } from '../policy-validate.mjs';
 import { handleAction } from './actions.mjs';
 import { readSpec, writeSpec } from './spec-file.mjs';
+import { openLedger, queryWindow, listEvents } from '../gateway/ledger.mjs';
+import { readRuns } from '../runlog.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.html');
@@ -112,7 +114,18 @@ function restartDaemon(config) {
   }
 }
 
-let statusCache = { t: 0, body: '' };
+// Lazy gateway ledger opener — only opens when a /api/ledger endpoint is hit.
+// Uses the gateway's tenant from config.gateway.registry.tenant or config.gateway.tenant.
+let _ledger = null;
+function getLedger(config) {
+  if (_ledger) return _ledger;
+  try { _ledger = openLedger(undefined, { config }); } catch { return null; }
+  return _ledger;
+}
+function getTenant(config) {
+  return config?.gateway?.registry?.tenant ?? config?.gateway?.tenant ?? 'default';
+}
+
 let _store = null;
 
 function send(res, code, body, type = 'application/json') {
@@ -216,6 +229,74 @@ export function createDashboardServer(config) {
         const result = handleAction(getStore(), url.pathname, body, { config });
         if (url.pathname !== '/api/run') statusCache.t = 0; // a mutating action → rebuild next poll
         return send(res, 200, JSON.stringify(result));
+      }
+      // ── Gateway ledger API (F004 spend dashboard data) ──────────────────
+      if (req.method === 'GET' && url.pathname === '/api/ledger/summary') {
+        const ledger = getLedger(config);
+        if (!ledger) return send(res, 200, JSON.stringify({ ok: true, available: false }));
+        const tenant = getTenant(config);
+        const week = queryWindow(ledger, { tenant, since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() });
+        const denyCount = ledger.prepare(
+          `SELECT COUNT(*) AS c FROM token_events WHERE tenant = ? AND enforcement_decision = 'deny'`
+        ).get(tenant)?.c ?? 0;
+        return send(res, 200, JSON.stringify({ ok: true, available: true, ...week, denyCount }));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/ledger/by-model') {
+        const ledger = getLedger(config);
+        if (!ledger) return send(res, 200, JSON.stringify({ ok: true, available: false }));
+        const tenant = getTenant(config);
+        const rows = ledger.prepare(
+          `SELECT provider, model, COUNT(*) AS calls, SUM(total_tokens) AS tokens, SUM(cost_usd) AS cost
+             FROM token_events WHERE tenant = ? GROUP BY provider, model ORDER BY cost DESC`
+        ).all(tenant);
+        return send(res, 200, JSON.stringify({ ok: true, available: true, models: rows }));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/ledger/by-agent') {
+        const ledger = getLedger(config);
+        if (!ledger) return send(res, 200, JSON.stringify({ ok: true, available: false }));
+        const tenant = getTenant(config);
+        const rows = ledger.prepare(
+          `SELECT agent, COUNT(*) AS calls, SUM(total_tokens) AS tokens, SUM(cost_usd) AS cost,
+                  MAX(ts) AS lastActivity
+             FROM token_events WHERE tenant = ? GROUP BY agent ORDER BY cost DESC`
+        ).all(tenant);
+        return send(res, 200, JSON.stringify({ ok: true, available: true, agents: rows }));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/ledger/deny-events') {
+        const ledger = getLedger(config);
+        if (!ledger) return send(res, 200, JSON.stringify({ ok: true, available: false }));
+        const tenant = getTenant(config);
+        const rows = ledger.prepare(
+          `SELECT ts, agent, cap_window, request_id
+             FROM token_events WHERE tenant = ? AND enforcement_decision = 'deny'
+             ORDER BY ts DESC LIMIT 50`
+        ).all(tenant);
+        return send(res, 200, JSON.stringify({ ok: true, available: true, denies: rows }));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/ledger/spend-by-provider') {
+        const breakdown = providerBreakdownFromLedger(config);
+        return send(res, 200, JSON.stringify({ ok: true, available: breakdown !== null, providers: breakdown || {} }));
+      }
+      // ── Run detail (links a run to its ledger costs) ────────────────────
+      if (req.method === 'GET' && url.pathname === '/api/run') {
+        const runId = url.searchParams.get('id');
+        if (!runId) return send(res, 400, JSON.stringify({ ok: false, error: '?id required' }));
+        const runs = readRuns({ limit: 0, config }); // 0 = all
+        const run = runs.find((r) => r.run_id === runId);
+        if (!run) return send(res, 404, JSON.stringify({ ok: false, error: 'run not found' }));
+        let ledgerCost = null;
+        try {
+          const ledger = getLedger(config);
+          if (ledger) {
+            const tenant = getTenant(config);
+            const rows = ledger.prepare(
+              `SELECT SUM(cost_usd) AS cost, SUM(total_tokens) AS tokens, COUNT(*) AS calls
+                 FROM token_events WHERE tenant = ? AND run_id = ?`
+            ).all(tenant, runId);
+            if (rows?.[0]?.calls > 0) ledgerCost = rows[0];
+          }
+        } catch { /* best-effort */ }
+        return send(res, 200, JSON.stringify({ ok: true, run, ledgerCost }));
       }
       return send(res, 404, JSON.stringify({ ok: false, error: 'not found' }));
     } catch (e) {
