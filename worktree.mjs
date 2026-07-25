@@ -230,7 +230,7 @@ export function pruneAllWorktrees(config) {
   if (list.status === 0) {
     for (const line of String(list.stdout || '').split('\n')) {
       const m = line.match(/^worktree\s+(.+)$/);
-      if (m && m[1].replace(/\\/g, '/').includes('/.aios-worktrees/')) git(['worktree', 'remove', m[1].trim(), '--force'], {}, config);
+      if (m && resolve(m[1].trim()).startsWith(resolve(config.worktreeRoot))) git(['worktree', 'remove', m[1].trim(), '--force'], {}, config);
     }
   }
   git(['worktree', 'prune'], {}, config);

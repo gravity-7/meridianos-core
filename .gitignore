@@ -13,4 +13,5 @@ node_modules/
 .ai/gateway/
 .ai/logs/
 .ai/secrets/
+.ai/worktrees/
 .playwright-mcp/

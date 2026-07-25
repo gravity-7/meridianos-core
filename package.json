@@ -10,7 +10,8 @@
     "./*": "./*"
   },
   "bin": {
-    "meridian-gateway": "./gateway/cli.mjs"
+    "meridian-gateway": "./gateway/cli.mjs",
+    "meridianos": "./init.mjs"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1"
