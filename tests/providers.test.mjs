@@ -60,11 +60,11 @@ test('validateProviders throws on an unknown wire', () => {
   assert.throws(() => validateProviders(bad), /wire/);
 });
 
-test('validateProviders throws on a missing tier', () => {
-  const bad = { foo: { name: 'foo', baseUrl: null, wire: 'openai', keyEnv: null, models: {
-    simple: 'a', medium: 'a', medium_high: 'a', complex: 'a', // critical missing
+test('validateProviders allows partial tier coverage (no critical tier needed)', () => {
+  const ok = { foo: { name: 'foo', baseUrl: null, wire: 'openai', keyEnv: null, models: {
+    simple: 'a', medium: 'a', medium_high: 'a', complex: 'a', // critical intentionally omitted
   } } };
-  assert.throws(() => validateProviders(bad), /critical/);
+  assert.doesNotThrow(() => validateProviders(ok));
 });
 
 test('validateProviders throws on a non-string keyEnv', () => {

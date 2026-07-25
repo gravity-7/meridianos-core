@@ -471,19 +471,8 @@ button:active { transform: translateY(0); box-shadow: none; }
 
   <div class="card" id="ctrls">
     <div class="h">budget &amp; limits</div>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
-      <div class="tile">
-        <div style="font-size:13px;font-weight:500;margin-bottom:6px">claude</div>
-        <div class="lev"><label>model</label><select id="selC" style="flex:1"><option value="claude-opus-4-8">claude-opus-4-8</option><option value="claude-sonnet-5">claude-sonnet-5</option><option value="claude-haiku-4-5">claude-haiku-4-5</option><option value="claude-fable-5">claude-fable-5</option></select></div>
-        <div class="lev"><label>5h cap</label><input type="range" id="capC5" min="500000" max="5000000" step="100000" style="flex:1"><output id="outC5">—</output></div>
-        <div class="lev"><label>week cap</label><input type="range" id="capCW" min="5000000" max="30000000" step="500000" style="flex:1"><output id="outCW">—</output></div>
-      </div>
-      <div class="tile">
-        <div style="font-size:13px;font-weight:500;margin-bottom:6px">antigravity</div>
-        <div class="lev"><label>model</label><select id="selA" style="flex:1"><option value="gemini-3-pro">gemini-3-pro</option><option value="gemini-3-deep-think">gemini-3-deep-think</option></select></div>
-        <div class="lev"><label>5h cap</label><input type="range" id="capA5" min="500000" max="5000000" step="100000" style="flex:1"><output id="outA5">—</output></div>
-        <div class="lev"><label>week cap</label><input type="range" id="capAW" min="5000000" max="30000000" step="500000" style="flex:1"><output id="outAW">—</output></div>
-      </div>
+    <div class="grid" id="agentBudgetTiles" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+      <!-- Roster-driven: populated by renderAgentBudgetControls() from config.domain.agents -->
     </div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(350px,1fr));margin-top:12px">
       <div class="lev g"><label>warn at</label><input type="range" id="warn" min="50" max="95" step="5" style="flex:1"><output id="outWarn">—</output></div>
@@ -936,10 +925,6 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 const LEVERS=[
   ['warn','agent_budget.warn_pct','num'],['ptask','agent_budget.per_task_tokens','num'],
   ['autodown','agent_budget.auto_downgrade_at_warn','bool'],['attrib','agent_budget.attribution','str'],
-  ['selC','agent_models.claude.default','str'],['capC5','agent_budget.claude.per_5h_tokens','num'],
-  ['capCW','agent_budget.claude.per_week_tokens','num'],
-  ['selA','agent_models.antigravity.default','str'],['capA5','agent_budget.antigravity.per_5h_tokens','num'],
-  ['capAW','agent_budget.antigravity.per_week_tokens','num'],
   ['conc','work.max_parallel','num'],['wip','work.wip_per_agent','num'],['prio','work.priority_floor','num'],
   ['ttl','work.lease_ttl_min','num'],['maxruns','work.max_runs_per_5h','num'],['sched','schedule.cadence','str'],
   ['qhEnable','quiet_hours.enabled','bool'],['qhFrom','quiet_hours.from','str'],['qhTo','quiet_hours.to','str'],
@@ -948,6 +933,41 @@ const LEVERS=[
   ['autoMerge','auto_merge','str'],['esc','escalation.channel','str'],
   ['workSteal','work_stealing','bool'],
 ];
+// Roster-driven agent budget controls: build tiles + lever entries dynamically.
+// Called from the poll loop when agents change.
+let _lastRoster = [];
+function renderAgentBudgetControls(agents, policy) {
+  if (!agents || agents.length === 0) return;
+  const tilesEl = $('agentBudgetTiles');
+  if (!tilesEl || agents.join(',') === _lastRoster.join(',')) return;
+  _lastRoster = [...agents];
+
+  // Remove old dynamic lever entries (those matching agent-specific cap paths)
+  const keep = LEVERS.filter(l => !l[1].match(/^agent_budget\.\w+\.per_/));
+  LEVERS.length = 0; LEVERS.push(...keep);
+
+  tilesEl.innerHTML = '';
+  for (const agent of agents) {
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    const idCap5 = 'cap5_' + agent, idCapW = 'capW_' + agent;
+    const model = getPath(policy, `agent_models.${agent}.default`);
+    tile.innerHTML =
+      `<div style="font-size:13px;font-weight:500;margin-bottom:6px">${esc(agent)}</div>
+       ${model ? `<div class="lev"><label>model</label><span class="model">${esc(model)}</span></div>` : ''}
+       <div class="lev"><label>5h cap</label><input type="range" id="${idCap5}" min="500000" max="5000000" step="100000" style="flex:1"><output id="out5_${agent}">—</output></div>
+       <div class="lev"><label>week cap</label><input type="range" id="${idCapW}" min="5000000" max="30000000" step="500000" style="flex:1"><output id="outW_${agent}">—</output></div>`;
+    tilesEl.appendChild(tile);
+    LEVERS.push([idCap5, `agent_budget.${agent}.per_5h_tokens`, 'num']);
+    LEVERS.push([idCapW, `agent_budget.${agent}.per_week_tokens`, 'num']);
+  }
+  // Attach change listeners to new sliders
+  for (const agent of agents) {
+    const el5 = $('cap5_' + agent), elW = $('capW_' + agent);
+    if (el5) el5.oninput = () => { const o = $('out5_' + agent); if (o) o.textContent = fmt(+el5.value); setDirty(true); };
+    if (elW) elW.oninput = () => { const o = $('outW_' + agent); if (o) o.textContent = fmt(+elW.value); setDirty(true); };
+  }
+}
 const getPath=(o,p)=>p.split('.').reduce((a,k)=>a&&a[k],o);
 function shortModel(v){ if(!v) return '—'; return String(v).replace('claude-','').replace(/-/g,' ').replace('opus 4 8','opus 4.8').replace('haiku 4 5','haiku 4.5'); }
 function badgeFor(s){ return s==='in-progress'?'b-accent':(s==='blocked'?'b-warn':(s==='done'?'b-ok':'b-muted')); }
@@ -970,13 +990,18 @@ function populateControls(policy){
 function collectLevers(){ const u={}; for(const [id,path,kind] of LEVERS){ const el=$(id); if(!el) continue; u[path]=kind==='bool'?el.checked:(kind==='num'?+el.value:el.value); } return u; }
 
 function syncReadouts(){
-  const caps={outC5:'capC5',outCW:'capCW',outA5:'capA5',outAW:'capAW',outPtask:'ptask'};
-  for(const o in caps){ if($(o)&&$(caps[o])) $(o).textContent=fmt(+$(caps[o]).value); }
-  if($('outWarn')) $('outWarn').textContent=$('warn').value+'%';
-  if($('outConc')) $('outConc').textContent=$('conc').value;
-  if($('outWip')) $('outWip').textContent=$('wip').value;
-  if($('outTtl')) $('outTtl').textContent=$('ttl').value;
-  if($('outMaxruns')) $('outMaxruns').textContent=$('maxruns').value;
+  // Dynamic: iterate all agent cap sliders (id = cap5_<agent> or capW_<agent>)
+  for (const el of document.querySelectorAll('#agentBudgetTiles input[type=range]')) {
+    const agent = el.id.replace(/^cap[5W]_/, '');
+    const suffix = el.id.startsWith('cap5_') ? '5_' : 'W_';
+    const out = $('out' + suffix + agent);
+    if (out) out.textContent = fmt(+el.value);
+  }
+  if ($('outWarn')) $('outWarn').textContent=$('warn').value+'%';
+  if ($('outConc')) $('outConc').textContent=$('conc').value;
+  if ($('outWip')) $('outWip').textContent=$('wip').value;
+  if ($('outTtl')) $('outTtl').textContent=$('ttl').value;
+  if ($('outMaxruns')) $('outMaxruns').textContent=$('maxruns').value;
 }
 const inWin=(h,f,e)=> f===e?false:(f<e?(h>=f&&h<e):(h>=f||h<e));
 function renderQuiet(){
@@ -1207,9 +1232,15 @@ function render(s){
   renderProviderCost(s.budget.providerUsage && s.budget.providerUsage.last7d);
   $('clock').textContent=new Date(s.ts).toLocaleTimeString();
   kill=!!s.kill_switch; $('dot').style.background=kill?'#e34948':'#0ca30c';
+
+  // Roster-driven: build agent budget controls and active tiles
+  const roster = Object.keys(s.budget || {}).filter(k => !['kill_switch','attribution','resets','mayClaim','providerUsage'].includes(k));
+  renderAgentBudgetControls(roster, s.policy || {});
+
   const ha = s.health && s.health.agents ? s.health.agents : {};
-  renderActive('claude','claude',s.agents.claude, ha.claude);
-  renderActive('anti','antigravity',s.agents.antigravity, ha.antigravity);
+  for (const agent of roster) {
+    renderActive(agent, agent, s.agents[agent], ha[agent]);
+  }
   renderQueue(s.queue||[]);
   renderRuns(s.runs||[]);
   renderEscalations(s.escalations);
