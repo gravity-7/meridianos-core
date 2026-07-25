@@ -47,6 +47,9 @@ export function loadTenantConfig(filePath) {
     tagToCategory: yaml.tagToCategory || undefined,
     mcpServers: yaml.mcpServers || undefined,
     cliPath: yaml.cliPath || undefined,
+    // paths — OPTIONAL { features, policy, inbox, feedback, runs } overrides.
+    // Each is a repo-relative path. Unset ⇒ core defaults (e.g. .ai/features/).
+    paths: yaml.paths || undefined,
   };
 }
 
