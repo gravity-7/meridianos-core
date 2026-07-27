@@ -48,6 +48,7 @@ import { fileURLToPath } from 'node:url';
 import { createAios } from './config.mjs';
 import { assembleGateway } from './gateway/index.mjs';
 import { syncFromAdo } from './azure-devops-source.mjs';
+import { validatePolicySchema } from './policy-validate.mjs';
 
 // Composition root: as of ★③.2 Part B, a DomainPlugin is a REQUIRED, explicitly-injected
 // dependency (there is no baked-in default tenant) — so the AIOS config can no longer be
@@ -492,6 +493,15 @@ export async function start({ domain } = {}) {
   const gwPort = Number(process.env.AIOS_GATEWAY_PORT) || (gwPolicy?.gateway?.port ?? 0);
   const gwTenant = gwPolicy?.gateway?.tenant ?? 'pv';
   let closeGateway = () => {};
+
+  // Phase 0: Validate unified policy configuration at boot
+  const schemaResult = validatePolicySchema(gwPolicy);
+  if (!schemaResult.ok) {
+    for (const errMsg of schemaResult.errors) {
+      logger.log('config', `ERROR: ${errMsg}`);
+    }
+  }
+
   const gw = await maybeStartGateway({ config, policy: gwPolicy, port: gwPort, tenant: gwTenant });
   if (gw.gatewayConfig) {
     config.gateway = gw.gatewayConfig;

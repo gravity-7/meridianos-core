@@ -25,6 +25,7 @@ import { handleAction } from './actions.mjs';
 import { readSpec, writeSpec } from './spec-file.mjs';
 import { openLedger, queryWindow, listEvents } from '../gateway/ledger.mjs';
 import { readRuns } from '../runlog.mjs';
+import { getProviderHealth } from '../provider-health.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.html');
@@ -235,14 +236,10 @@ export function createDashboardServer(config) {
         // Phase 0: Return provider health status from the live health loop
         const providers = [];
         const routes = config.gateway?.registry?.routes ?? {};
+        const healthMap = getProviderHealth();
         for (const [name, route] of Object.entries(routes)) {
-          // Try to read health from the provider-health module's in-memory state
-          let health = { status: 'unknown', latencyMs: null, lastCheck: null, error: null };
-          try {
-            const { getProviderHealth } = await import('../provider-health.mjs');
-            const h = getProviderHealth(name);
-            if (h) health = h;
-          } catch { /* provider-health module not available — return unknown */ }
+          const h = healthMap[name];
+          const health = h ? { status: h.status, latencyMs: h.latencyMs, lastCheck: h.lastCheck, error: h.error } : { status: 'unknown', latencyMs: null, lastCheck: null, error: null };
           providers.push({
             name,
             wire: route.wire,

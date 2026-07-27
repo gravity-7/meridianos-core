@@ -424,8 +424,11 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
 
   // Phase 0: Determine traffic source from request context. Defaults to 'agent' since all
   // current gateway traffic originates from agent spawns. IDE/CLI/API sources will be
-  // detected via specific headers in P1/P4/P6 (x-meridianos-source or similar).
-  const source = req.headers['x-meridianos-source'] || 'agent';
+  // detected via specific headers in P1/P4/P6. Only known source values are accepted;
+  // anything else (including unvalidated client headers) falls back to 'agent'.
+  const VALID_SOURCES = new Set(['agent', 'ide', 'cli', 'api']);
+  const rawSource = req.headers['x-meridianos-source'];
+  const source = (rawSource && VALID_SOURCES.has(rawSource)) ? rawSource : 'agent';
 
   // `registry` may be a plain envelope or a zero-arg provider function (see startGateway's doc
   // comment) — resolved fresh on EVERY request so a live registry-store's updates take effect
