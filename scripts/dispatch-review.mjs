@@ -253,24 +253,23 @@ console.log(`Review prompts saved to ${runDir}`);
 // ── Spawn review agents ──────────────────────────────────────────────────────
 
 /**
- * Run a review agent with a timeout (5H window safety).
- * Returns { agent, verdict, output, error? }
+ * Run a review agent with a timeout and automatic PR comment posting.
+ * Reviews are posted independently — NOT gated on other agents.
+ * Returns { agent, verdict, output, error?, posted }
  */
-async function runReviewAgent(name, promptFile, timeoutMs = 30 * 60 * 1000) { // default 30min
+async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 10 * 60 * 1000) { // default 10min
   return new Promise((resolve) => {
     const startTime = Date.now();
     let cmd, args;
 
     if (name === "claude") {
-      // Claude Code: read prompt file via stdin
       cmd = "claude";
       args = ["--print", "--output-format", "text"];
     } else if (name === "antigravity") {
-      // Antigravity CLI
       cmd = "agy";
       args = ["chat", "--prompt-file", promptFile];
     } else {
-      resolve({ agent: name, verdict: "ERROR", output: "", error: `Unknown agent: ${name}` });
+      resolve({ agent: name, verdict: "ERROR", output: "", error: `Unknown agent: ${name}`, posted: false });
       return;
     }
 
@@ -279,9 +278,27 @@ async function runReviewAgent(name, promptFile, timeoutMs = 30 * 60 * 1000) { //
     console.log(`   Prompt: ${promptFile}`);
     console.log(`   Timeout: ${timeoutMs / 60000} minutes\n`);
 
+    let resolved = false;
+    let child = null;
+
+    // Hard kill timer — if the soft timeout doesn't work, force-kill
+    const killTimer = setTimeout(() => {
+      if (!resolved && child) {
+        console.error(`⏰ ${name} review HARD TIMEOUT after ${timeoutMs / 60000}min — force killing PID ${child.pid}`);
+        try { process.kill(child.pid, 'SIGKILL'); } catch { /* already dead */ }
+      }
+    }, timeoutMs + 30_000); // 30s grace after soft timeout
+
+    const finish = (verdict, output, error, posted) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(killTimer);
+      resolve({ agent: name, verdict, output, error, posted });
+    };
+
     try {
       const prompt = readFileSync(promptFile, "utf8");
-      const child = spawn(cmd, args, {
+      child = spawn(cmd, args, {
         cwd: REPO_ROOT,
         stdio: ["pipe", "pipe", "pipe"],
         timeout: timeoutMs,
@@ -299,20 +316,28 @@ async function runReviewAgent(name, promptFile, timeoutMs = 30 * 60 * 1000) { //
         const output = stdout + (stderr ? `\n\nSTDERR:\n${stderr}` : "");
         
         // Parse verdict from output
-        const verdictMatch = output.match(/Verdict:\s*(✅ APPROVE|⚠️ CHANGES REQUESTED|❌ REJECT)/);
-        const verdict = verdictMatch ? verdictMatch[1] : (code === 0 ? "UNKNOWN" : "ERROR");
+        const verdictMatch = output.match(/Verdict:\s*(✅\s*APPROVE|⚠️\s*CHANGES[^\n]*|❌\s*REJECT)/);
+        const verdict = verdictMatch ? verdictMatch[1].trim() : (code === 0 ? "UNKNOWN" : "ERROR");
 
         // Save output
-        writeFileSync(join(runDir, `${name}-review-output.md`), output);
+        writeFileSync(join(runDirPath, `${name}-review-output.md`), output);
 
         console.log(`✅ ${name} review complete (${elapsed}s) — ${verdict}`);
-        resolve({ agent: name, verdict, output, error: code !== 0 ? stderr.slice(-500) : null });
+
+        // Post to PR immediately — don't wait for other agents
+        const posted = postReviewComment(name, output, runDirPath);
+
+        finish(verdict, output, code !== 0 ? stderr.slice(-500) : null, posted);
       });
 
       child.on("error", (err) => {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         console.error(`❌ ${name} review failed (${elapsed}s): ${err.message}`);
-        resolve({ agent: name, verdict: "ERROR", output: "", error: err.message });
+        
+        const timeoutMsg = `## 🤖 ${name === "claude" ? "Claude Code (Sonnet 5)" : "Antigravity (Gemini 3.1 Pro)"} Review — TIMEOUT\n\n> Review agent did not complete within the ${timeoutMs / 60000}-minute window. The agent process was killed. Re-run the review or review manually.\n\n**Error**: ${err.message}`;
+        postReviewComment(name, timeoutMsg, runDirPath, true);
+        
+        finish("TIMEOUT", "", err.message, true);
       });
 
       // Feed prompt to stdin for Claude Code
@@ -321,19 +346,18 @@ async function runReviewAgent(name, promptFile, timeoutMs = 30 * 60 * 1000) { //
         child.stdin.end();
       }
     } catch (err) {
-      resolve({ agent: name, verdict: "ERROR", output: "", error: err.message });
+      finish("ERROR", "", err.message, false);
     }
   });
 }
 
 // ── Post results to PR ───────────────────────────────────────────────────────
 
-function postReviewComment(agent, output, runDirPath) {
-  const header = `## 🤖 ${agent === "claude" ? "Claude Code (Sonnet 5)" : "Antigravity (Gemini 3.1 Pro)"} Review
-
-> Independent review — no knowledge of implementation conversation. Prompt and full output saved to \`${runDirPath}\`.
-
-${output.slice(0, 60000)}`; // GitHub comment limit ~64KB
+function postReviewComment(agent, output, runDirPath, isTimeout = false) {
+  const agentName = agent === "claude" ? "Claude Code (Sonnet 5)" : "Antigravity (Gemini 3.1 Pro)";
+  const header = isTimeout
+    ? output // Already formatted as a timeout notice
+    : `## 🤖 ${agentName} Review\n\n> Independent review — no knowledge of implementation conversation. Prompt and full output saved to \`${runDirPath}\`.\n\n${output.slice(0, 60000)}`; // GitHub comment limit ~64KB
 
   const commentFile = join(runDir, `${agent}-pr-comment.md`);
   writeFileSync(commentFile, header);
@@ -341,9 +365,11 @@ ${output.slice(0, 60000)}`; // GitHub comment limit ~64KB
   try {
     gh(`pr comment ${prNumber} --body-file "${commentFile}"`);
     console.log(`   📝 ${agent} review posted to PR #${prNumber}`);
+    return true;
   } catch (err) {
     console.error(`   ⚠️ Failed to post ${agent} review: ${err.message}`);
     console.log(`   Review saved to: ${commentFile}`);
+    return false;
   }
 }
 
@@ -422,20 +448,25 @@ console.log("╚═════════════════════�
 
 const reviewTasks = [];
 if (agents.includes("claude")) {
-  reviewTasks.push(runReviewAgent("claude", join(runDir, "claude-review-prompt.md")));
+  reviewTasks.push(runReviewAgent("claude", join(runDir, "claude-review-prompt.md"), runDir));
 }
 if (agents.includes("antigravity")) {
-  reviewTasks.push(runReviewAgent("antigravity", join(runDir, "antigravity-review-prompt.md")));
+  reviewTasks.push(runReviewAgent("antigravity", join(runDir, "antigravity-review-prompt.md"), runDir));
 }
 
-const results = await Promise.all(reviewTasks);
+// Post-as-you-go: each agent posts its review independently as it completes.
+// Use Promise.allSettled so one hung agent doesn't block the other's result.
+const settled = await Promise.allSettled(reviewTasks);
+
+// Extract results from settled promises
+const results = settled.map(s => s.status === 'fulfilled' ? s.value : { agent: 'unknown', verdict: 'ERROR', output: '', error: s.reason?.message, posted: false });
 
 // For skipped agents, add a skip entry
 if (!agents.includes("claude") && budget.claude) {
-  results.push({ agent: "claude", verdict: "⏭️ SKIPPED (budget exhausted)", output: `Claude Code review skipped: 5H budget at ${budget.claude.pct}%`, error: null });
+  results.push({ agent: "claude", verdict: "⏭️ SKIPPED (budget exhausted)", output: `Claude Code review skipped: 5H budget at ${budget.claude.pct}%`, error: null, posted: true });
 }
 if (!agents.includes("antigravity") && budget.antigravity) {
-  results.push({ agent: "antigravity", verdict: "⏭️ SKIPPED (budget exhausted)", output: `Antigravity review skipped: 5H budget at ${budget.antigravity.pct}%`, error: null });
+  results.push({ agent: "antigravity", verdict: "⏭️ SKIPPED (budget exhausted)", output: `Antigravity review skipped: 5H budget at ${budget.antigravity.pct}%`, error: null, posted: true });
 }
 
 // ── Summary ──────────────────────────────────────────────────────────────────
@@ -464,11 +495,6 @@ if (activeResults.length === 0) {
 }
 console.log("╚══════════════════════════════════════════════╝\n");
 
-// Post results to PR
-for (const r of results) {
-  if (r.output) {
-    postReviewComment(r.agent, r.output, runDir);
-  }
-}
+// Reviews are already posted independently by each agent's close handler.
 
 console.log(`\n📁 Full review artifacts: ${runDir}\n`);
