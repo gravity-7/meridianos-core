@@ -13,7 +13,7 @@
  */
 import { validateProviders } from '../providers.mjs';
 
-const VALID_WIRES = ['anthropic', 'openai'];
+const VALID_WIRES = ['anthropic', 'openai', 'generic-http'];
 const KEY_ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 function isKeyEnvName(v) {
@@ -119,5 +119,107 @@ export function resolveRoute(reg, providerName) {
     keyEnv: route.keyEnv,
     ...(providerHeaders != null ? { providerHeaders } : {}),
     ...(route.thinking != null ? { thinking: route.thinking } : {}),
+    ...(route.translate != null ? { translate: route.translate } : {}),
+    ...(route.headers != null ? { headers: route.headers } : {}),
   };
+}
+
+// ─── Multi-Key Credential Management ─────────────────────────────────────────
+
+const COOLDOWN_RE = /^[A-Z][A-Z0-9_]*(,[A-Z][A-Z0-9_]*)*$/;
+
+/**
+ * Parse a comma-separated keyEnv string into an array of env var names.
+ */
+export function parseKeyEnv(keyEnv) {
+  if (!keyEnv || typeof keyEnv !== 'string') return [];
+  if (!COOLDOWN_RE.test(keyEnv)) {
+    throw new Error(`Invalid keyEnv format: "${keyEnv}" — must be one or more comma-separated env var names matching ^[A-Z][A-Z0-9_]*$`);
+  }
+  return keyEnv.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Resolve API key(s) from environment or static config.
+ * For 'env' mode: reads process.env for each name in comma-separated list.
+ * For 'static' mode: returns the literal key value as single-element array.
+ * For 'oauth' mode: returns null (not implemented in Phase 1).
+ */
+export function resolveApiKey(keyEnv, mode = 'env') {
+  if (mode === 'static') return [keyEnv];
+  if (mode === 'oauth') return null; // Not implemented
+
+  // 'env' mode
+  if (!keyEnv) return [];
+  const names = parseKeyEnv(keyEnv);
+  return names.map((name) => process.env[name]).filter((v) => v !== undefined && v !== '');
+}
+
+/**
+ * Create a key rotation state tracker for round-robin selection with 60s cooldown on 401.
+ */
+export function createKeyRotator(keys = [], cooldownMs = 60_000) {
+  let keyIndex = 0;
+  const keyStates = keys.map((value) => ({
+    value,
+    status: 'active',
+    failedAt: null,
+    cooldownUntil: null,
+    failureCount: 0,
+  }));
+
+  function selectKey() {
+    if (keyStates.length === 0) return null;
+    const now = Date.now();
+
+    // Try each key starting from current index
+    for (let i = 0; i < keyStates.length; i++) {
+      const idx = (keyIndex + i) % keyStates.length;
+      const ks = keyStates[idx];
+
+      // Re-enable if cooldown expired
+      if (ks.status === 'failed' && ks.cooldownUntil && ks.cooldownUntil <= now) {
+        ks.status = 'active';
+        ks.failedAt = null;
+        ks.cooldownUntil = null;
+      }
+
+      if (ks.status === 'active') {
+        keyIndex = (idx + 1) % keyStates.length; // Advance for next call
+        return { key: ks.value, index: idx };
+      }
+    }
+
+    // All keys failed
+    const shortestCooldown = Math.min(
+      ...keyStates.map((ks) => ks.cooldownUntil ? Math.max(0, ks.cooldownUntil - now) : Infinity),
+    );
+    return { key: null, index: -1, allExhausted: true, shortestCooldownMs: shortestCooldown === Infinity ? null : Math.ceil(shortestCooldown / 1000) };
+  }
+
+  function markKeyFailed(index) {
+    if (index < 0 || index >= keyStates.length) return;
+    const ks = keyStates[index];
+    ks.status = 'failed';
+    ks.failedAt = new Date().toISOString();
+    ks.cooldownUntil = Date.now() + cooldownMs;
+    ks.failureCount++;
+  }
+
+  function markKeySuccess(index) {
+    if (index < 0 || index >= keyStates.length) return;
+    const ks = keyStates[index];
+    ks.failureCount = 0;
+    if (ks.status === 'failed') {
+      ks.status = 'active';
+      ks.failedAt = null;
+      ks.cooldownUntil = null;
+    }
+  }
+
+  function isExhausted() {
+    return keyStates.length > 0 && keyStates.every((ks) => ks.status === 'failed');
+  }
+
+  return { selectKey, markKeyFailed, markKeySuccess, isExhausted, keyStates };
 }

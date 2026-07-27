@@ -15,7 +15,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-const VALID_WIRES = ['anthropic', 'openai'];
+const VALID_WIRES = ['anthropic', 'openai', 'generic-http'];
 const VALID_SOURCES = ['agent', 'ide', 'cli', 'api'];
 const VALID_ENFORCEMENT_DECISIONS = ['allow', 'deny', 'degrade'];
 const VALID_CAP_WINDOWS = ['5h', 'week', null];
