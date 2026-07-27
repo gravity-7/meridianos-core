@@ -46,15 +46,22 @@ test('anthropic wire: defaults to randomUUID when no mintToken seam is given', (
   assert.deepEqual(runs.resolveRun(token), ctx());
 });
 
-test('openai wire: returns the plan unchanged, mints no token, registers nothing', () => {
-  const plan = { cmd: 'opencode', args: ['run'], env: { PWD: '/some/path' }, files: [{ path: 'opencode.json', content: '{}' }] };
+test('openai wire: rewrites opencode.json baseURL and apiKey, registers token', () => {
+  const plan = { cmd: 'opencode', args: ['run'], env: { PWD: '/some/path' }, files: [{ path: 'opencode.json', content: JSON.stringify({ provider: { deepseek: { options: { baseURL: 'https://api.deepseek.com', apiKey: '{env:DEEPSEEK_KEY}' } } } }) }] };
   const route = { upstreamUrl: 'https://api.deepseek.com', wire: 'openai', keyEnv: 'DEEPSEEK_KEY' };
   const runs = createRunRegistry();
+  const mintToken = () => 'openai-token-2';
 
-  const { plan: newPlan, token } = applyGatewayInjection({ plan, route, ctx: ctx(), gatewayUrl: 'http://127.0.0.1:5001', runs });
+  const { plan: newPlan, token } = applyGatewayInjection({ plan, route, ctx: ctx({ provider: 'deepseek' }), gatewayUrl: 'http://127.0.0.1:5001', runs, mintToken });
 
-  assert.equal(token, null);
-  assert.equal(newPlan, plan, 'the exact same plan object is returned, unchanged');
+  assert.equal(token, 'openai-token-2');
+  assert.notEqual(newPlan, plan, 'a new plan object is returned');
+  const parsed = JSON.parse(newPlan.files[0].content);
+  assert.equal(parsed.provider.deepseek.options.baseURL, 'http://127.0.0.1:5001');
+  assert.equal(parsed.provider.deepseek.options.apiKey, 'openai-token-2');
+  assert.deepEqual(runs.resolveRun('openai-token-2'), ctx({ provider: 'deepseek' }));
+  // Input plan not mutated
+  assert.equal(JSON.parse(plan.files[0].content).provider.deepseek.options.baseURL, 'https://api.deepseek.com');
 });
 
 test('a route with no wire (e.g. null/missing) also passes the plan through unchanged', () => {

@@ -231,6 +231,27 @@ export function createDashboardServer(config) {
         return send(res, 200, JSON.stringify(result));
       }
       // ── Gateway ledger API (F004 spend dashboard data) ──────────────────
+      if (req.method === 'GET' && url.pathname === '/api/providers') {
+        // Phase 0: Return provider health status from the live health loop
+        const providers = [];
+        const routes = config.gateway?.registry?.routes ?? {};
+        for (const [name, route] of Object.entries(routes)) {
+          // Try to read health from the provider-health module's in-memory state
+          let health = { status: 'unknown', latencyMs: null, lastCheck: null, error: null };
+          try {
+            const { getProviderHealth } = await import('../provider-health.mjs');
+            const h = getProviderHealth(name);
+            if (h) health = h;
+          } catch { /* provider-health module not available — return unknown */ }
+          providers.push({
+            name,
+            wire: route.wire,
+            baseUrl: route.upstreamUrl,
+            health,
+          });
+        }
+        return send(res, 200, JSON.stringify({ ok: true, providers }));
+      }
       if (req.method === 'GET' && url.pathname === '/api/ledger/summary') {
         const ledger = getLedger(config);
         if (!ledger) return send(res, 200, JSON.stringify({ ok: true, available: false }));

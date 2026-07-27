@@ -59,8 +59,10 @@
  * belong in an env string; the injected DomainPlugin is how a tenant supplies those.
  */
 import { join, dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolveTenantConfig } from './tenant-config.mjs';
+import { parseYaml } from './yaml-lite.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const COMPUTED_DEFAULT_ROOT = join(HERE, '..', '..');
@@ -69,11 +71,26 @@ function parseAgentsEnv(v) {
   return v.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+/** Phase 0: Read agent roster from policy.yaml's `agents` field as a fallback domain source.
+ *  Returns a minimal domain-like object with just `agents`, or null if policy has no agents. */
+function resolveFromPolicy(repoRoot) {
+  try {
+    const policyPath = join(repoRoot, '.ai', 'policy.yaml');
+    const raw = readFileSync(policyPath, 'utf8');
+    const policy = parseYaml(raw);
+    if (policy?.agents && Array.isArray(policy.agents) && policy.agents.length > 0) {
+      return { agents: policy.agents };
+    }
+  } catch { /* policy.yaml missing or unparseable — not an error */ }
+  return null;
+}
+
 /** Resolve a DomainPlugin. Resolution chain:
  *   1. Explicit `domain` object passed by the caller (JS DomainPlugin — full power)
  *   2. `$AIOS_TENANT_CONFIG` env var → YAML file at that path
- *   3. `.ai/tenant.yaml` in the repo root (zero-config declarative default)
- *   4. Throw — a DomainPlugin is required
+ *   3. `.ai/tenant.yaml` in the repo root (zero-config declarative default, DEPRECATED)
+ *   4. `policy.yaml`'s `agents` field (Phase 0 — unified config)
+ *   5. Throw — a DomainPlugin is required
  *
  * `$AIOS_AGENTS` (comma-separated) overrides `domain.agents`, but ONLY when the plugin
  *  didn't explicitly set `agents` itself. There is no field-by-field fallback onto any default
@@ -85,7 +102,13 @@ function resolveDomain(domain, repoRoot) {
     if (fromYaml) {
       domain = fromYaml;
     } else {
-      throw new Error('AIOS: a DomainPlugin is required — pass { domain }, set $AIOS_TENANT_CONFIG, or create .ai/tenant.yaml');
+      // Phase 0: try policy.yaml's agents field before throwing
+      const fromPolicy = resolveFromPolicy(repoRoot);
+      if (fromPolicy) {
+        domain = fromPolicy;
+      } else {
+        throw new Error('AIOS: a DomainPlugin is required — pass { domain }, set $AIOS_TENANT_CONFIG, define agents in policy.yaml, or create .ai/tenant.yaml');
+      }
     }
   }
   const explicitAgents = 'agents' in domain;

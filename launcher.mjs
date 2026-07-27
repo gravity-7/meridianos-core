@@ -267,15 +267,14 @@ export async function launchAgent({ agent, model, task, session, provider, harne
 
     const plan = buildSpawnPlan(harnessName, { prompt, model, session, provider: resolvedProvider, worktreePath: wt.path, tier, mcpConfigPath });
 
-    // Gateway wiring (3.2d) — opt-in only; see the doc comment above. `gwConfig` absent or
-    // `enabled !== true` means `finalPlan === plan` and `gatewayToken` stays null, so the rest of
-    // this function runs byte-identical to before the gateway existed.
+    // Gateway wiring (Phase 0: default-ON). `gwConfig` absent means gateway is disabled;
+    // presence of `gwConfig.url` means gateway is available for injection.
     const gwConfig = config.gateway;
     let finalPlan = plan;
     let gatewayToken = null;
-    if (gwConfig?.enabled === true) {
+    if (gwConfig?.url) {
       const route = resolveRoute(gwConfig.registry, resolvedProvider?.name);
-      if (route?.wire === 'anthropic') {
+      if (route?.wire === 'anthropic' || route?.wire === 'openai') {
         const ctx = {
           tenant: gwConfig.registry?.tenant,
           agent,

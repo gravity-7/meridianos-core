@@ -362,34 +362,35 @@ test('createRotatingLogger: never throws even if logDir is unwritable', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. maybeStartGateway — opt-in gateway wiring (config.gateway assembly)
+// 5. maybeStartGateway — default-ON gateway wiring (Phase 0)
 // ---------------------------------------------------------------------------
 
-test('maybeStartGateway: policy.gateway absent — no-op, assembleGateway never called', async () => {
+test('maybeStartGateway: policy.gateway disabled=true — no-op, assembleGateway never called', async () => {
   const { maybeStartGateway } = await import('../scheduler.mjs');
   let called = false;
   const _assembleGateway = async () => { called = true; return {}; };
 
-  const result = await maybeStartGateway({ config: {}, policy: {}, _assembleGateway });
+  const result = await maybeStartGateway({ config: {}, policy: { gateway: { disabled: true } }, _assembleGateway });
 
   assert.equal(result.gatewayConfig, undefined);
-  assert.equal(called, false, '_assembleGateway must not be called when policy.gateway is absent');
+  assert.equal(called, false, '_assembleGateway must not be called when policy.gateway.disabled is true');
   assert.equal(typeof result.close, 'function');
   assert.doesNotThrow(() => result.close());
 });
 
-test('maybeStartGateway: policy.gateway.enabled === false — no-op, assembleGateway never called', async () => {
+test('maybeStartGateway: policy.gateway absent — assembles by default (Phase 0 default-ON)', async () => {
   const { maybeStartGateway } = await import('../scheduler.mjs');
   let called = false;
-  const _assembleGateway = async () => { called = true; return {}; };
+  const _assembleGateway = async () => { called = true; return { url: 'http://localhost:9999', runs: {}, store: { get: () => ({}) }, close: () => {} }; };
 
-  const result = await maybeStartGateway({ config: {}, policy: { gateway: { enabled: false } }, _assembleGateway });
+  const result = await maybeStartGateway({ config: {}, policy: {}, _assembleGateway });
 
-  assert.equal(result.gatewayConfig, undefined);
-  assert.equal(called, false, '_assembleGateway must not be called when policy.gateway.enabled is false');
+  assert.ok(result.gatewayConfig, 'gatewayConfig should be defined when gateway is not disabled');
+  assert.equal(called, true, '_assembleGateway must be called by default (Phase 0)');
+  assert.equal(typeof result.close, 'function');
 });
 
-test('maybeStartGateway: policy.gateway.enabled === true — assembles and returns launcher-shaped config', async () => {
+test('maybeStartGateway: policy.gateway absent — assembles by default (Phase 0 default-ON)', async () => {
   const { maybeStartGateway } = await import('../scheduler.mjs');
   const fakeRuns = { unregisterRun() {} };
   const fakeRegistry = { tenant: 'dev', routes: {} };
@@ -406,7 +407,7 @@ test('maybeStartGateway: policy.gateway.enabled === true — assembles and retur
   };
 
   const config = { some: 'config' };
-  const policy = { gateway: { enabled: true } };
+  const policy = { gateway: {} }; // gateway absent → starts by default (Phase 0)
   const result = await maybeStartGateway({ config, policy, _assembleGateway });
 
   assert.deepEqual(result.gatewayConfig, {
@@ -438,7 +439,7 @@ test('maybeStartGateway: passes port/tenant through to assembleGateway', async (
 
   await maybeStartGateway({
     config: {},
-    policy: { gateway: { enabled: true } },
+    policy: { gateway: {} }, // no disabled flag → starts by default
     port: 4318,
     tenant: 'devx',
     _assembleGateway,

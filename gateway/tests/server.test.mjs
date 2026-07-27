@@ -126,7 +126,7 @@ before(async () => {
     tenant: 'pv',
     providers: { anthropic: PROVIDERS.anthropic, deepseek: PROVIDERS.deepseek, basepath: { ...PROVIDERS.anthropic, name: 'basepath' } },
     routes: {
-      anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' },
+      anthropic: { upstreamUrl: stubUrl, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY', providerHeaders: { 'anthropic-version': '2023-06-01' } },
       deepseek: { upstreamUrl: stubUrl, wire: 'openai', keyEnv: 'TEST_DEEPSEEK_KEY' },
       // A provider whose upstream is mounted under a base path (like DeepSeek's '…/anthropic').
       basepath: { upstreamUrl: `${stubUrl}/prefix`, wire: 'anthropic', keyEnv: 'TEST_ANTHROPIC_KEY' },
