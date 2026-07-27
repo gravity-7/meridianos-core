@@ -1,0 +1,40 @@
+name: Stale Branch & PR Cleanup
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'  # Every Monday at 08:00 UTC
+  workflow_dispatch:      # Manual trigger for testing
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/stale@v9
+        with:
+          # PR configuration
+          days-before-pr-stale: 14
+          days-before-pr-close: 21
+          stale-pr-message: |
+            ⏰ This PR has been automatically marked as stale because it has been inactive for 14 days.
+            It will be closed in 7 days if no further activity occurs.
+            To keep it open, comment or push new commits.
+          close-pr-message: |
+            🔒 This PR has been automatically closed because it has been inactive for 21 days.
+            If this work is still needed, please reopen or create a new PR.
+          delete-branch: true
+
+          # Label configuration
+          stale-pr-label: 'stale'
+          close-pr-label: 'auto-closed'
+          exempt-pr-labels: 'keep-open,pinned,security'
+
+          # Issue configuration (less aggressive)
+          days-before-issue-stale: 60
+          days-before-issue-close: 90
+          stale-issue-message: '⏰ This issue has been marked as stale due to 60 days of inactivity.'
+          close-issue-message: '🔒 This issue has been closed after 90 days of inactivity.'
+          exempt-issue-labels: 'keep-open,pinned,security,bug'

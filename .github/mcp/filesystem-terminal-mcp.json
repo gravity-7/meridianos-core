@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "node",
+      "args": ["node_modules/@anthropic/mcp-server-filesystem/dist/index.js"],
+      "env": {
+        "ROOT_DIR": "c:/projects/meridianos-core",
+        "ALLOWED_DIRS": "c:/projects/meridianos-core"
+      }
+    },
+    "terminal": {
+      "command": "node",
+      "args": ["node_modules/@anthropic/mcp-server-terminal/dist/index.js"],
+      "env": {
+        "ALLOWED_COMMANDS": "npm test,npm run lint,node,git status,git diff,git log,git branch,git add,git commit,git push,git fetch,git checkout,git merge,sqlite3"
+      },
+      "blockedCommands": ["rm -rf", "git push --force", "npm publish", "chmod", "sudo", "del /f", "rmdir /s"]
+    }
+  }
+}
