@@ -128,7 +128,8 @@ console.log(`\n📋 Fetching PR #${prNumber} context...\n`);
 const prTitle = gh(`pr view ${prNumber} --json title --jq .title`).trim();
 const prBody = gh(`pr view ${prNumber} --json body --jq .body`).trim();
 const prDiff = gh(`pr diff ${prNumber}`);
-const prFiles = gh(`pr view ${prNumber} --json files --jq ".[].name"`);
+const fileList = JSON.parse(gh(`pr view ${prNumber} --json files`)).files;
+const prFiles = fileList.map(f => f.path).join('\n');
 
 // Load spec context
 const specPath = join(REPO_ROOT, SPEC_DIR, "spec.md");
