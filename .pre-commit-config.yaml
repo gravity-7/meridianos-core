@@ -1,0 +1,37 @@
+# MeridianOS pre-commit hooks
+# Install: pre-commit install
+# See: https://pre-commit.com
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # MeridianOS custom checks
+  - repo: local
+    hooks:
+      - id: no-test-only
+        name: Block .only() in tests
+        description: Prevents committed .only() calls that would skip other tests in CI
+        entry: '(?<!\/\/)\s*\.only\('
+        language: pygrep
+        types: [javascript]
+        files: '\.test\.mjs$'
+
+      - id: no-console-log-prod
+        name: Block console.log in production modules
+        description: console.log should not appear in production .mjs files (use daemon-logger instead)
+        entry: 'console\.log\('
+        language: pygrep
+        types: [javascript]
+        exclude: '\.test\.mjs$|dashboard\/index\.html|test\/|tests\/'
