@@ -58,5 +58,20 @@ Optional quality gates:
 - `/speckit-checklist` — Validate requirements completeness
 - `/speckit-analyze` — Cross-artifact consistency check
 
+### Automated PR Review (After Implementation)
+AFTER `/speckit-implement` creates a pull request, you MUST automatically trigger the parallel review dispatch. The review agents are Claude Code (Sonnet 5) and Antigravity (Gemini 3.1 Pro) — two independent AI reviewers on different providers/models with fresh context (no access to the implementation conversation).
+
+**How to trigger:**
+```powershell
+node scripts/dispatch-review.mjs <PR_NUMBER>
+```
+
+**Budget protection:** The script automatically checks each agent's 5H token budget before spawning. If an agent is at >80% of its 5H cap, that agent is skipped and the PR merges without that review. If both agents are exhausted, the PR merges directly. Budget status is always posted as a PR comment.
+
+**Do NOT skip this step.** It replaces human code review and is required before merge. The test and spec-check CI gates will also validate the PR automatically.
+
 <!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+at specs/001-foundation-hardening/plan.md
 <!-- SPECKIT END -->
