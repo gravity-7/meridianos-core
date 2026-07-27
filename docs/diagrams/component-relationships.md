@@ -5,14 +5,14 @@ graph TB
     subgraph Config["⚙️ Configuration Layer"]
         ConfigMJS["config.mjs<br/>AiosConfig factory<br/>resolvePaths()"]
         DomainPlugin["DomainPlugin<br/>agents, prompts, guardrails<br/>risk taxonomy, budgetMeter"]
-        TenantConfig["tenant-config.mjs<br/>.ai/tenant.yaml loader"]
+        TenantConfig["tenant-config.mjs<br/>.ai/tenant.yaml loader<br/>(deprecated — Phase 0)"]
         Providers["providers.mjs<br/>PROVIDERS registry<br/>validateHarnessCompatibility()"]
         PolicyYAML["policy.yaml<br/>budget caps, cadence<br/>model_routing"]
     end
 
-    TenantConfig --> DomainPlugin
+    TenantConfig -.->|"Deprecated fallback"| DomainPlugin
+    PolicyYAML -->|"Phase 0: agents field"| DomainPlugin
     DomainPlugin --> ConfigMJS
-    ConfigMJS --> PolicyYAML
 
     subgraph Orchestration["🔄 Orchestration Layer"]
         Scheduler["scheduler.mjs<br/>Daemon loop"]

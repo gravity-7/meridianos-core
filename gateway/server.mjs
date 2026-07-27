@@ -32,7 +32,6 @@ import { makeTokenEvent, validateTokenEvent } from './token-event.mjs';
 
 export { applyThinkingToBody };
 
-const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 const HOP_BY_HOP_HEADERS = ['host', 'connection', 'authorization', 'x-api-key', 'x-gateway-token', 'content-length', 'transfer-encoding'];
 
 // Order: x-gateway-token, then x-api-key, then Authorization: Bearer. The x-api-key path exists
@@ -155,10 +154,17 @@ function buildForwardHeaders(req, route, resolveKey) {
   if (route.wire === 'anthropic') {
     const key = resolveKey(route.keyEnv);
     if (key) headers['x-api-key'] = key;
-    headers['anthropic-version'] = req.headers['anthropic-version'] || DEFAULT_ANTHROPIC_VERSION;
   } else if (route.wire === 'openai') {
     const key = resolveKey(route.keyEnv);
     if (key) headers['authorization'] = `Bearer ${key}`;
+  }
+
+  // Phase 0: Per-provider headers from the registry (replaces hardcoded DEFAULT_ANTHROPIC_VERSION).
+  // Provider headers are DEFAULTS — client-sent headers (already in `headers` from req.headers)
+  // take priority. A provider configures anthropic-version as a fallback; the client can override it.
+  const providerHeaders = route.providerHeaders ?? {};
+  for (const [name, value] of Object.entries(providerHeaders)) {
+    if (headers[name] == null) headers[name] = value; // only apply if client didn't send it
   }
   return headers;
 }
@@ -270,7 +276,7 @@ function createSseUsageTracker(wire) {
  * up front so the client starts receiving bytes immediately, mirroring the buffered path's header
  * handling (drop content-length/transfer-encoding; keep the upstream content-type).
  */
-function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestId, provider, model, wire, verdict, start, now, costFn }) {
+function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestId, provider, model, wire, source, verdict, start, now, costFn }) {
   const responseHeaders = { ...upstreamRes.headers };
   delete responseHeaders['content-length'];
   delete responseHeaders['transfer-encoding'];
@@ -291,6 +297,7 @@ function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestI
       provider,
       model,
       wire,
+      source,
       upstreamStatus: upstreamRes.statusCode ?? null,
       latencyMs: now() - start,
       usage: tracker.usage,
@@ -318,7 +325,7 @@ function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestI
   });
 }
 
-function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstreamStatus, latencyMs, usage, verdict, costFn }) {
+function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, source, upstreamStatus, latencyMs, usage, verdict, costFn }) {
   const usageFields = usage ?? { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null };
   const v = verdict ?? {};
   // costFn is a seam into domain pricing (see assembleGateway in index.mjs) — this module never
@@ -351,6 +358,7 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, upstre
       costUsd,
       enforcementDecision: v.decision ?? 'allow',
       capWindow: v.capWindow ?? null,
+      source,
     },
     { defaultTenant: ctx.tenant },
   );
@@ -414,6 +422,14 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   const ctx = runs.resolveRun(token);
   if (!ctx) return sendJson(res, 401, { error: 'gateway: unknown token' });
 
+  // Phase 0: Determine traffic source from request context. Defaults to 'agent' since all
+  // current gateway traffic originates from agent spawns. IDE/CLI/API sources will be
+  // detected via specific headers in P1/P4/P6. Only known source values are accepted;
+  // anything else (including unvalidated client headers) falls back to 'agent'.
+  const VALID_SOURCES = new Set(['agent', 'ide', 'cli', 'api']);
+  const rawSource = req.headers['x-meridianos-source'];
+  const source = (rawSource && VALID_SOURCES.has(rawSource)) ? rawSource : 'agent';
+
   // `registry` may be a plain envelope or a zero-arg provider function (see startGateway's doc
   // comment) — resolved fresh on EVERY request so a live registry-store's updates take effect
   // immediately, without needing to restart the gateway or re-resolve per-connection.
@@ -444,6 +460,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       provider: ctx.provider,
       model: ctx.model,
       wire: route.wire,
+      source,
       upstreamStatus: null,
       latencyMs: now() - start,
       usage: null,
@@ -482,6 +499,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       provider: ctx.provider,
       model: ctx.model,
       wire: route.wire,
+      source,
       upstreamStatus: null,
       latencyMs: now() - start,
       usage: null,
@@ -503,6 +521,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       provider: ctx.provider,
       model: ctx.model,
       wire: route.wire,
+      source,
       verdict,
       start,
       now,
@@ -530,6 +549,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       provider: ctx.provider,
       model: ctx.model,
       wire: route.wire,
+      source,
       upstreamStatus: upstreamRes.statusCode ?? null,
       latencyMs,
       usage: null,
@@ -547,6 +567,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     provider: ctx.provider,
     model: ctx.model,
     wire: route.wire,
+    source,
     upstreamStatus: upstreamRes.statusCode ?? null,
     latencyMs,
     usage,

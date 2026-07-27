@@ -31,8 +31,7 @@ graph TB
         StateDB[("aios.db<br/>State DB")]
         LedgerDB[("ledger.db<br/>Gateway Ledger")]
         GitRepo[("Git Repository<br/>Agent PRs")]
-        Policy["policy.yaml"]
-        TenantYAML["tenant.yaml"]
+        Policy["policy.yaml<br/>(Unified config — Phase 0)"]
     end
 
     Founder -->|"Configures, monitors"| Dashboard
@@ -49,5 +48,4 @@ graph TB
     MeridianOS -->|"Appends events"| LedgerDB
     MeridianOS -->|"Commits PRs"| GitRepo
     Scheduler -->|"Reads"| Policy
-    Scheduler -->|"Loads domain"| TenantYAML
 ```

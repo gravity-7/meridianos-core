@@ -425,7 +425,7 @@ test('launchAgent leaves a provider with no route (native anthropic) alone even 
   assert.equal(runs.calls.length, 0, 'no route ⇒ no injection ⇒ nothing registered/unregistered');
 });
 
-test('launchAgent leaves an openai-wire route alone even when the gateway is enabled (openai/opencode follow-up, 3.2d-ii)', async () => {
+test('launchAgent injects gateway routing for openai-wire routes when gateway is enabled (Phase 0 openai injection)', async () => {
   let captured = null;
   const runs = makeStubRuns();
   const fakeSpawn = async (cmd, args, opts) => {
@@ -446,9 +446,10 @@ test('launchAgent leaves an openai-wire route alone even when the gateway is ena
     else delete process.env.DEEPSEEK_KEY;
   }
 
-  assert.equal(runs.calls.length, 0, 'openai wire is out of scope for 3.2d — left untouched');
+  assert.ok(runs.calls.length >= 1, 'openai wire is now injected (Phase 0) — token registered');
   const config = JSON.parse(captured.configContent);
-  assert.equal(config.provider.deepseek.options.apiKey, '{env:DEEPSEEK_KEY}', 'opencode.json still references the real BYO key literally, unrewritten');
+  assert.equal(config.provider.deepseek.options.apiKey, runs.calls[0].token, 'opencode.json apiKey rewritten to gateway token');
+  assert.equal(config.provider.deepseek.options.baseURL, 'http://127.0.0.1:1234', 'opencode.json baseURL rewritten to gateway URL');
 });
 
 test('launchAgent is byte-identical to the no-gateway path when config.gateway is entirely absent', async () => {
@@ -466,9 +467,9 @@ test('launchAgent is byte-identical to the no-gateway path when config.gateway i
   await launchAgent({ agent: 'claude', model: 'claude-opus-4-8', task: taskA, session: sessionA, _spawn: spawnCapture(withoutSlot), config: cfg });
   capturedWithout = withoutSlot.value;
 
-  // (b) config.gateway is present but enabled: false (with an otherwise-live-looking registry).
+  // (b) config.gateway is present but disabled (no url) — should behave identically to no gateway.
   const runs = makeStubRuns();
-  const disabledGwConfig = { enabled: false, url: 'http://127.0.0.1:1234', runs, registry: { tenant: 'pv', routes: { anthropic: { upstreamUrl: 'https://x', wire: 'anthropic', keyEnv: null } } } };
+  const disabledGwConfig = { disabled: true, runs, registry: { tenant: 'pv', routes: { anthropic: { upstreamUrl: 'https://x', wire: 'anthropic', keyEnv: null } } } };
   await launchAgent({ agent: 'claude', model: 'claude-opus-4-8', task: taskB, session: sessionB, _spawn: spawnCapture(absentSlot), config: { ...cfg, gateway: disabledGwConfig } });
   capturedAbsent = absentSlot.value;
 

@@ -63,13 +63,13 @@ export function appendEvent(ledger, event) {
     ledger.prepare(
       `INSERT INTO token_events (
          id, ts, tenant, agent, session, task, run_id, request_id,
-         provider, model, wire, upstream_status, latency_ms,
+         provider, model, wire, source, upstream_status, latency_ms,
          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens,
          cost_usd, enforcement_decision, cap_window, raw
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       event.id, event.ts, event.tenant, event.agent, event.session, event.task, event.runId, event.requestId,
-      event.provider, event.model, event.wire, event.upstreamStatus, event.latencyMs,
+      event.provider, event.model, event.wire, event.source, event.upstreamStatus, event.latencyMs,
       event.inputTokens, event.outputTokens, event.cacheReadTokens, event.cacheWriteTokens, event.totalTokens,
       event.costUsd, event.enforcementDecision, event.capWindow, JSON.stringify(event),
     );
@@ -83,11 +83,12 @@ export function appendEvent(ledger, event) {
  * column contributes to `unknownRuns`/`costUnknownRuns` instead of being fabricated as 0.
  * `since`/`until` are ISO-8601 strings, each optional (an omitted bound is unbounded on that side).
  */
-export function queryWindow(ledger, { tenant, agent, since, until } = {}) {
+export function queryWindow(ledger, { tenant, agent, source, since, until } = {}) {
   try {
     const clauses = ['tenant = ?'];
     const params = [tenant];
     if (agent) { clauses.push('agent = ?'); params.push(agent); }
+    if (source) { clauses.push('source = ?'); params.push(source); }
     if (since != null) { clauses.push('ts >= ?'); params.push(since); }
     if (until != null) { clauses.push('ts < ?'); params.push(until); }
 

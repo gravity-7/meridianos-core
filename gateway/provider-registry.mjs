@@ -112,10 +112,12 @@ export function validateProviderRegistry(reg) {
 export function resolveRoute(reg, providerName) {
   const route = reg?.routes?.[providerName];
   if (!route) return null;
+  const providerHeaders = route.providerHeaders;
   return {
     upstreamUrl: route.upstreamUrl,
     wire: route.wire,
     keyEnv: route.keyEnv,
+    ...(providerHeaders != null ? { providerHeaders } : {}),
     ...(route.thinking != null ? { thinking: route.thinking } : {}),
   };
 }

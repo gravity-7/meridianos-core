@@ -35,7 +35,7 @@ function evt(overrides = {}) {
   });
 }
 
-const gwConfig = (tenant = 'pv') => ({ gateway: { enabled: true, registry: { tenant } } });
+const gwConfig = (tenant = 'pv') => ({ gateway: { url: 'http://127.0.0.1:9999', enabled: true, registry: { tenant } } });
 
 // ─── AC1: gateway on + matching ledger event → ledger wins ──────────────────
 
@@ -139,7 +139,7 @@ test('gateway on but tenant missing from registry falls back to usage-reader rat
   const home = fakeClaudeHome({ sessionId: 'sess-notenant', lines: [claudeLine('claude-sonnet-5', 5, 1)] });
   const ledger = openLedger(':memory:');
   const run = { agent: 'claude', harness: 'claude-code', session: 'sess-notenant' };
-  const m = meterRun(run, {}, { config: { gateway: { enabled: true, registry: {} } }, ledger, overrides: { home } });
+  const m = meterRun(run, {}, { config: { gateway: { url: 'http://127.0.0.1:9999', enabled: true, registry: {} } }, ledger, overrides: { home } });
   assert.equal(m.source, 'usage-reader');
   assert.equal(m.tokensIn, 5);
 });

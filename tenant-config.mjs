@@ -64,6 +64,10 @@ export function resolveTenantConfig(repoRoot) {
     const cfg = loadTenantConfig(process.env.AIOS_TENANT_CONFIG);
     if (cfg) return cfg;
   }
-  // 2. Default location: .ai/tenant.yaml
-  return loadTenantConfig(join(repoRoot, '.ai', 'tenant.yaml'));
+  // 2. Default location: .ai/tenant.yaml (DEPRECATED — use policy.yaml's `agents` field)
+  const cfg = loadTenantConfig(join(repoRoot, '.ai', 'tenant.yaml'));
+  if (cfg) {
+    console.warn('[MERIDIANOS] .ai/tenant.yaml is deprecated — move agent definitions to policy.yaml under "agents:" field. See docs/migration-guide.md');
+  }
+  return cfg;
 }

@@ -9,19 +9,20 @@ graph TB
     end
 
     subgraph LedgerDB["📊 ledger.db — Gateway Token Events (SQLite, WAL)"]
-        TokenEvents["token_events (append-only)<br/>id, ts, tenant, agent, session<br/>task, run_id, request_id<br/>provider, model, wire<br/>input_tokens, output_tokens<br/>cache_read_tokens, cache_write_tokens<br/>total_tokens, cost_usd<br/>enforcement_decision (allow/deny)<br/>cap_window (5h/week)<br/>raw (JSON)"]
+        TokenEvents["token_events (append-only)<br/>id, ts, tenant, agent, session<br/>task, run_id, request_id<br/>provider, model, wire, source<br/>input_tokens, output_tokens<br/>cache_read_tokens, cache_write_tokens<br/>total_tokens, cost_usd<br/>enforcement_decision (allow/deny)<br/>cap_window (5h/week)<br/>raw (JSON)"]
         NullContract["⚠️ null-is-unknown contract<br/>Every token/cost field = number | null<br/>null = genuinely unknown, NEVER 0<br/>unknownRuns/costUnknownRuns track gaps"]
     end
 
     subgraph GitTracked["📁 Git-Tracked Configuration"]
         PolicyYAML["policy.yaml<br/>agent_budget (caps)<br/>model_routing · cadence<br/>governance rules<br/>Founder-edited"]
-        TenantYAML["tenant.yaml<br/>agents (roster)<br/>prompts · guardrailCheck<br/>risk taxonomy · budgetMeter<br/>Declarative DomainPlugin"]
+        TenantYAML["policy.yaml (unified config)<br/>agents (roster)<br/>prompts · guardrailCheck<br/>risk taxonomy · budgetMeter<br/>Declarative DomainPlugin"]
         RunLog["runs/log.jsonl<br/>run_id, ts, agent<br/>model, provider, outcome<br/>Append-only (gitignored)"]
         PricingJSON["pricing.json<br/>Per-model USD rates<br/>Refreshed from public sources<br/>Never guesses $0"]
         FeaturesDir["features/<br/>spec.md per task<br/>Path configurable<br/>via domain.paths"]
     end
 
     subgraph RuntimeState["⚡ Runtime State (gitignored)"]
+        Inbox["Filesystem Inbox<br/>.ai/inbox/<br/>Drop tasks for intake"]
         Worktrees[".ai/worktrees/<br/>Per-agent git trees"]
         Logs[".ai/logs/<br/>Rotating daemon logs"]
         Secrets[".ai/secrets/<br/>escalation-webhook"]

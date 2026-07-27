@@ -115,19 +115,15 @@ test('agentBudgetVerdict: an agent absent from policy gets verdictFor\'s no-cap 
   }
 });
 
-// A literal `per_5h_tokens: 0` in policy.yaml is INDISTINGUISHABLE from "no cap set" — verdictFor's
-// `if (!r.cap) return {...'no-cap'}` treats 0 as falsy, same as null/undefined. This matters
-// directly for the #29 live-dogfood confirmation plan (scratch/dogfood-29-confirm.md): a founder
-// reaching for the intuitive "set the cap to zero to force-deny" will get a fully PERMISSIVE agent
-// instead, silently. The smallest cap that actually halts is 1, not 0.
-test('agentBudgetVerdict: a literal per_5h_tokens:0 cap is treated as NO CAP, not "deny everything" (footgun, not a bug — verdictFor\'s `!cap` check)', () => {
+// Phase 0 fix: `cap === 0` now means "hard block" (halt). `cap == null` means "no cap".
+// This was a known footgun — now corrected.
+test('agentBudgetVerdict: a literal per_5h_tokens:0 cap correctly blocks all requests (Phase 0 sentinel fix)', () => {
   const ledger = openLedger(':memory:');
   appendEvent(ledger, evt({ ts: new Date(NOW - 60_000).toISOString(), totalTokens: 500 }));
   const policy = policyWith({ per_5h_tokens: 0, per_week_tokens: 0 });
   const v = agentBudgetVerdict(ledger, { agent: 'claude', now: NOW, policy });
-  assert.equal(v.state, 'ok'); // NOT 'halt' — a naive reader would expect a 0-token cap to deny immediately
-  for (const w of v.windows) assert.equal(w.state, 'no-cap');
-  assert.deepEqual(toEnforcementDecision(v), { decision: 'allow', capWindow: null });
+  assert.equal(v.state, 'halt'); // 0 means hard block — any usage exceeds cap of 0
+  assert.deepEqual(toEnforcementDecision(v), { decision: 'deny', capWindow: '5h' });
 });
 
 test('agentBudgetVerdict: missing policy entirely behaves the same as missing caps', () => {

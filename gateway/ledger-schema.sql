@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS token_events (
   provider           TEXT NOT NULL,
   model              TEXT NOT NULL,
   wire               TEXT NOT NULL,
+  source             TEXT NOT NULL DEFAULT 'agent',
   upstream_status    INTEGER,
   latency_ms         INTEGER,
   input_tokens       INTEGER,

@@ -48,6 +48,7 @@ import { fileURLToPath } from 'node:url';
 import { createAios } from './config.mjs';
 import { assembleGateway } from './gateway/index.mjs';
 import { syncFromAdo } from './azure-devops-source.mjs';
+import { validatePolicySchema } from './policy-validate.mjs';
 
 // Composition root: as of ★③.2 Part B, a DomainPlugin is a REQUIRED, explicitly-injected
 // dependency (there is no baked-in default tenant) — so the AIOS config can no longer be
@@ -412,14 +413,13 @@ function startPolicyWatcher() {
 }
 
 /**
- * Opt-in gateway wiring: when policy.gateway.enabled === true, assemble a gateway sidecar and
- * return the `config.gateway` shape launcher.mjs consumes ({ enabled, url, runs, registry }) plus a
- * close(). When not enabled, returns { gatewayConfig: undefined, close: a no-op } and does NOT call
- * assembleGateway at all (byte-identical to pre-gateway behavior). `_assembleGateway` is injected
- * for tests.
+ * Gateway wiring: always starts the gateway sidecar (default-ON since Phase 0).
+ * When `policy.gateway.disabled === true`, skips startup (opt-out).
+ * Returns the `config.gateway` shape launcher.mjs consumes ({ enabled, url, runs, registry }) plus a
+ * close(). `_assembleGateway` is injected for tests.
  */
 export async function maybeStartGateway({ config, policy, port = 0, tenant = 'pv', _assembleGateway = assembleGateway }) {
-  if (policy?.gateway?.enabled !== true) return { gatewayConfig: undefined, close: () => {} };
+  if (policy?.gateway?.disabled === true) return { gatewayConfig: undefined, close: () => {} };
   const asm = await _assembleGateway({ config, policy, port, tenant });
   return {
     gatewayConfig: { enabled: true, url: asm.url, runs: asm.runs, registry: asm.store.get() },
@@ -488,17 +488,25 @@ export async function start({ domain } = {}) {
   // for up to lease_ttl_min, wedging a max_parallel slot after every crash/restart.
   try { const r = store.state.releaseAllLeases(); if (r.freed.length) logger.log('boot', `freed ${r.freed.length} orphaned lease(s): ${r.freed.join(', ')}`); } catch (e) { events.warn('scheduler', 'boot-lease-recovery-fail', { error: e.message }); }
 
-  // Opt-in metering/enforcement gateway (config.gateway drives launcher.mjs's injection). Off by
-  // default — a tenant with no policy.gateway block is byte-identical to before.
+  // Metering/enforcement gateway (default-ON since Phase 0). Set gateway.disabled: true to opt out.
   const gwPolicy = loadPolicy(undefined, config);
   const gwPort = Number(process.env.AIOS_GATEWAY_PORT) || (gwPolicy?.gateway?.port ?? 0);
   const gwTenant = gwPolicy?.gateway?.tenant ?? 'pv';
   let closeGateway = () => {};
+
+  // Phase 0: Validate unified policy configuration at boot
+  const schemaResult = validatePolicySchema(gwPolicy);
+  if (!schemaResult.ok) {
+    for (const errMsg of schemaResult.errors) {
+      logger.log('config', `ERROR: ${errMsg}`);
+    }
+  }
+
   const gw = await maybeStartGateway({ config, policy: gwPolicy, port: gwPort, tenant: gwTenant });
   if (gw.gatewayConfig) {
     config.gateway = gw.gatewayConfig;
     closeGateway = gw.close;
-    logger.log('gateway', `sidecar ${config.gateway.url} (tenant ${gwTenant})`);
+    logger.log('gateway', `sidecar auto-started at ${config.gateway.url} (tenant ${gwTenant}) — set gateway.disabled: true to opt out`);
     events.info('gateway', 'start', { url: config.gateway.url, tenant: gwTenant });
   }
 

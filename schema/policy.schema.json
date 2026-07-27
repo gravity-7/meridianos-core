@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://meridianos.dev/schema/policy.json",
+  "title": "MeridianOS Policy Configuration",
+  "description": "Schema for policy.yaml — the unified MeridianOS configuration surface (Phase 0).",
+  "type": "object",
+  "properties": {
+    "agents": {
+      "type": "array",
+      "description": "Agent roster — list of agent names that the scheduler manages.",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "gateway": {
+      "type": "object",
+      "description": "Gateway configuration. Gateway is default-ON; set disabled:true to opt out.",
+      "properties": {
+        "disabled": {
+          "type": "boolean",
+          "description": "Set to true to prevent gateway startup (opt-out)."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Gateway listen port. Default: ephemeral (0)."
+        },
+        "tenant": {
+          "type": "string",
+          "description": "Tenant identifier for ledger scoping. Default: 'pv'."
+        },
+        "logging": {
+          "type": "object",
+          "description": "Request/response logging configuration (P1).",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "retention_days": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "model_routing": {
+      "type": "object",
+      "description": "Per-agent, per-tier model assignments. Keyed by agent name.",
+      "patternProperties": {
+        "^.+$": {
+          "type": "object",
+          "patternProperties": {
+            "^(simple|medium|medium_high|complex|critical)$": {
+              "type": "object",
+              "properties": {
+                "provider": { "type": "string", "minLength": 1 },
+                "model": { "type": "string", "minLength": 1 }
+              },
+              "required": ["provider", "model"]
+            }
+          }
+        }
+      }
+    },
+    "agent_budget": {
+      "type": "object",
+      "description": "Per-agent budget caps. Keyed by agent name.",
+      "properties": {
+        "warn_pct": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Usage percentage that triggers warning state. Default: 80."
+        },
+        "attribution": {
+          "type": "string",
+          "enum": ["agent_only", "total"],
+          "description": "How to attribute usage. agent_only: only agent-spawned sessions. total: includes founder usage."
+        },
+        "per_task_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-task token limit."
+        },
+        "week_anchor": {
+          "type": "string",
+          "description": "ISO-8601 anchor date for weekly budget window calculation."
+        }
+      },
+      "patternProperties": {
+        "^.+$": {
+          "type": "object",
+          "properties": {
+            "per_5h_tokens": {
+              "type": ["integer", "null"],
+              "description": "5-hour rolling window token cap. 0 = hard block all requests. null = no cap."
+            },
+            "per_week_tokens": {
+              "type": ["integer", "null"],
+              "description": "Weekly rolling window token cap. 0 = hard block all requests. null = no cap."
+            },
+            "per_5h_cost_usd": {
+              "type": ["number", "null"],
+              "description": "5-hour rolling window USD cost cap. null = no cap."
+            },
+            "per_week_cost_usd": {
+              "type": ["number", "null"],
+              "description": "Weekly rolling window USD cost cap. null = no cap."
+            }
+          }
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "description": "Provider route definitions. Keyed by provider name.",
+      "patternProperties": {
+        "^.+$": {
+          "type": "object",
+          "properties": {
+            "baseUrl": { "type": "string" },
+            "keyEnv": { "type": "string" },
+            "wire": {
+              "type": "string",
+              "enum": ["anthropic", "openai", "generic-http"],
+              "description": "Wire protocol for this provider."
+            },
+            "providerHeaders": {
+              "type": "object",
+              "description": "Per-provider HTTP headers to include in upstream requests.",
+              "additionalProperties": { "type": "string" }
+            },
+            "models": {
+              "type": "object",
+              "description": "Model tier assignments for this provider.",
+              "patternProperties": {
+                "^.+$": { "type": "string" }
+              }
+            }
+          },
+          "required": ["baseUrl", "wire"]
+        }
+      }
+    },
+    "work": {
+      "type": "object",
+      "description": "Concurrency and work management settings.",
+      "properties": {
+        "max_parallel": { "type": "integer", "minimum": 1 },
+        "wip_per_agent": { "type": "integer", "minimum": 1 },
+        "lease_ttl_min": { "type": "integer", "minimum": 1 },
+        "max_runs_per_5h": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "cadence": {
+          "type": "string",
+          "enum": ["every_15m", "every_30m", "every_45m", "hourly", "every_2h", "every_3h", "on_handoff", "off"]
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -18,6 +18,7 @@ import { buildProviderRegistry } from './registry-source.mjs';
 import { createRegistryStore } from './registry-pull.mjs';
 import { makeCheckVerdict } from './windows.mjs';
 import { startGateway } from './server.mjs';
+import { startHealthLoop } from '../provider-health.mjs';
 
 /**
  * Assembles and starts one gateway sidecar instance.
@@ -68,13 +69,29 @@ export async function assembleGateway({ config, policy, port = 0, tenant = 'pv',
     costFn,
   });
 
+  // Phase 0: Start provider health monitoring loop (60s interval)
+  const health = startHealthLoop({
+    registry: () => store.get(),
+    intervalMs: 60_000,
+    onHealthChange: (provider, state) => {
+      // Log health transitions for observability
+      if (state.status === 'down') {
+        console.warn(`[MERIDIANOS] provider-health: ${provider} is DOWN — ${state.error ?? 'unreachable'}`);
+      }
+    },
+  });
+
   return {
     gateway,
     ledger,
     runs,
     store,
+    health,
     url: gateway.url,
-    close: () => gateway.close(),
+    close: () => {
+      health.stop();
+      return gateway.close();
+    },
   };
 }
 
