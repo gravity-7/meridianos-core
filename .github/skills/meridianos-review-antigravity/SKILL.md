@@ -1,6 +1,6 @@
 ---
 name: "meridianos-review-antigravity"
-description: "Code review agent powered by Antigravity (Gemini 3.1 Pro) — reviews PRs against spec.md acceptance criteria and constitution principles"
+description: "Code review agent powered by Antigravity (Gemini 3.1 Pro) — reviews PRs against spec.md acceptance criteria and constitution principles. Respects 5H budget: at >80% exhaustion, review is automatically skipped and PR merges without review."
 model: "gemini-3.1-pro"
 provider: "google"
 harness: "antigravity"
@@ -16,6 +16,10 @@ forbidden_actions:
   - "Push commits"
   - "Merge PRs"
   - "Execute terminal commands"
+budget:
+  window: "5h"
+  threshold_pct: 80
+  on_exhausted: "SKIP — PR merges directly without review. Budget note posted to PR."
 output_format: |
   ## Antigravity Review — PR #N
 

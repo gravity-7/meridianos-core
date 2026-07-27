@@ -18,11 +18,22 @@
 import { execSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
 const REVIEWS_DIR = join(REPO_ROOT, ".ai", "reviews");
+
+// ── Budget Config ────────────────────────────────────────────────────────────
+
+/** Default 5H token caps when policy.yaml is unavailable. */
+const DEFAULT_CAPS = {
+  claude: 200_000,      // Claude Code default 5H cap (tokens)
+  antigravity: 150_000, // Antigravity default 5H cap (tokens)
+};
+
+/** Threshold percentage — at/above this, skip the agent's review. */
+const BUDGET_EXHAUSTION_PCT = 80;
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -34,6 +45,71 @@ if (!prNumber || isNaN(Number(prNumber))) {
 
 const specArg = process.argv.find(a => a.startsWith("--spec="));
 const SPEC_DIR = specArg ? specArg.split("=")[1] : "specs/001-foundation-hardening";
+
+// ── Budget pre-flight ────────────────────────────────────────────────────────
+
+/**
+ * Query 5H token usage for an agent using the built-in usage readers.
+ * Returns { agent, billable, cap, pct, exhausted } or null if unavailable.
+ */
+async function checkBudget(agent) {
+  try {
+    let billable = 0;
+    let cap = DEFAULT_CAPS[agent];
+
+    if (agent === "claude") {
+      // Dynamic import — avoids loading usage readers when not needed
+      const { claudeUsage, defaultClaudeDir } = await import(pathToFileURL(join(REPO_ROOT, "claude-usage.mjs")).href);
+      const usage = claudeUsage({ dir: defaultClaudeDir(), session5h: true });
+      billable = usage.last5h?.billable ?? 0;
+    } else if (agent === "antigravity") {
+      const { antigravityUsage, defaultAntigravityDirs } = await import(pathToFileURL(join(REPO_ROOT, "antigravity-usage.mjs")).href);
+      const usage = antigravityUsage({ dirs: defaultAntigravityDirs(), session5h: true });
+      billable = usage.last5h?.billable ?? 0;
+    } else {
+      return null;
+    }
+
+    // Try to read budget cap from policy.yaml
+    try {
+      const yaml = readFileSync(join(REPO_ROOT, "policy.yaml"), "utf8");
+      const match = yaml.match(new RegExp(`${agent}.*?per_5h_tokens\\s*:\\s*(\\d+)`, "s"));
+      if (match) cap = parseInt(match[1], 10);
+    } catch { /* use default cap */ }
+
+    const pct = cap > 0 ? Math.round((billable / cap) * 100) : 0;
+    const exhausted = pct >= BUDGET_EXHAUSTION_PCT;
+
+    return { agent, billable, cap, pct, exhausted };
+  } catch (err) {
+    // Usage reader unavailable — allow review (fail open)
+    return { agent, billable: 0, cap: DEFAULT_CAPS[agent], pct: 0, exhausted: false, error: err.message };
+  }
+}
+
+/**
+ * Run budget checks for both agents. Returns { claude, antigravity } with
+ * budget status for each. Agents that can't be queried are assumed OK (fail open).
+ */
+async function preflightBudget() {
+  console.log("💰 Pre-flight budget check...\n");
+
+  const [claude, antigravity] = await Promise.all([
+    checkBudget("claude"),
+    checkBudget("antigravity"),
+  ]);
+
+  for (const b of [claude, antigravity]) {
+    if (!b) continue;
+    const icon = b.exhausted ? "🔴" : b.pct >= 60 ? "🟡" : "🟢";
+    const status = b.exhausted ? "EXHAUSTED — SKIPPING REVIEW" : `${b.pct}% used`;
+    console.log(`   ${icon} ${b.agent.padEnd(15)} ${b.billable.toLocaleString().padStart(10)} / ${b.cap.toLocaleString().padStart(10)} tokens — ${status}`);
+    if (b.error) console.log(`      ⚠️  Usage reader warning: ${b.error}`);
+  }
+
+  console.log("");
+  return { claude, antigravity };
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -280,14 +356,86 @@ console.log(`║   Title:  ${prTitle.slice(0, 45)}`);
 console.log(`║   Spec:   ${SPEC_DIR}`);
 console.log(`║   Files:  ${prFiles.split("\n").length} changed`);
 console.log("╠══════════════════════════════════════════════╣");
-console.log("║   Agents: Claude Code (Sonnet 5)             ║");
-console.log("║           Antigravity (Gemini 3.1 Pro)       ║");
+console.log(`║   Budget threshold: ${BUDGET_EXHAUSTION_PCT}% of 5H cap`);
 console.log("╚══════════════════════════════════════════════╝\n");
 
-const results = await Promise.all([
-  runReviewAgent("claude", join(runDir, "claude-review-prompt.md")),
-  runReviewAgent("antigravity", join(runDir, "antigravity-review-prompt.md")),
-]);
+// ── Budget pre-flight ────────────────────────────────────────────────────────
+
+const budget = await preflightBudget();
+
+// Determine which agents can run
+const agents = [];
+if (budget.claude && !budget.claude.exhausted) {
+  agents.push("claude");
+} else if (budget.claude) {
+  console.log(`⏭️  Claude Code skipped — 5H budget at ${budget.claude.pct}% (threshold: ${BUDGET_EXHAUSTION_PCT}%)\n`);
+}
+
+if (budget.antigravity && !budget.antigravity.exhausted) {
+  agents.push("antigravity");
+} else if (budget.antigravity) {
+  console.log(`⏭️  Antigravity skipped — 5H budget at ${budget.antigravity.pct}% (threshold: ${BUDGET_EXHAUSTION_PCT}%)\n`);
+}
+
+// Both exhausted → auto-approve (no review needed, merge directly)
+if (agents.length === 0) {
+  console.log("╔══════════════════════════════════════════════╗");
+  console.log("║  🔴 ALL AGENTS AT BUDGET LIMIT              ║");
+  console.log("║                                             ║");
+  console.log("║  Both Claude Code and Antigravity have      ║");
+  console.log("║  exhausted >80% of their 5H token windows.  ║");
+  console.log("║  Skipping review — PR can merge directly.   ║");
+  console.log("║                                             ║");
+  console.log("║  Budgets reset at the next 5H window.       ║");
+  console.log("╚══════════════════════════════════════════════╝\n");
+
+  // Post budget-exhaustion note to PR
+  const skipComment = `## 🤖 Automated Review — Skipped (Budget Exhausted)
+
+Both review agents are at >${BUDGET_EXHAUSTION_PCT}% of their 5H token limits:
+
+| Agent | Billable Tokens | 5H Cap | Usage |
+|-------|----------------|--------|-------|
+| Claude Code (Sonnet 5) | ${budget.claude?.billable?.toLocaleString() ?? "N/A"} | ${budget.claude?.cap?.toLocaleString() ?? "N/A"} | ${budget.claude?.pct ?? "N/A"}% |
+| Antigravity (Gemini 3.1 Pro) | ${budget.antigravity?.billable?.toLocaleString() ?? "N/A"} | ${budget.antigravity?.cap?.toLocaleString() ?? "N/A"} | ${budget.antigravity?.pct ?? "N/A"}% |
+
+> ℹ️ Reviews will resume automatically once the 5H budget window resets. This PR may merge without automated review per budget-exhaustion policy.
+
+`;
+  const skipFile = join(runDir, "budget-skip-note.md");
+  writeFileSync(skipFile, skipComment);
+  try {
+    gh(`pr comment ${prNumber} --body-file "${skipFile}"`);
+    console.log("📝 Budget exhaustion note posted to PR\n");
+  } catch { /* non-critical */ }
+
+  process.exit(0);
+}
+
+// Report which agents will run
+console.log("╔══════════════════════════════════════════════╗");
+console.log(`║   Review Agents: ${agents.map(a => a === "claude" ? "Claude Code (Sonnet 5)" : "Antigravity (Gemini 3.1 Pro)").join(" + ")}`);
+console.log("╚══════════════════════════════════════════════╝\n");
+
+// ── Spawn review agents ──────────────────────────────────────────────────────
+
+const reviewTasks = [];
+if (agents.includes("claude")) {
+  reviewTasks.push(runReviewAgent("claude", join(runDir, "claude-review-prompt.md")));
+}
+if (agents.includes("antigravity")) {
+  reviewTasks.push(runReviewAgent("antigravity", join(runDir, "antigravity-review-prompt.md")));
+}
+
+const results = await Promise.all(reviewTasks);
+
+// For skipped agents, add a skip entry
+if (!agents.includes("claude") && budget.claude) {
+  results.push({ agent: "claude", verdict: "⏭️ SKIPPED (budget exhausted)", output: `Claude Code review skipped: 5H budget at ${budget.claude.pct}%`, error: null });
+}
+if (!agents.includes("antigravity") && budget.antigravity) {
+  results.push({ agent: "antigravity", verdict: "⏭️ SKIPPED (budget exhausted)", output: `Antigravity review skipped: 5H budget at ${budget.antigravity.pct}%`, error: null });
+}
 
 // ── Summary ──────────────────────────────────────────────────────────────────
 
@@ -296,15 +444,20 @@ console.log("║           Review Results Summary             ║");
 console.log("╠══════════════════════════════════════════════╣");
 
 for (const r of results) {
-  const icon = r.verdict.includes("APPROVE") ? "✅" : r.verdict.includes("CHANGES") ? "⚠️" : "❌";
+  const skipped = r.verdict.includes("SKIPPED");
+  const icon = skipped ? "⏭️" : r.verdict.includes("APPROVE") ? "✅" : r.verdict.includes("CHANGES") ? "⚠️" : "❌";
   console.log(`║  ${icon} ${r.agent.padEnd(15)} ${r.verdict}`);
 }
 
 console.log("╠══════════════════════════════════════════════╣");
 
-const allApproved = results.every(r => r.verdict.includes("APPROVE"));
-if (allApproved) {
-  console.log("║  ✅ ALL AGENTS APPROVE — safe to merge       ║");
+const activeResults = results.filter(r => !r.verdict.includes("SKIPPED"));
+const allApproved = activeResults.length > 0 && activeResults.every(r => r.verdict.includes("APPROVE"));
+
+if (activeResults.length === 0) {
+  console.log("║  ⏭️  All agents skipped — merging directly  ║");
+} else if (allApproved) {
+  console.log("║  ✅ ALL ACTIVE AGENTS APPROVE — safe merge   ║");
 } else {
   console.log("║  ⚠️  REVIEW NEEDED — see PR comments         ║");
 }
