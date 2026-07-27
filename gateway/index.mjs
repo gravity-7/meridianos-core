@@ -19,6 +19,9 @@ import { createRegistryStore } from './registry-pull.mjs';
 import { makeCheckVerdict } from './windows.mjs';
 import { startGateway } from './server.mjs';
 import { startHealthLoop } from '../provider-health.mjs';
+import { discoverAdapters } from './wire-adapter-registry.mjs';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 
 /**
  * Assembles and starts one gateway sidecar instance.
@@ -60,6 +63,10 @@ export async function assembleGateway({ config, policy, port = 0, tenant = 'pv',
   const catalog = config ? loadPricing(config.pricingPath, config) : {};
   const costFn = (provider, model, usage) => costFor(provider, model, usage, { catalog })?.totalCost ?? null;
 
+  // Discover WireAdapters from the gateway/wire-adapters/ directory
+  const adaptersDir = join(dirname(fileURLToPath(import.meta.url)), 'wire-adapters');
+  const adapters = await discoverAdapters(adaptersDir);
+
   const gateway = await startGateway({
     port,
     registry: () => store.get(),
@@ -67,6 +74,7 @@ export async function assembleGateway({ config, policy, port = 0, tenant = 'pv',
     onTokenEvent: (evt) => appendEvent(ledger, evt),
     checkVerdict,
     costFn,
+    adapters,
   });
 
   // Phase 0: Start provider health monitoring loop (60s interval)

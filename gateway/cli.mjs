@@ -25,8 +25,62 @@
  */
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { assembleGateway } from './index.mjs';
 import { loadPolicy } from '../budget.mjs';
+
+// ─── Zero-Config Auto-Detection ──────────────────────────────────────────────
+
+/**
+ * Strict whitelist of known AI provider API key environment variable names.
+ * Each entry maps an env var name to { provider, wire } metadata.
+ * No wildcard matching — avoids false positives on non-AI keys like AWS_ACCESS_KEY_ID.
+ */
+const KEY_PATTERNS = {
+  ANTHROPIC_API_KEY: { provider: 'anthropic', wire: 'anthropic' },
+  OPENAI_API_KEY: { provider: 'openai', wire: 'openai' },
+  DEEPSEEK_KEY: { provider: 'deepseek', wire: 'anthropic' },
+  GROQ_API_KEY: { provider: 'groq', wire: 'openai' },
+  GOOGLE_API_KEY: { provider: 'google', wire: 'generic-http' },
+  MISTRAL_API_KEY: { provider: 'mistral', wire: 'openai' },
+  COHERE_API_KEY: { provider: 'cohere', wire: 'generic-http' },
+  TOGETHER_API_KEY: { provider: 'together', wire: 'openai' },
+};
+
+/**
+ * Scan process.env for recognized AI provider API keys.
+ * Returns array of { provider, wire, keyEnv } for each detected key.
+ * Strict whitelist only — no wildcard matching.
+ */
+export function autoDetectProviders() {
+  const detected = [];
+  for (const [envName, meta] of Object.entries(KEY_PATTERNS)) {
+    if (process.env[envName]) {
+      detected.push({ provider: meta.provider, wire: meta.wire, keyEnv: envName });
+    }
+  }
+  return detected;
+}
+
+// ─── Package version (read from package.json at module load) ─────────────────
+
+let _version = null;
+function getVersion() {
+  if (_version !== null) return _version;
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
+    if (existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+      _version = pkg.version || '0.0.0';
+    }
+  } catch {
+    _version = '0.0.0';
+  }
+  return _version;
+}
+
+const DASHBOARD_PORT = 4317;
 
 /**
  * Minimal inline flag parser (no dependency): `--flag value` pairs, plus bare `--flag` boolean
@@ -63,13 +117,21 @@ export function parseArgs(argv) {
 export async function startCli(flags = {}) {
   const port = flags.port !== undefined ? Number(flags.port) : 0;
   const tenant = flags.tenant ?? 'pv';
-  // `assembleGateway`'s own default (`policy ?? loadPolicy(undefined, config)`) requires a
-  // `config` when `policy` is omitted (it reads `config.policyPath`) — this CLI deliberately never
-  // passes a `config` (standalone means no tenant AiosConfig), so an empty policy object is passed
-  // explicitly rather than `undefined` here, matching what an empty/missing policy.yaml would
-  // parse to anyway (`loadPolicy`'s own read-failure fallback is `{}`, per budget.mjs).
   const policy = flags.policy && typeof flags.policy === 'string' ? loadPolicy(flags.policy) : {};
   const ledgerPath = typeof flags.ledger === 'string' ? flags.ledger : undefined;
+
+  // Auto-detect providers from environment
+  const detectedProviders = autoDetectProviders();
+
+  // Handle --init flag: generate config and return early
+  if (flags.init) {
+    const configPath = generateInitConfig(detectedProviders, typeof flags.init === 'string' ? flags.init : undefined);
+    if (configPath) {
+      process.stdout.write(`Config written to: ${configPath}\n`);
+      process.stdout.write(`${detectedProviders.length} provider(s) detected.\n`);
+    }
+    return { detectedProviders, initConfigPath: configPath, token: null, registeredRun: null };
+  }
 
   const assembled = await assembleGateway({ policy, port, tenant, ledgerPath });
 
@@ -90,16 +152,80 @@ export async function startCli(flags = {}) {
     assembled.runs.registerRun(token, registeredRun);
   }
 
-  return { ...assembled, tenant, ledgerPath, token, registeredRun };
+  return { ...assembled, tenant, ledgerPath, token, registeredRun, detectedProviders };
 }
 
-function printBanner({ url, tenant, ledgerPath, token, registeredRun }) {
-  process.stdout.write(`meridian-gateway listening at ${url}\n`);
+/**
+ * Print the rich startup message including version, port, detected providers, and dashboard URL.
+ */
+export function printStartupMessage({ version, port, detectedProviders, dashboardPort = DASHBOARD_PORT, loggingEnabled = false }) {
+  const ver = version ?? getVersion();
+  const count = detectedProviders?.length ?? 0;
+
+  if (count > 0) {
+    const providerList = detectedProviders.map((p) => p.provider).join(', ');
+    process.stdout.write(
+      `MeridianOS Gateway v${ver} | Listening on http://127.0.0.1:${port} | ` +
+      `${count} provider(s) auto-detected: ${providerList} | ` +
+      `Dashboard: http://127.0.0.1:${dashboardPort}\n`,
+    );
+  } else {
+    process.stdout.write(
+      `MeridianOS Gateway v${ver} | Listening on http://127.0.0.1:${port} | ` +
+      `No API keys detected. Set provider API keys in your environment or run with --init to generate a starter config. | ` +
+      `Dashboard: http://127.0.0.1:${dashboardPort}\n`,
+    );
+  }
+
+  // Privacy warning when logging is enabled
+  if (loggingEnabled) {
+    process.stdout.write(
+      '\u26A0 Logging is ENABLED. Request/response data will be stored for debugging. ' +
+      'Authorization headers are automatically redacted, but request bodies may contain sensitive information.\n',
+    );
+  }
+}
+
+/**
+ * Generate a default config file with auto-detected providers.
+ */
+export function generateInitConfig(detectedProviders, outputPath) {
+  const configPath = outputPath || '.ai/providers.yaml';
+  const lines = [
+    '# MeridianOS Gateway — auto-generated provider config',
+    `# Generated: ${new Date().toISOString()}`,
+    '',
+    'providers:',
+  ];
+  for (const p of detectedProviders) {
+    lines.push(`  ${p.provider}:`);
+    lines.push(`    wire: ${p.wire}`);
+    lines.push(`    keyEnv: ${p.keyEnv}`);
+  }
+  lines.push('');
+
+  try {
+    writeFileSync(configPath, lines.join('\n'), 'utf8');
+  } catch (err) {
+    process.stderr.write(`meridian-gateway: failed to write config to ${configPath}: ${err?.message ?? err}\n`);
+    return null;
+  }
+  return configPath;
+}
+
+function printBanner({ url, tenant, ledgerPath, token, registeredRun, detectedProviders }) {
+  const port = url ? Number(url.split(':').pop()) : 0;
+  printStartupMessage({
+    version: getVersion(),
+    port,
+    detectedProviders: detectedProviders ?? [],
+  });
+
   process.stdout.write(`tenant: ${tenant}\n`);
   process.stdout.write(`ledger: ${ledgerPath ?? '(default .ai/gateway/ledger.db)'}\n`);
   if (token) {
-    const modelPart = registeredRun.model ? ` model=${registeredRun.model}` : '';
-    process.stdout.write(`default run registered: agent=${registeredRun.agent} provider=${registeredRun.provider}${modelPart}\n`);
+    const modelPart = registeredRun?.model ? ` model=${registeredRun.model}` : '';
+    process.stdout.write(`default run registered: agent=${registeredRun?.agent ?? 'cli'} provider=${registeredRun?.provider ?? '?'}${modelPart}\n`);
     process.stdout.write(`gateway token (send as x-gateway-token, x-api-key, or Authorization: Bearer): ${token}\n`);
   } else {
     process.stdout.write('no --provider given: sidecar is up but no run is registered yet (every request will 401)\n');
@@ -108,6 +234,21 @@ function printBanner({ url, tenant, ledgerPath, token, registeredRun }) {
 
 async function main() {
   const flags = parseArgs(process.argv.slice(2));
+
+  // Handle --init before assembly
+  if (flags.init) {
+    const detected = autoDetectProviders();
+    const configPath = generateInitConfig(detected, typeof flags.init === 'string' ? flags.init : undefined);
+    if (configPath) {
+      process.stdout.write(`Config written to: ${configPath}\n`);
+      process.stdout.write(`${detected.length} provider(s) auto-detected.\n`);
+    }
+    if (detected.length === 0) {
+      process.stdout.write('No API keys detected. Set provider API keys in your environment and re-run.\n');
+    }
+    return;
+  }
+
   const cli = await startCli(flags);
   printBanner(cli);
 
@@ -115,7 +256,7 @@ async function main() {
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    cli.close().finally(() => process.exit(0));
+    cli.close?.().finally(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

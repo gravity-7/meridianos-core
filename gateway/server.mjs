@@ -2,19 +2,19 @@
  * server — the gateway sidecar's HTTP proxy core (bite 3.2a). Transparent metering pass-through
  * for BOTH wires, NON-STREAMING only (streaming is 3.2b; launcher wiring is 3.2d).
  *
+ * WireAdapter integration (Universal Gateway 002): wire-specific logic (auth injection,
+ * usage extraction, SSE parsing, denial formatting) is delegated to auto-discovered
+ * WireAdapter modules rather than being hardcoded per-wire in this file.
+ *
  * Enforcement (bite 3.2c): `checkVerdict(ctx)` is called EXACTLY ONCE per request, before
  * forwarding, and the single resulting verdict is threaded through to the token-event emitted for
  * that request — never re-queried, so the decision that blocked (or allowed) the call is always
  * the one stamped on the event. A 'deny' verdict never forwards upstream and responds with a
- * NON-retryable 403 in the client's own wire format (see `denyBody`/`sendDeny`); any other decision
+ * NON-retryable 403 in the client's own wire format (see adapter.formatDenial); any other decision
  * (incl. a future 'degrade') is treated as "forward"
  * for now (see windows.mjs's `makeCheckVerdict` for a real ledger-backed verdict source). The
  * default `checkVerdict` still always allows, so a gateway started without a real verdict source
  * stays permissive.
- *
- * No wire translation (locked decision D1): every request is forwarded to a same-wire upstream
- * (resolved from the provider-registry envelope) and metered — the gateway never converts an
- * Anthropic-shaped call into an OpenAI-shaped one or vice versa.
  *
  * D3: the harness only ever holds a short-lived per-run gateway token (see run-registry.mjs).
  * The real upstream API key is resolved and injected here, server-side, and never reaches the
@@ -27,8 +27,11 @@
 import http from 'node:http';
 import https from 'node:https';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 import { resolveRoute } from './provider-registry.mjs';
 import { makeTokenEvent, validateTokenEvent } from './token-event.mjs';
+import { discoverAdapters } from './wire-adapter-registry.mjs';
 
 export { applyThinkingToBody };
 
@@ -89,12 +92,26 @@ function denyBody(wire, capWindow) {
   return { error: { message, type: 'permission_error', code: 'over_budget' } };
 }
 
-/** Send a budget-deny response: a non-retryable 403 plus an explicit `x-should-retry: false` header.
- * That header is belt-and-suspenders — the Anthropic/OpenAI SDKs honor it OVER the status-code retry
- * heuristic, so even a harness that would otherwise retry this status is told, unambiguously, not to. */
-function sendDeny(res, wire, capWindow) {
-  const payload = Buffer.from(JSON.stringify(denyBody(wire, capWindow)));
-  res.writeHead(DENY_STATUS, {
+/** Send a budget-deny response using the adapter's wire-specific denial format.
+ * Falls back to generic JSON 403 if no adapter available. */
+function sendDeny(res, adapter, capWindow) {
+  let denialStatus = DENY_STATUS;
+  let denialBody;
+  try {
+    const denial = adapter?.formatDenial ? adapter.formatDenial(capWindow) : null;
+    if (denial && typeof denial.status === 'number' && denial.body) {
+      denialStatus = denial.status;
+      denialBody = denial.body;
+    }
+  } catch {
+    // Fall through to generic
+  }
+  if (!denialBody) {
+    const message = `gateway: over budget (${capWindow})`;
+    denialBody = { error: { message, type: 'permission_error' } };
+  }
+  const payload = Buffer.from(JSON.stringify(denialBody));
+  res.writeHead(denialStatus, {
     'content-type': 'application/json',
     'content-length': payload.length,
     'x-should-retry': 'false',
@@ -139,7 +156,7 @@ function applyThinkingToBody(body, route) {
   return Buffer.from(JSON.stringify(parsed), 'utf8');
 }
 
-function buildForwardHeaders(req, route, resolveKey) {
+function buildForwardHeaders(req, route, adapter, resolveKey) {
   const headers = { ...req.headers };
   for (const name of HOP_BY_HOP_HEADERS) delete headers[name];
 
@@ -151,12 +168,21 @@ function buildForwardHeaders(req, route, resolveKey) {
   // compresses anyway, add a gunzip/brotli decode on the parse path.
   headers['accept-encoding'] = 'identity';
 
-  if (route.wire === 'anthropic') {
-    const key = resolveKey(route.keyEnv);
-    if (key) headers['x-api-key'] = key;
-  } else if (route.wire === 'openai') {
-    const key = resolveKey(route.keyEnv);
-    if (key) headers['authorization'] = `Bearer ${key}`;
+  // Delegate auth injection to the adapter. The adapter knows which header to set.
+  const apiKey = resolveKey(route.keyEnv);
+  if (apiKey && adapter?.injectAuth) {
+    try {
+      adapter.injectAuth(headers, apiKey);
+    } catch {
+      // Fall through: auth injection failure is non-fatal; upstream will 401
+    }
+  } else if (apiKey) {
+    // Fallback for when no adapter available: guess from wire
+    if (route.wire === 'anthropic') {
+      headers['x-api-key'] = apiKey;
+    } else if (route.wire === 'openai') {
+      headers['authorization'] = `Bearer ${apiKey}`;
+    }
   }
 
   // Phase 0: Per-provider headers from the registry (replaces hardcoded DEFAULT_ANTHROPIC_VERSION).
@@ -170,9 +196,21 @@ function buildForwardHeaders(req, route, resolveKey) {
 }
 
 /** Extracts `{ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }` from a parsed
- * upstream response body's `usage` block, per wire. Every field stays `null` when absent —
- * never fabricated as 0. */
-function extractUsage(wire, parsedBody) {
+ * upstream response body's `usage` block. Delegates to the adapter when available;
+ * falls back to wire-based extraction for backward compatibility. Every field stays
+ * `null` when absent — never fabricated as 0. */
+function extractUsage(wire, parsedBody, adapter) {
+  // Try adapter first
+  if (adapter?.extractUsage) {
+    try {
+      const result = adapter.extractUsage(parsedBody);
+      if (result) return result;
+    } catch {
+      // Fall through to wire-based extraction
+    }
+  }
+
+  // Fallback: wire-based extraction
   const usage = parsedBody?.usage;
   if (!usage || typeof usage !== 'object') {
     return { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null };
@@ -185,7 +223,7 @@ function extractUsage(wire, parsedBody) {
       cacheWriteTokens: usage.cache_creation_input_tokens ?? null,
     };
   }
-  // openai
+  // openai (and generic fallback)
   return {
     inputTokens: usage.prompt_tokens ?? null,
     outputTokens: usage.completion_tokens ?? null,
@@ -206,32 +244,49 @@ function computeTotal({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTo
 /**
  * Incremental SSE (Server-Sent-Events) usage tracker (bite 3.2b). Fed raw upstream bytes as they
  * arrive; parses complete `\n\n`-delimited events out of a small rolling buffer (never the whole
- * transcript) and updates a running `usage` object per wire's terminal-usage shape. Every field
- * stays `null` (unknown) until an event actually reports it — same null-is-unknown contract as
- * `extractUsage`, just accumulated incrementally instead of parsed once from a full body.
+ * transcript) and updates a running `usage` object via the adapter's extractUsageFromSSE.
+ * Every field stays `null` (unknown) until an event actually reports it — same null-is-unknown
+ * contract as `extractUsage`, just accumulated incrementally instead of parsed once from a full body.
  */
-function createSseUsageTracker(wire) {
+function createSseUsageTracker(adapter, wire) {
   let buf = '';
   const usage = { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null };
 
-  function applyAnthropicEvent(evt) {
-    if (evt?.type === 'message_start' && evt.message?.usage && typeof evt.message.usage === 'object') {
-      const u = evt.message.usage;
-      if (u.input_tokens !== undefined) usage.inputTokens = u.input_tokens;
-      if (u.cache_creation_input_tokens !== undefined) usage.cacheWriteTokens = u.cache_creation_input_tokens;
-      if (u.cache_read_input_tokens !== undefined) usage.cacheReadTokens = u.cache_read_input_tokens;
-    } else if (evt?.type === 'message_delta' && evt.usage && typeof evt.usage.output_tokens === 'number') {
-      // Cumulative per the anthropic streaming wire — the LAST value seen wins.
-      usage.outputTokens = evt.usage.output_tokens;
+  function applySseEvent(parsed) {
+    // Try adapter's SSE extraction first
+    if (adapter?.extractUsageFromSSE) {
+      try {
+        const partial = adapter.extractUsageFromSSE(parsed);
+        if (partial) {
+          if (partial.inputTokens !== undefined) usage.inputTokens = partial.inputTokens;
+          if (partial.outputTokens !== undefined) usage.outputTokens = partial.outputTokens;
+          if (partial.cacheReadTokens !== undefined) usage.cacheReadTokens = partial.cacheReadTokens;
+          if (partial.cacheWriteTokens !== undefined) usage.cacheWriteTokens = partial.cacheWriteTokens;
+          return;
+        }
+      } catch {
+        // Fall through to built-in handlers
+      }
     }
-  }
 
-  function applyOpenaiEvent(evt) {
-    const u = evt?.usage;
-    if (!u || typeof u !== 'object') return;
-    if (u.prompt_tokens !== undefined) usage.inputTokens = u.prompt_tokens;
-    if (u.completion_tokens !== undefined) usage.outputTokens = u.completion_tokens;
-    if (u.prompt_tokens_details?.cached_tokens !== undefined) usage.cacheReadTokens = u.prompt_tokens_details.cached_tokens;
+    // Fallback: built-in wire-specific SSE handling
+    if (wire === 'anthropic') {
+      if (parsed?.type === 'message_start' && parsed.message?.usage && typeof parsed.message.usage === 'object') {
+        const u = parsed.message.usage;
+        if (u.input_tokens !== undefined) usage.inputTokens = u.input_tokens;
+        if (u.cache_creation_input_tokens !== undefined) usage.cacheWriteTokens = u.cache_creation_input_tokens;
+        if (u.cache_read_input_tokens !== undefined) usage.cacheReadTokens = u.cache_read_input_tokens;
+      } else if (parsed?.type === 'message_delta' && parsed.usage && typeof parsed.usage.output_tokens === 'number') {
+        usage.outputTokens = parsed.usage.output_tokens;
+      }
+    } else {
+      // openai / generic
+      const u = parsed?.usage;
+      if (!u || typeof u !== 'object') return;
+      if (u.prompt_tokens !== undefined) usage.inputTokens = u.prompt_tokens;
+      if (u.completion_tokens !== undefined) usage.outputTokens = u.completion_tokens;
+      if (u.prompt_tokens_details?.cached_tokens !== undefined) usage.cacheReadTokens = u.prompt_tokens_details.cached_tokens;
+    }
   }
 
   function processEvent(rawEvent) {
@@ -249,8 +304,7 @@ function createSseUsageTracker(wire) {
     } catch {
       return; // ignore non-JSON pings/comments
     }
-    if (wire === 'anthropic') applyAnthropicEvent(parsed);
-    else applyOpenaiEvent(parsed);
+    applySseEvent(parsed);
   }
 
   function feed(chunkStr) {
@@ -276,7 +330,7 @@ function createSseUsageTracker(wire) {
  * up front so the client starts receiving bytes immediately, mirroring the buffered path's header
  * handling (drop content-length/transfer-encoding; keep the upstream content-type).
  */
-function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestId, provider, model, wire, source, verdict, start, now, costFn }) {
+function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestId, provider, model, wire, source, verdict, start, now, costFn, adapter }) {
   const responseHeaders = { ...upstreamRes.headers };
   delete responseHeaders['content-length'];
   delete responseHeaders['transfer-encoding'];
@@ -285,7 +339,7 @@ function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestI
     'content-type': upstreamRes.headers['content-type'] ?? 'text/event-stream',
   });
 
-  const tracker = createSseUsageTracker(wire);
+  const tracker = createSseUsageTracker(adapter, wire);
   let emitted = false;
   const emitOnce = () => {
     if (emitted) return;
@@ -391,9 +445,82 @@ export function startGateway({
   now = () => Date.now(),
   checkVerdict = () => ({ decision: 'allow' }),
   costFn = () => null,
+  adapters = null,
+  logging = false,
+  ledger = null,
+  keyRotators = new Map(),
 } = {}) {
-  const server = http.createServer((req, res) => {
-    handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn }).catch((err) => {
+  // Resolve adapters: use provided map, or discover from default directory
+  let adaptersPromise;
+  if (adapters instanceof Map) {
+    adaptersPromise = Promise.resolve(adapters);
+  } else if (adapters === null || adapters === undefined) {
+    const adaptersDir = join(dirname(fileURLToPath(import.meta.url)), 'wire-adapters');
+    adaptersPromise = discoverAdapters(adaptersDir);
+  } else {
+    adaptersPromise = Promise.resolve(adapters);
+  }
+
+  // Cache adapters after discovery (frozen after boot per spec)
+  let cachedAdapters = null;
+  const getAdapters = async () => {
+    if (cachedAdapters) return cachedAdapters;
+    cachedAdapters = await adaptersPromise;
+    return cachedAdapters;
+  };
+
+  const server = http.createServer(async (req, res) => {
+    // Management endpoints (intercepted before proxy path)
+    if (req.method === 'GET' && req.url === '/api/wire-adapters') {
+      const adaps = await getAdapters();
+      const adapterList = [];
+      for (const [wire, a] of adaps) {
+        adapterList.push({
+          name: wire,
+          wire,
+          hasInjectAuth: a.hasInjectAuth ?? false,
+          hasSSEExtraction: a.hasSSEExtraction ?? false,
+          hasFormatDenial: a.hasFormatDenial ?? false,
+          hasNormalizeModel: a.hasNormalizeModel ?? false,
+        });
+      }
+      return sendJson(res, 200, { adapters: adapterList });
+    }
+
+    // Logging management endpoints
+    if (logging && req.method === 'GET' && req.url === '/api/gateway/logs') {
+      const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+      const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+      const offset = parseInt(url.searchParams.get('offset') ?? '0', 10);
+      const provider = url.searchParams.get('provider') ?? undefined;
+      const since = url.searchParams.get('since') ?? undefined;
+      const { listLogs } = await import('./logging.mjs');
+      const logs = listLogs(ledger, { limit, offset, provider, since });
+      return sendJson(res, 200, { logs });
+    }
+
+    if (logging && req.method === 'GET') {
+      const logMatch = /^\/api\/gateway\/logs\/([^/]+)$/.exec(req.url);
+      if (logMatch) {
+        const { getLogById } = await import('./logging.mjs');
+        const entry = getLogById(ledger, logMatch[1]);
+        if (!entry) return sendJson(res, 404, { error: 'log entry not found' });
+        return sendJson(res, 200, entry);
+      }
+    }
+
+    if (logging && req.method === 'POST') {
+      const replayMatch = /^\/api\/gateway\/replay\/([^/]+)$/.exec(req.url);
+      if (replayMatch) {
+        const { replayRequest } = await import('./logging.mjs');
+        const result = await replayRequest(ledger, replayMatch[1], { registry, resolveKey });
+        if (!result) return sendJson(res, 404, { error: 'log entry not found or replay failed' });
+        return sendJson(res, 200, result);
+      }
+    }
+
+    const adaps = await getAdapters();
+    handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn, adapters: adaps, logging, ledger, keyRotators }).catch((err) => {
       if (!res.headersSent) {
         sendJson(res, 502, { error: 'gateway: unexpected failure', detail: String(err?.message ?? err) });
       }
@@ -412,7 +539,7 @@ export function startGateway({
   });
 }
 
-async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn }) {
+async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn, adapters }) {
   const start = now();
   const requestId = randomUUID();
 
@@ -436,22 +563,15 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   const activeRegistry = typeof registry === 'function' ? registry() : registry;
   const route = resolveRoute(activeRegistry, ctx.provider);
   if (!route) {
-    // No wire is known yet at this point (routing failed before any wire could be resolved), and
-    // token-event.wire has no "unknown" value to fall back to — so unlike the post-routing
-    // failures below, this edge (a misconfigured run pointing at an unregistered provider) is
-    // reported to the client but does not produce a token-event.
     return sendJson(res, 502, { error: `gateway: no route for provider '${ctx.provider}'` });
   }
 
-  // Compute the enforcement verdict ONCE per request, before forwarding. The same verdict object
-  // is threaded through to every emitEvent call below so the decision that blocked (or allowed)
-  // the call is exactly the one stamped on the token-event — never re-queried against the ledger
-  // a second time, which could return a different answer than the one just enforced.
+  // Look up the WireAdapter for this route's wire type
+  const adapter = adapters?.get(route.wire) ?? null;
+
+  // Compute the enforcement verdict ONCE per request, before forwarding.
   const verdict = checkVerdict(ctx) ?? { decision: 'allow', capWindow: null };
 
-  // Any decision other than 'deny' is treated as "forward" for this bite. FOLLOW-UP: a future
-  // 'degrade' decision (reroute to a cheaper provider instead of blocking outright) is a
-  // documented follow-up, not implemented here.
   if (verdict.decision === 'deny') {
     emitEvent({
       onTokenEvent,
@@ -467,18 +587,25 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       verdict,
       costFn,
     });
-    return sendDeny(res, route.wire, verdict.capWindow);
+    return sendDeny(res, adapter, verdict.capWindow);
   }
 
   const body = await readBody(req);
   const forwardBody = applyThinkingToBody(body, route);
-  const headers = buildForwardHeaders(req, route, resolveKey);
+  const headers = buildForwardHeaders(req, route, adapter, resolveKey);
   // Preserve the upstream base path: an upstreamUrl like 'https://api.deepseek.com/anthropic' must
   // become '…/anthropic/v1/messages', NOT '…/v1/messages'. `new URL(req.url, base)` would drop the
   // base path (an absolute-path req.url replaces the whole path), so concatenate base path + req.url.
   const base = new URL(route.upstreamUrl);
   const target = new URL(base.pathname.replace(/\/$/, '') + req.url, base.origin);
   const transport = target.protocol === 'https:' ? https : http;
+
+  // Merge route-level custom headers (for generic-http and others)
+  if (route.headers && typeof route.headers === 'object') {
+    for (const [name, value] of Object.entries(route.headers)) {
+      if (headers[name] == null) headers[name] = value;
+    }
+  }
 
   let upstreamRes;
   try {
@@ -509,9 +636,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     return sendJson(res, 502, { error: 'gateway: upstream request failed', detail: String(err?.message ?? err) });
   }
 
-  // Streaming path (bite 3.2b): detected from the UPSTREAM's own content-type, not the client's
-  // request — a streaming request whose upstream fails before it can respond (or an upstream that
-  // ignores `stream: true`) is metered on the buffered path exactly as before.
+  // Streaming path
   const upstreamContentType = (upstreamRes.headers['content-type'] || '').toLowerCase();
   if (upstreamContentType.startsWith('text/event-stream')) {
     await handleStreamingResponse(upstreamRes, res, {
@@ -526,6 +651,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       start,
       now,
       costFn,
+      adapter,
     });
     return;
   }
@@ -559,7 +685,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     return sendJson(res, 502, { error: 'gateway: could not parse upstream response' });
   }
 
-  const usage = extractUsage(route.wire, parsed);
+  const usage = extractUsage(route.wire, parsed, adapter);
   emitEvent({
     onTokenEvent,
     ctx,

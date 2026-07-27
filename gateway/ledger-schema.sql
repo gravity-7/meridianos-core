@@ -36,3 +36,25 @@ CREATE TABLE IF NOT EXISTS token_events (
 CREATE INDEX IF NOT EXISTS idx_token_events_ts ON token_events(ts);
 CREATE INDEX IF NOT EXISTS idx_token_events_tenant_agent_ts ON token_events(tenant, agent, ts);
 CREATE INDEX IF NOT EXISTS idx_token_events_provider ON token_events(provider);
+
+-- request_logs — append-only request/response logging for debugging provider calls.
+-- Auth headers are redacted BEFORE storage. Rows are never updated, only inserted
+-- and (optionally) pruned per retention policy.
+CREATE TABLE IF NOT EXISTS request_logs (
+  id                 TEXT PRIMARY KEY,
+  ts                 TEXT NOT NULL,
+  provider           TEXT NOT NULL,
+  model              TEXT NOT NULL,
+  method             TEXT NOT NULL,
+  url                TEXT NOT NULL,
+  status_code        INTEGER NOT NULL,
+  latency_ms         INTEGER NOT NULL,
+  request_headers    TEXT NOT NULL,
+  request_body       TEXT NOT NULL,
+  response_headers   TEXT NOT NULL,
+  response_body      TEXT NOT NULL,
+  extracted_usage    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_logs_ts ON request_logs(ts);
+CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON request_logs(provider);
