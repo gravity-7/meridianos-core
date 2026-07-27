@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "meridianos-dashboard": {
+      "command": "node",
+      "args": [".github/mcp/meridianos-mcp-server.mjs"],
+      "env": {
+        "DASHBOARD_URL": "http://localhost:4317",
+        "API_ENDPOINTS": "/api/budget,/api/gateway/status,/api/gateway/events,/api/providers,/api/license,/api/agents"
+      }
+    }
+  }
+}

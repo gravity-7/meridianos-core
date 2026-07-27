@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "node",
+      "args": ["node_modules/@anthropic/mcp-server-github/dist/index.js"],
+      "env": {
+        "GITHUB_OWNER": "gravity-7",
+        "GITHUB_REPO": "meridianos-core"
+      }
+    }
+  }
+}
