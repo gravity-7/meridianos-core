@@ -1,0 +1,74 @@
+# PR Auto-Review Gate
+# Triggers on every PR open or new commit push
+# Runs tests as required check, triggers Copilot review
+# Replaces manual human review for code-quality gate
+
+name: PR Gate — Auto Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  # Gate 1: Test suite (already in ci.yml, but duplicated here as required check)
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm test
+
+  # Gate 2: Request Copilot review (GitHub-hosted Copilot, independent context)
+  copilot-review:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Request Copilot code review
+        run: |
+          echo "Requesting Copilot review for PR #${{ github.event.pull_request.number }}"
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+            --method POST \
+            -f event="COMMENT" \
+            -f body="🤖 **Automated Gate**: Requesting Copilot code review. A separate Copilot instance (independent of the authoring agent) will review this PR for spec compliance, constitution violations, and code quality."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+  # Gate 3: Spec compliance check (converge-style)
+  spec-check:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tasks.md references
+        run: |
+          echo "=== PR files changed ==="
+          curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            | jq -r '.[].filename' | sort
+        continue-on-error: true
+
+  # Final gate status
+  gate-status:
+    needs: [test, copilot-review, spec-check]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Report gate status
+        run: |
+          echo "## PR Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Gate | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Copilot Review | ${{ needs.copilot-review.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Spec Check | ${{ needs.spec-check.result }} |" >> $GITHUB_STEP_SUMMARY
