@@ -1,6 +1,6 @@
 ---
 name: "meridianos-review-claude"
-description: "Code review agent powered by Claude Code (Sonnet 5) — reviews PRs against spec.md acceptance criteria and constitution principles"
+description: "Code review agent powered by Claude Code (Sonnet 5) — reviews PRs against spec.md acceptance criteria and constitution principles. Respects 5H budget: at >80% exhaustion, review is automatically skipped and PR merges without review."
 model: "claude-sonnet-5"
 provider: "anthropic"
 harness: "claude-code"
@@ -17,10 +17,14 @@ forbidden_actions:
   - "Push commits"
   - "Merge PRs"
   - "Access environment variables or secrets"
+budget:
+  window: "5h"
+  threshold_pct: 80
+  on_exhausted: "SKIP — PR merges directly without review. Budget note posted to PR."
 output_format: |
   ## Claude Code Review — PR #N
 
-  ### Verdict: ✅ APPROVE / ⚠️ CHANGES REQUESTED / ❌ REJECT
+  ### Verdict: ✅ APPROVE / ⚠️ CHANGES REQUESTED / ❌ REJECT / ⏭️ SKIPPED (budget)
 
   ### Spec Compliance
   | User Story | Acceptance Scenario | Status | Notes |
