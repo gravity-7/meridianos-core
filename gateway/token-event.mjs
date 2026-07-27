@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 
 const VALID_WIRES = ['anthropic', 'openai'];
+const VALID_SOURCES = ['agent', 'ide', 'cli', 'api'];
 const VALID_ENFORCEMENT_DECISIONS = ['allow', 'deny', 'degrade'];
 const VALID_CAP_WINDOWS = ['5h', 'week', null];
 
@@ -41,6 +42,7 @@ export function makeTokenEvent(partial = {}, { defaultTenant = 'pv' } = {}) {
     provider: partial.provider ?? null,
     model: partial.model ?? null,
     wire: partial.wire ?? null,
+    source: partial.source ?? 'agent',
     upstreamStatus: partial.upstreamStatus ?? null,
     latencyMs: partial.latencyMs ?? null,
     // Usage

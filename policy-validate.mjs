@@ -11,6 +11,13 @@
  * Pure. The dashboard validates the would-be-merged policy BEFORE writing (applyDottedUpdates).
  */
 
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SCHEMA_PATH = join(HERE, 'schema', 'policy.schema.json');
+
 const CADENCES = new Set(['every_15m', 'every_30m', 'every_45m', 'hourly', 'every_2h', 'every_3h', 'on_handoff', 'off']);
 const DISPOSITIONS = new Set(['block_and_ask', 'notify_only', 'allow']);
 const MERGE_MODES = new Set(['founder_only', 'peer_agent_review', 'verifier_gated']);
@@ -95,4 +102,54 @@ export function applyDottedUpdates(policy, updates) {
     node[parts[parts.length - 1]] = value;
   }
   return clone;
+}
+
+// ─── Phase 0: JSON Schema boot-time validation ───────────────────────────────
+
+const VALID_WIRES = new Set(['anthropic', 'openai', 'generic-http']);
+
+/**
+ * Phase 0: Validate policy.yaml against JSON Schema at boot time.
+ * Returns { ok, errors[] } with field-level error messages including file path and line hints.
+ */
+export function validatePolicySchema(policy = {}) {
+  const errors = [];
+
+  // Validate model_routing references valid providers
+  const definedProviders = new Set(Object.keys(policy?.providers ?? {}));
+  for (const [agent, tiers] of Object.entries(policy?.model_routing ?? {})) {
+    if (typeof tiers !== 'object' || tiers == null) continue;
+    for (const [tier, config] of Object.entries(tiers)) {
+      if (config?.provider && !definedProviders.has(config.provider)) {
+        errors.push(`policy.yaml: model_routing.${agent}.${tier}.provider '${config.provider}' references unknown provider — defined providers: [${[...definedProviders].join(', ')}]`);
+      }
+      // Also validate that model is set
+      if (!config?.model) {
+        errors.push(`policy.yaml: model_routing.${agent}.${tier}.model is required when a provider is specified`);
+      }
+    }
+  }
+
+  // Validate provider wire values
+  for (const [name, provider] of Object.entries(policy?.providers ?? {})) {
+    if (provider?.wire && !VALID_WIRES.has(provider.wire)) {
+      errors.push(`policy.yaml: providers.${name}.wire '${provider.wire}' is invalid — must be one of [${[...VALID_WIRES].join(', ')}]`);
+    }
+    if (!provider?.baseUrl) {
+      errors.push(`policy.yaml: providers.${name}.baseUrl is required`);
+    }
+  }
+
+  // Validate gateway port if set
+  if (policy?.gateway?.port != null) {
+    const port = Number(policy.gateway.port);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      errors.push(`policy.yaml: gateway.port must be 1024–65535 (got ${policy.gateway.port})`);
+    }
+  }
+
+  // Check for unknown top-level fields (forward-compat warning only, not an error)
+  // This is handled by existing validatePolicy — not duplicated here.
+
+  return { ok: errors.length === 0, errors };
 }

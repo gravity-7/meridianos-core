@@ -36,8 +36,14 @@ flowchart TD
     Verifier["6️⃣ Verifier<br/>Post-run quality gate<br/>Guardrail + peer review<br/>Auto-merge or bounce<br/>Attempt cap → escalate"]
     Verifier -->|"Reclaim failed → retry"| Runner
     Verifier -->|"Blocked → escalate"| Escalation
+    Verifier -->|"All checks pass"| Done
 
     Escalation["7️⃣ Escalation<br/>Slack/webhook alerts<br/>Founder approves/snoozes<br/>§6 governance hard-stops"]
+
+    Done["✅ Done<br/>PR merged · branch deleted<br/>Task transitioned to complete"]
+    Complete["🏁 Complete<br/>All tasks finished<br/>Feature/epic closed"]
+
+    Done -->|"Last task in feature"| Complete
 
     Watchdog -.->|"Drives"| Planner
     Watchdog -.->|"Drives"| Runner

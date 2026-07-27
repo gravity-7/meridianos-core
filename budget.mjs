@@ -60,7 +60,8 @@ export function verdictFor(usage, caps, warnPct) {
   ];
   let state = 'ok';
   const windows = rows.map((r) => {
-    if (!r.cap) return { ...r, pct: null, state: 'no-cap' };
+    // cap === 0 means "block everything" (hard block); cap === null/undefined means "no limit"
+    if (r.cap == null) return { ...r, pct: null, state: 'no-cap' };
     const pct = Math.round((r.used / r.cap) * 100);
     const s = r.used >= r.cap ? 'halt' : (pct >= warnPct ? 'warn' : 'ok');
     if (s === 'halt') state = 'halt';
@@ -268,14 +269,10 @@ export function budgetStatus({ config, policy = loadPolicy(undefined, config), n
   const resets = {};
   const mayClaim = {};
 
-  // C9: ledger-canonical budget windows. Byte-identical to pre-C9 when the gateway is off/absent
-  // (AC6) — `ledger` stays null and every agent falls straight into the existing meter-reader path
-  // below, unchanged. When `config.gateway.enabled === true` (AC5), the gateway's own token-event
-  // ledger becomes the source of truth for window usage: it's opened ONCE here (an explicit
-  // `ledger` override — the test seam — skips the open entirely), and a failure to open/resolve it
-  // (missing tenant, or the open itself throwing) degrades to the existing path rather than
-  // crashing budgetStatus, exactly like every other never-fabricate guard in this file.
-  const gatewayOn = config?.gateway?.enabled === true;
+  // Phase 0: ledger-canonical budget windows. Gateway is default-ON — when config.gateway.url
+  // is present, the ledger becomes the PRIMARY source of truth for window usage. Falls back to
+  // the meter-reader path when gateway is unavailable (disabled or failed to start).
+  const gatewayOn = config?.gateway?.url != null;
   const gatewayTenant = config?.gateway?.registry?.tenant ?? config?.gateway?.tenant ?? null;
   let ledger = null;
   if (gatewayOn && gatewayTenant) {

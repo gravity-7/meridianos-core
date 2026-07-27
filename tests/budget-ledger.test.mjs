@@ -58,7 +58,7 @@ test('AC5: budgetStatus per-agent window usage equals queryWindow ledger totals,
   // a different agent's event in the SAME window must not bleed into claude's totals.
   appendEvent(ledger, evt({ agent: 'antigravity', ts: new Date(now - 60 * 60 * 1000).toISOString(), inputTokens: 9999, outputTokens: 9999, totalTokens: 19998, costUsd: 5 }));
 
-  const config = { ...freshConfig(), gateway: { enabled: true, registry: { tenant: 'pv' } } };
+  const config = { ...freshConfig(), gateway: { url: 'http://127.0.0.1:9999', enabled: true, registry: { tenant: 'pv' } } };
   const policy = { agent_budget: { warn_pct: 80, claude: { per_5h_tokens: 100000, per_week_tokens: 1000000 }, antigravity: { per_5h_tokens: 100000, per_week_tokens: 1000000 } } };
   const s = budgetStatus({ config, policy, now, runs: [], ledger });
 
@@ -83,7 +83,7 @@ test('AC5: ledger-sourced verdict halts/warns exactly like verdictFor thresholds
   const ledger = openLedger(':memory:');
   appendEvent(ledger, evt({ agent: 'claude', ts: new Date(now - 60 * 60 * 1000).toISOString(), inputTokens: 800000, outputTokens: 100000, totalTokens: 900000, costUsd: 1 }));
 
-  const config = { ...freshConfig(), gateway: { enabled: true, registry: { tenant: 'pv' } } };
+  const config = { ...freshConfig(), gateway: { url: 'http://127.0.0.1:9999', enabled: true, registry: { tenant: 'pv' } } };
   const policy = { agent_budget: { warn_pct: 80, claude: { per_5h_tokens: 800000, per_week_tokens: 6000000 } } };
   const s = budgetStatus({ config, policy, now, runs: [], ledger });
 
@@ -94,7 +94,7 @@ test('AC5: ledger-sourced verdict halts/warns exactly like verdictFor thresholds
 test('AC5: never fabricates — an agent with zero ledger rows reports 0 usage, not a crash', () => {
   const now = Date.parse('2026-07-18T12:00:00Z');
   const ledger = openLedger(':memory:'); // completely empty
-  const config = { ...freshConfig(), gateway: { enabled: true, registry: { tenant: 'pv' } } };
+  const config = { ...freshConfig(), gateway: { url: 'http://127.0.0.1:9999', enabled: true, registry: { tenant: 'pv' } } };
   const policy = { agent_budget: { warn_pct: 80, claude: { per_5h_tokens: 1000, per_week_tokens: 10000 } } };
 
   const s = budgetStatus({ config, policy, now, runs: [], ledger });
@@ -115,7 +115,7 @@ test('AC5: week_anchor policy lever is honoured identically on the ledger path (
   // one event well before the anchor recurrence — must NOT count toward this week's window
   appendEvent(ledger, evt({ agent: 'claude', ts: new Date(anchor - 24 * 60 * 60 * 1000).toISOString(), inputTokens: 5000, outputTokens: 5000, totalTokens: 10000, costUsd: 0 }));
 
-  const config = { ...freshConfig(), gateway: { enabled: true, registry: { tenant: 'pv' } } };
+  const config = { ...freshConfig(), gateway: { url: 'http://127.0.0.1:9999', enabled: true, registry: { tenant: 'pv' } } };
   const policy = { agent_budget: { warn_pct: 80, week_anchor: new Date(anchor).toISOString(), claude: { per_week_tokens: 1000000 } } };
   const s = budgetStatus({ config, policy, now, runs: [], ledger });
 
@@ -165,7 +165,7 @@ test('AC6: gateway on but tenant missing from registry degrades to the meter-rea
   const cdir = mkdtempSync(join(tmpdir(), 'bg-ledger-notenant-'));
   writeFileSync(join(cdir, 's.jsonl'), claudeLine(now - 60 * 60 * 1000, 40, 10) + '\n');
 
-  const config = { ...freshConfig(), gateway: { enabled: true, registry: {} } }; // no tenant
+  const config = { ...freshConfig(), gateway: { url: 'http://127.0.0.1:9999', enabled: true, registry: {} } }; // no tenant
   const policy = { agent_budget: { warn_pct: 80, claude: { per_5h_tokens: 100000, per_week_tokens: 1000000 } } };
   const s = budgetStatus({ config, policy, now, agentDirs: { claude: cdir, antigravity: [mkdtempSync(join(tmpdir(), 'bg-ledger-ag3-'))] }, runs: [] });
 

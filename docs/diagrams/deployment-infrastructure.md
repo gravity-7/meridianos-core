@@ -21,7 +21,7 @@ graph TB
         subgraph Volumes["📦 Docker Volumes"]
             StateVol[("daemon-state<br/>aios.db")]
             LedgerVol[("gateway-ledger<br/>ledger.db")]
-            ConfigVol[("tenant-config (ro)<br/>tenant.yaml + policy.yaml")]
+            ConfigVol[("config (ro)<br/>policy.yaml — unified config")]
             EnvVars["🔑 Environment<br/>DEEPSEEK_KEY<br/>ANTHROPIC_API_KEY<br/>OPENROUTER_KEY"]
         end
     end

@@ -72,7 +72,8 @@ function costVerdictFor({ last5h, last7d }, caps, warnPct) {
     { window: 'week', used: last7d, cap: caps?.per_week_cost_usd ?? null },
   ];
   const windows = rows.map((r) => {
-    if (!r.cap) return { ...r, pct: null, state: 'no-cap', unit: 'usd' };
+    // cap === 0 means "block everything" (hard block); cap === null/undefined means "no limit"
+    if (r.cap == null) return { ...r, pct: null, state: 'no-cap', unit: 'usd' };
     const pct = Math.round((r.used / r.cap) * 100);
     const s = r.used >= r.cap ? 'halt' : (pct >= warnPct ? 'warn' : 'ok');
     return { ...r, pct, state: s, unit: 'usd' };

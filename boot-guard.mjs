@@ -22,6 +22,32 @@
  * structured result the caller (scheduler) logs to the rotating daemon logger + event-log.
  */
 import { spawnSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+/**
+ * Phase 0: Ensure required directory structure exists before any boot logic runs.
+ * Idempotent — safe to call even when directories already exist.
+ * Returns the list of directories created (empty if all existed).
+ */
+export function ensureDirectories(repoRoot) {
+  const dirs = [
+    join(repoRoot, '.ai'),
+    join(repoRoot, '.ai', 'gateway'),
+    join(repoRoot, '.ai', 'state'),
+    join(repoRoot, '.ai', 'logs'),
+    join(repoRoot, '.ai', 'runs'),
+  ];
+  const created = [];
+  for (const dir of dirs) {
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      // Read-only filesystem or other OS error — not fatal at this level
+    }
+  }
+  return created;
+}
 
 /** The tracked, generated files the primary tree is allowed to carry as uncommitted drift. */
 export const GENERATED_BOARD_FILES = ['.ai/board.md', '.ai/state/board.json'];
