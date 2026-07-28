@@ -32,10 +32,35 @@ import { join, dirname } from 'node:path';
 import { resolveRoute } from './provider-registry.mjs';
 import { makeTokenEvent, validateTokenEvent } from './token-event.mjs';
 import { discoverAdapters } from './wire-adapter-registry.mjs';
+import { logRequestResponse } from './logging.mjs';
 
 export { applyThinkingToBody };
 
 const HOP_BY_HOP_HEADERS = ['host', 'connection', 'authorization', 'x-api-key', 'x-gateway-token', 'content-length', 'transfer-encoding'];
+
+/**
+ * Detect the client wire format from a raw request body.
+ * Returns 'anthropic', 'openai', or null if unrecognized.
+ */
+function detectClientWire(body) {
+  if (!body || body.length === 0) return null;
+  let parsed;
+  try { parsed = JSON.parse(body.toString('utf8')); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object') return null;
+  // Anthropic: has `messages` and uses `max_tokens` (not `max_completion_tokens`)
+  if (Array.isArray(parsed.messages) && parsed.max_tokens !== undefined && parsed.max_completion_tokens === undefined) {
+    return 'anthropic';
+  }
+  // OpenAI: has `messages` and uses `max_completion_tokens` or has `stream`
+  if (Array.isArray(parsed.messages) && (parsed.max_completion_tokens !== undefined || parsed.stream !== undefined)) {
+    return 'openai';
+  }
+  return null;
+}
+
+function safeParseJson(text) {
+  try { return JSON.parse(text); } catch { return null; }
+}
 
 // Order: x-gateway-token, then x-api-key, then Authorization: Bearer. The x-api-key path exists
 // because a claude-code (anthropic-wire) run's gateway token rides on the SAME header the
@@ -539,7 +564,7 @@ export function startGateway({
   });
 }
 
-async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn, adapters }) {
+async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn, adapters, logging, ledger, keyRotators }) {
   const start = now();
   const requestId = randomUUID();
 
@@ -569,6 +594,21 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   // Look up the WireAdapter for this route's wire type
   const adapter = adapters?.get(route.wire) ?? null;
 
+  // ── Key Rotation: select key from rotator if multi-key configured ──────────
+  let selectedKeyIndex = null;
+  let selectedKeyValue = null;
+  const rotator = keyRotators?.get(ctx.provider);
+  if (rotator) {
+    const selection = rotator.selectKey();
+    if (selection.allExhausted) {
+      return sendJson(res, 502, {
+        error: `gateway: all API keys exhausted for provider '${ctx.provider}'. Retry after ${selection.shortestCooldownMs ?? '?'}s.`,
+      });
+    }
+    selectedKeyIndex = selection.index;
+    selectedKeyValue = selection.key;
+  }
+
   // Compute the enforcement verdict ONCE per request, before forwarding.
   const verdict = checkVerdict(ctx) ?? { decision: 'allow', capWindow: null };
 
@@ -591,8 +631,32 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   }
 
   const body = await readBody(req);
-  const forwardBody = applyThinkingToBody(body, route);
-  const headers = buildForwardHeaders(req, route, adapter, resolveKey);
+  let forwardBody = applyThinkingToBody(body, route);
+
+  // ── Cross-Wire Translation: translate request if route.translate is set ─────
+  let translateClientWire = null;
+  let translatedBody = null;
+  if (route.translate) {
+    // Detect client wire format from the request body
+    const clientWire = detectClientWire(body);
+    if (clientWire && clientWire !== route.wire) {
+      translateClientWire = clientWire;
+      const { anthropicToOpenai, openaiToAnthropic } = await import('./translate.mjs');
+      const bodyObj = safeParseJson(body.toString('utf8'));
+      if (bodyObj) {
+        if (clientWire === 'anthropic' && route.wire === 'openai') {
+          translatedBody = anthropicToOpenai(bodyObj);
+        } else if (clientWire === 'openai' && route.wire === 'anthropic') {
+          translatedBody = openaiToAnthropic(bodyObj);
+        }
+        if (translatedBody) {
+          forwardBody = Buffer.from(JSON.stringify(translatedBody), 'utf8');
+        }
+      }
+    }
+  }
+
+  const headers = buildForwardHeaders(req, route, adapter, selectedKeyValue ? (() => selectedKeyValue) : resolveKey);
   // Preserve the upstream base path: an upstreamUrl like 'https://api.deepseek.com/anthropic' must
   // become '…/anthropic/v1/messages', NOT '…/v1/messages'. `new URL(req.url, base)` would drop the
   // base path (an absolute-path req.url replaces the whole path), so concatenate base path + req.url.
@@ -619,6 +683,8 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       outReq.end(forwardBody);
     });
   } catch (err) {
+    // Mark key as failed on connection error (not auth-specific, but indicates key issues)
+    if (rotator && selectedKeyIndex !== null) rotator.markKeyFailed(selectedKeyIndex);
     emitEvent({
       onTokenEvent,
       ctx,
@@ -634,6 +700,16 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       costFn,
     });
     return sendJson(res, 502, { error: 'gateway: upstream request failed', detail: String(err?.message ?? err) });
+  }
+
+  // ── Key Rotation: handle 401 vs success ─────────────────────────────────────
+  if (rotator && selectedKeyIndex !== null) {
+    if (upstreamRes.statusCode === 401) {
+      rotator.markKeyFailed(selectedKeyIndex);
+    } else if (upstreamRes.statusCode < 500) {
+      rotator.markKeySuccess(selectedKeyIndex);
+    }
+    // 5xx: don't mark success or failure — key might be fine, server might be down
   }
 
   // Streaming path
@@ -686,6 +762,28 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   }
 
   const usage = extractUsage(route.wire, parsed, adapter);
+
+  // ── Request Logging: log request/response if logging is enabled ─────────────
+  if (logging && ledger) {
+    try {
+      logRequestResponse(ledger, {
+        provider: ctx.provider,
+        model: ctx.model,
+        method: req.method,
+        url: target.href,
+        statusCode: upstreamRes.statusCode ?? 0,
+        latencyMs,
+        requestHeaders: req.headers,
+        requestBody: body.toString('utf8'),
+        responseHeaders: upstreamRes.headers,
+        responseBody: responseBody.toString('utf8'),
+        extractedUsage: usage,
+      });
+    } catch {
+      // Logging failure must never block the response
+    }
+  }
+
   emitEvent({
     onTokenEvent,
     ctx,
@@ -701,13 +799,32 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     costFn,
   });
 
+  // ── Reverse Translation: translate upstream response back to client wire ────
+  let clientResponseBody = responseBody;
+  if (translateClientWire && parsed) {
+    try {
+      const { openaiResponseToAnthropic, anthropicResponseToOpenai } = await import('./translate.mjs');
+      let translated;
+      if (route.wire === 'openai' && translateClientWire === 'anthropic') {
+        translated = openaiResponseToAnthropic(parsed);
+      } else if (route.wire === 'anthropic' && translateClientWire === 'openai') {
+        translated = anthropicResponseToOpenai(parsed);
+      }
+      if (translated) {
+        clientResponseBody = Buffer.from(JSON.stringify(translated), 'utf8');
+      }
+    } catch {
+      // Translation failure: fall through with original response
+    }
+  }
+
   const responseHeaders = { ...upstreamRes.headers };
   delete responseHeaders['content-length'];
   delete responseHeaders['transfer-encoding'];
   res.writeHead(upstreamRes.statusCode, {
     ...responseHeaders,
     'content-type': upstreamRes.headers['content-type'] ?? 'application/json',
-    'content-length': Buffer.byteLength(responseBody),
+    'content-length': Buffer.byteLength(clientResponseBody),
   });
-  res.end(responseBody);
+  res.end(clientResponseBody);
 }

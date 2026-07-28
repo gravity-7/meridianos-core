@@ -1,0 +1,31 @@
+{
+  "prNumber": "69",
+  "title": "[002-Universal-Gateway]: WireAdapter plugin system, zero-config bootstrap, multi-key rotation, request logging, and cross-wire translation",
+  "specDir": "specs/001-foundation-hardening",
+  "files": [
+    ".specify/feature.json",
+    "gateway/cli.mjs",
+    "gateway/index.mjs",
+    "gateway/ledger-schema.sql",
+    "gateway/logging.mjs",
+    "gateway/provider-registry.mjs",
+    "gateway/server.mjs",
+    "gateway/tests/wire-adapter-registry.test.mjs",
+    "gateway/token-event.mjs",
+    "gateway/translate.mjs",
+    "gateway/wire-adapter-registry.mjs",
+    "gateway/wire-adapters/.gitkeep",
+    "gateway/wire-adapters/anthropic.mjs",
+    "gateway/wire-adapters/generic-http.mjs",
+    "gateway/wire-adapters/openai.mjs",
+    "specs/002-universal-gateway/checklists/requirements.md",
+    "specs/002-universal-gateway/contracts/gateway-api.md",
+    "specs/002-universal-gateway/contracts/wire-adapter-interface.md",
+    "specs/002-universal-gateway/data-model.md",
+    "specs/002-universal-gateway/plan.md",
+    "specs/002-universal-gateway/quickstart.md",
+    "specs/002-universal-gateway/research.md",
+    "specs/002-universal-gateway/spec.md",
+    "specs/002-universal-gateway/tasks.md"
+  ]
+}
