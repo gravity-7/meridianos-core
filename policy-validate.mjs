@@ -106,7 +106,7 @@ export function applyDottedUpdates(policy, updates) {
 
 // ─── Phase 0: JSON Schema boot-time validation ───────────────────────────────
 
-const VALID_WIRES = new Set(['anthropic', 'openai', 'generic-http']);
+const VALID_WIRES = new Set(['anthropic', 'openai', 'google-ai', 'generic-http']);
 
 /**
  * Phase 0: Validate policy.yaml against JSON Schema at boot time.

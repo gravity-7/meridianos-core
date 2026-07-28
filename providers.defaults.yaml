@@ -1,0 +1,75 @@
+# Built-in provider defaults — lowest-priority source in the three-source merge.
+# Override any field in policy.yaml (highest) or .ai/providers.yaml (middle).
+# Removing a provider from a higher source hides it from the resolved list.
+# Generated: 2026-07-28 — MeridianOS Provider & Model Agnosticism (003)
+
+providers:
+  anthropic:
+    name: anthropic
+    displayName: Anthropic
+    wire: anthropic
+    baseUrl: "https://api.anthropic.com"
+    keyEnv: ANTHROPIC_API_KEY
+    auth:
+      mode: env
+      headerName: x-api-key
+    features:
+      supportsStreaming: true
+      supportsToolUse: true
+      supportsVision: true
+      supportsCaching: true
+      supportsThinking: true
+      supportsJsonMode: false
+
+  deepseek:
+    name: deepseek
+    displayName: DeepSeek
+    wire: openai
+    baseUrl: "https://api.deepseek.com"
+    keyEnv: DEEPSEEK_KEY
+    auth:
+      mode: env
+      headerPrefix: "Bearer "
+    features:
+      supportsStreaming: true
+      supportsToolUse: true
+      supportsVision: false
+      supportsCaching: true
+      supportsThinking: true
+      supportsJsonMode: true
+
+  openrouter:
+    name: openrouter
+    displayName: OpenRouter
+    wire: openai
+    baseUrl: "https://openrouter.ai/api/v1"
+    keyEnv: OPENROUTER_KEY
+    auth:
+      mode: env
+      headerPrefix: "Bearer "
+    headers:
+      HTTP-Referer: "https://meridianos.dev"
+      X-Title: "MeridianOS"
+    features:
+      supportsStreaming: true
+      supportsToolUse: true
+      supportsVision: true
+      supportsCaching: false
+      supportsThinking: false
+      supportsJsonMode: true
+
+  ollama:
+    name: ollama
+    displayName: Ollama (Local)
+    wire: openai
+    baseUrl: "http://localhost:11434/v1"
+    keyEnv: null
+    auth:
+      mode: env
+    features:
+      supportsStreaming: true
+      supportsToolUse: true
+      supportsVision: false
+      supportsCaching: false
+      supportsThinking: false
+      supportsJsonMode: true

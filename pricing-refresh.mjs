@@ -157,3 +157,192 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exitCode = 1;
   });
 }
+
+// ─── Model Registry Pricing Refresh (003 — US6) ─────────────────────────
+
+/**
+ * Refresh per-model pricing stored in the model_registry SQLite table using
+ * the 4-tier fallback chain: provider-native → OpenRouter → models.dev → cache.
+ *
+ * @param {object} db - better-sqlite3 database instance
+ * @param {object} [policy]
+ * @param {object} [config]
+ * @returns {Promise<{refreshed: number, failed: number, details: Array}>}
+ */
+export async function refreshAllModelPricing(db, policy, config) {
+  // Lazy-load to avoid circular dependency
+  const { getModels, upsertModel, ensureModelRegistry } = await import('./model-registry.mjs');
+  const { resolveAllProviders } = await import('./providers.mjs');
+
+  ensureModelRegistry(db);
+  const providers = resolveAllProviders(policy, config);
+  const models = getModels(db, { deprecated: false });
+  const now = new Date().toISOString();
+  let refreshed = 0;
+  let failed = 0;
+  const details = [];
+
+  for (const model of models) {
+    const providerConfig = providers[model.provider];
+    if (!providerConfig) {
+      failed++;
+      details.push({ model: model.id, error: 'unknown provider', ok: false });
+      continue;
+    }
+
+    try {
+      const pricing = await refreshModelPricing(model, providerConfig, db);
+      upsertModel(db, model.provider, {
+        model_id: model.model_id,
+        pricing_input_per_m: pricing.inputPerM,
+        pricing_cached_input_per_m: pricing.cachedInputPerM,
+        pricing_output_per_m: pricing.outputPerM,
+        pricing_source: pricing.source,
+        pricing_refreshed: now,
+      });
+
+      // Price change detection
+      if (model.pricing_input_per_m != null && pricing.inputPerM != null) {
+        const change = Math.abs((pricing.inputPerM - model.pricing_input_per_m) / model.pricing_input_per_m);
+        if (change > 0.5) {
+          console.log(`[PRICING] ALERT: ${model.id} input price changed ${(change * 100).toFixed(0)}%`);
+        } else if (change > 0.1) {
+          console.log(`[PRICING] NOTIFY: ${model.id} input price changed ${(change * 100).toFixed(0)}%`);
+        }
+      }
+
+      details.push({ model: model.id, source: pricing.source, ok: true });
+      refreshed++;
+    } catch (err) {
+      details.push({ model: model.id, error: err.message, ok: false });
+      failed++;
+    }
+  }
+
+  console.log(`[PRICING] Refreshed ${refreshed} model prices, ${failed} failures`);
+  return { refreshed, failed, details };
+}
+
+/**
+ * Refresh pricing for a single model using the 4-tier fallback chain.
+ *
+ * @param {object} model - Model row from model_registry
+ * @param {object} providerConfig - Resolved provider descriptor
+ * @param {object} db - better-sqlite3 database instance
+ * @returns {Promise<{inputPerM: number|null, cachedInputPerM: number|null, outputPerM: number|null, source: string}>}
+ */
+async function refreshModelPricing(model, providerConfig, db) {
+  const { model_id } = model;
+
+  // Tier 1: Provider-native pricing
+  const native = await tryProviderPricing(providerConfig, model_id);
+  if (native) return { ...native, source: 'provider-native' };
+
+  // Tier 2: OpenRouter pricing
+  const or = await tryOpenRouterModelPricing(model_id);
+  if (or) return { ...or, source: 'openrouter' };
+
+  // Tier 3: models.dev pricing
+  const md = await tryModelsDevModelPricing(model.provider, model_id);
+  if (md) return { ...md, source: 'models-dev' };
+
+  // Tier 4: Last-known-good cache
+  if (model.pricing_input_per_m != null || model.pricing_output_per_m != null) {
+    return {
+      inputPerM: model.pricing_input_per_m ?? null,
+      cachedInputPerM: model.pricing_cached_input_per_m ?? null,
+      outputPerM: model.pricing_output_per_m ?? null,
+      source: 'cache',
+    };
+  }
+
+  return { inputPerM: null, cachedInputPerM: null, outputPerM: null, source: 'none' };
+}
+
+async function tryProviderPricing(providerConfig, modelId) {
+  if (providerConfig.wire === 'anthropic') {
+    const RATES = {
+      'claude-sonnet-4-20250514': { input: 3.00, cachedInput: 0.30, output: 15.00 },
+      'claude-sonnet-5': { input: 3.00, cachedInput: 0.30, output: 15.00 },
+      'claude-sonnet-4': { input: 3.00, cachedInput: 0.30, output: 15.00 },
+      'claude-opus-4-20250514': { input: 15.00, cachedInput: 1.50, output: 75.00 },
+      'claude-opus-4-8': { input: 15.00, cachedInput: 1.50, output: 75.00 },
+      'claude-opus-4': { input: 15.00, cachedInput: 1.50, output: 75.00 },
+      'claude-haiku-4-5-20251001': { input: 1.00, cachedInput: 0.10, output: 5.00 },
+      'claude-fable-5': { input: 15.00, cachedInput: 1.50, output: 75.00 },
+    };
+    for (const [prefix, rates] of Object.entries(RATES)) {
+      if (modelId.startsWith(prefix)) {
+        return { inputPerM: rates.input, cachedInputPerM: rates.cachedInput, outputPerM: rates.output };
+      }
+    }
+  }
+  return null;
+}
+
+async function tryOpenRouterModelPricing(modelId) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const response = await fetch(OPENROUTER_MODELS_URL, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) return null;
+
+    const body = await response.json();
+    const models = body?.data ?? [];
+    const found = models.find((m) => m.id === modelId || m.id?.endsWith(`:${modelId}`));
+    if (!found?.pricing) return null;
+
+    const input = Number(found.pricing.prompt);
+    const output = Number(found.pricing.completion);
+    if (!Number.isFinite(input) || !Number.isFinite(output)) return null;
+
+    return {
+      inputPerM: round6(input * 1_000_000),
+      cachedInputPerM: null,
+      outputPerM: round6(output * 1_000_000),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function tryModelsDevModelPricing(provider, modelId) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const url = `https://models.dev/api/v1/models/${encodeURIComponent(provider)}/${encodeURIComponent(modelId)}`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) return null;
+
+    const body = await response.json();
+    if (!body?.pricing) return null;
+    return {
+      inputPerM: body.pricing.input_per_million ?? null,
+      cachedInputPerM: body.pricing.cached_input_per_million ?? null,
+      outputPerM: body.pricing.output_per_million ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if pricing data is stale (>7 days since last refresh).
+ * @param {string} pricingRefreshed - ISO-8601 timestamp
+ * @returns {boolean}
+ */
+export function isPricingStale(pricingRefreshed) {
+  if (!pricingRefreshed) return true;
+  const refreshed = new Date(pricingRefreshed).getTime();
+  return (Date.now() - refreshed) > 7 * 24 * 60 * 60 * 1000;
+}

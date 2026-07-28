@@ -1,0 +1,233 @@
+{
+  "$schema": "../schema/provider.schema.json",
+  "_description": "Curated database of known AI providers. Used by the provider wizard for auto-detection and pre-fill. Version-controlled — update this file to add new providers to the wizard catalog.",
+  "_version": "1.0.0",
+  "_generated": "2026-07-28",
+  "providers": [
+    {
+      "name": "anthropic",
+      "displayName": "Anthropic",
+      "wire": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "keyEnv": "ANTHROPIC_API_KEY",
+      "docsUrl": "https://docs.anthropic.com/en/api",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": true,
+        "supportsThinking": true
+      }
+    },
+    {
+      "name": "deepseek",
+      "displayName": "DeepSeek",
+      "wire": "openai",
+      "baseUrl": "https://api.deepseek.com",
+      "keyEnv": "DEEPSEEK_KEY",
+      "docsUrl": "https://platform.deepseek.com/api-docs",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": false,
+        "supportsCaching": true,
+        "supportsThinking": true
+      }
+    },
+    {
+      "name": "openrouter",
+      "displayName": "OpenRouter",
+      "wire": "openai",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "keyEnv": "OPENROUTER_KEY",
+      "docsUrl": "https://openrouter.ai/docs",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "ollama",
+      "displayName": "Ollama (Local)",
+      "wire": "openai",
+      "baseUrl": "http://localhost:11434/v1",
+      "keyEnv": null,
+      "docsUrl": "https://github.com/ollama/ollama",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": false,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "openai",
+      "displayName": "OpenAI",
+      "wire": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "keyEnv": "OPENAI_API_KEY",
+      "docsUrl": "https://platform.openai.com/docs/api-reference",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": false,
+        "supportsThinking": true
+      }
+    },
+    {
+      "name": "groq",
+      "displayName": "Groq",
+      "wire": "openai",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "keyEnv": "GROQ_API_KEY",
+      "docsUrl": "https://console.groq.com/docs/api-reference",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": false,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "together",
+      "displayName": "Together AI",
+      "wire": "openai",
+      "baseUrl": "https://api.together.xyz/v1",
+      "keyEnv": "TOGETHER_API_KEY",
+      "docsUrl": "https://docs.together.ai/reference",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "fireworks",
+      "displayName": "Fireworks AI",
+      "wire": "openai",
+      "baseUrl": "https://api.fireworks.ai/inference/v1",
+      "keyEnv": "FIREWORKS_API_KEY",
+      "docsUrl": "https://docs.fireworks.ai/api-reference",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "google",
+      "displayName": "Google AI (Gemini)",
+      "wire": "google-ai",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "keyEnv": "GEMINI_API_KEY",
+      "docsUrl": "https://ai.google.dev/gemini-api/docs",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": true,
+        "supportsThinking": true
+      }
+    },
+    {
+      "name": "mistral",
+      "displayName": "Mistral AI",
+      "wire": "openai",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "keyEnv": "MISTRAL_API_KEY",
+      "docsUrl": "https://docs.mistral.ai/api",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "cohere",
+      "displayName": "Cohere",
+      "wire": "openai",
+      "baseUrl": "https://api.cohere.com/v1",
+      "keyEnv": "COHERE_API_KEY",
+      "docsUrl": "https://docs.cohere.com/reference/about",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": false,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "perplexity",
+      "displayName": "Perplexity",
+      "wire": "openai",
+      "baseUrl": "https://api.perplexity.ai",
+      "keyEnv": "PERPLEXITY_API_KEY",
+      "docsUrl": "https://docs.perplexity.ai/api-reference",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": false,
+        "supportsVision": false,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "xai",
+      "displayName": "xAI (Grok)",
+      "wire": "openai",
+      "baseUrl": "https://api.x.ai/v1",
+      "keyEnv": "XAI_API_KEY",
+      "docsUrl": "https://docs.x.ai/api",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "azure-openai",
+      "displayName": "Azure OpenAI",
+      "wire": "openai",
+      "baseUrl": "https://{resource}.openai.azure.com/openai/v1",
+      "keyEnv": "AZURE_OPENAI_API_KEY",
+      "docsUrl": "https://learn.microsoft.com/en-us/azure/ai-services/openai/reference",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    },
+    {
+      "name": "aws-bedrock",
+      "displayName": "AWS Bedrock",
+      "wire": "generic-http",
+      "baseUrl": "https://bedrock-runtime.{region}.amazonaws.com",
+      "keyEnv": "AWS_ACCESS_KEY_ID",
+      "docsUrl": "https://docs.aws.amazon.com/bedrock/latest/APIReference",
+      "features": {
+        "supportsStreaming": true,
+        "supportsToolUse": true,
+        "supportsVision": true,
+        "supportsCaching": false,
+        "supportsThinking": false
+      }
+    }
+  ]
+}
