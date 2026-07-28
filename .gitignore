@@ -15,3 +15,26 @@ node_modules/
 .ai/secrets/
 .ai/worktrees/
 .playwright-mcp/
+
+# Transient PR review artifacts — auto-generated per-PR (prompts, outputs, diffs, context)
+.ai/reviews/
+
+# Spec-kit runtime state (actual feature specs are committed in specs/)
+.ai/features/
+
+# Machine-local runtime state
+.ai/dashboards/
+.ai/runs/
+.ai/state/
+
+# Spec-kit package cache — auto-generated, machine-specific
+.specify/.cache/
+
+# IDE tracking and research data — local analytics, not source
+.copilot-tracking/
+
+# Temporary / experimental workspace
+scratch/
+
+# Isolated per-run worktrees (same pattern as .mos-worktrees/)
+.aios-worktrees/
