@@ -38,5 +38,10 @@ scratch/
 
 # Isolated per-run worktrees (same pattern as .mos-worktrees/)
 .aios-worktrees/
+# Durable orchestrator memory — these ARE committed (overrides blanket .ai/ ignores above)
+!.ai/memory/
+!.ai/contracts/
+!.ai/cards/
+!.ai/OWNERSHIP.md
 # Sensitive planning and research — local-only, never commit
 docs/MASTER-PLAN-CLOSE-GAPS.md
