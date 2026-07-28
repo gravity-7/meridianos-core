@@ -257,7 +257,7 @@ console.log(`Review prompts saved to ${runDir}`);
  * Reviews are posted independently — NOT gated on other agents.
  * Returns { agent, verdict, output, error?, posted }
  */
-async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 10 * 60 * 1000) { // default 10min
+async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 * 1000) { // default 30min
   return new Promise((resolve) => {
     const startTime = Date.now();
     let cmd, args;
