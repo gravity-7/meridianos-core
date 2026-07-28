@@ -38,3 +38,5 @@ scratch/
 
 # Isolated per-run worktrees (same pattern as .mos-worktrees/)
 .aios-worktrees/
+# Sensitive planning and research — local-only, never commit
+docs/MASTER-PLAN-CLOSE-GAPS.md
