@@ -267,7 +267,11 @@ async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 
       args = ["--print", "--output-format", "text"];
     } else if (name === "antigravity") {
       cmd = "agy";
-      args = ["chat", "--prompt-file", promptFile];
+      // agy uses -p for the prompt (no chat subcommand, no --prompt-file).
+      // --dangerously-skip-permissions bypasses interactive permission prompts.
+      // --print-timeout ensures the agent doesn't hang indefinitely.
+      const agyPrompt = readFileSync(promptFile, "utf8");
+      args = ["--print", agyPrompt, "--dangerously-skip-permissions", "--print-timeout", "30m", "--output-format", "text"];
     } else {
       resolve({ agent: name, verdict: "ERROR", output: "", error: `Unknown agent: ${name}`, posted: false });
       return;
@@ -340,11 +344,9 @@ async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 
         finish("TIMEOUT", "", err.message, true);
       });
 
-      // Feed prompt to stdin for Claude Code
-      if (name === "claude") {
-        child.stdin.write(prompt);
-        child.stdin.end();
-      }
+      // Feed prompt to stdin for both agents
+      child.stdin.write(prompt);
+      child.stdin.end();
     } catch (err) {
       finish("ERROR", "", err.message, false);
     }
