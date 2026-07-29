@@ -34,3 +34,42 @@ export function costFor(provider, model, usage, { config, catalog = loadPricing(
   const outputCost = (outputTokens / 1_000_000) * entry.outputPerM;
   return { inputCost, outputCost, totalCost: inputCost + outputCost };
 }
+
+/**
+ * Cache-differentiated cost calculation (003 — US6).
+ *
+ * Formula: (uncachedInput × inputPerM + cachedInput × cachedInputPerM + output × outputPerM) / 1,000,000
+ *
+ * When a model doesn't support cache-aware pricing (cachedInputPerM is null/undefined),
+ * cached tokens are costed at the standard input rate.
+ *
+ * @param {string} compositeModelId - "provider:model_id" format
+ * @param {number} inputTokens - Total input tokens (cached + uncached)
+ * @param {number} outputTokens - Total output tokens
+ * @param {number} [cachedInputTokens=0] - Number of cache-hit input tokens
+ * @param {object} [catalog] - Pricing catalog (loaded if omitted)
+ * @param {object} [config] - AiosConfig
+ * @returns {number|null} Total cost in USD, or null if pricing unavailable
+ */
+export function getEffectiveCost(compositeModelId, inputTokens, outputTokens, cachedInputTokens = 0, catalog, config) {
+  const [provider, model] = compositeModelId.split(':');
+  if (!provider || !model) return null;
+
+  const cat = catalog ?? loadPricing(undefined, config);
+  const entry = cat?.[provider]?.[model];
+  if (!entry) return null;
+
+  const inputPerM = entry.inputPerM;
+  const outputPerM = entry.outputPerM;
+  if (typeof inputPerM !== 'number' || typeof outputPerM !== 'number') return null;
+
+  const cachedPerM = typeof entry.cachedInputPerM === 'number' ? entry.cachedInputPerM : inputPerM;
+  const uncachedInput = Math.max(0, inputTokens - cachedInputTokens);
+  const cachedInput = Math.min(inputTokens, cachedInputTokens);
+
+  const inputCost = (uncachedInput / 1_000_000) * inputPerM;
+  const cachedCost = (cachedInput / 1_000_000) * cachedPerM;
+  const outputCost = (outputTokens / 1_000_000) * outputPerM;
+
+  return inputCost + cachedCost + outputCost;
+}

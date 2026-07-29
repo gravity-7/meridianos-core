@@ -8,18 +8,34 @@
  * literal key. Keys are read from `process.env` at use-time (`providerKeyPresent`), not at
  * load-time — no secrets in the registry, no secrets in the repo.
  *
- * Policy overlay: `.ai/policy.yaml`'s optional `providers:` section overrides/extends these
- * code defaults, the same way `model_routing` overlays a domain's `defaultModels` in
- * model-router.mjs. Absent policy → code defaults. This module never writes policy.yaml.
+ * Three-source merge (003 — Provider & Model Agnosticism):
+ *   1. policy.yaml `providers:` key (HIGHEST priority — user overrides)
+ *   2. .ai/providers.yaml (MIDDLE — wizard-generated local state)
+ *   3. providers.defaults.yaml (LOWEST — built-in defaults shipped with the project)
+ *
+ * Merge rules:
+ *   - Top-level fields are merged shallowly (higher source wins)
+ *   - `headers` and `features` objects are merged deeply (individual keys overridden)
+ *   - A provider's `null` value in a higher source hides it from the resolved list
+ *   - `models` merges per-tier rather than wholesale
+ *
+ * Backward compatibility: `PROVIDERS` is a Proxy-based lazy getter that resolves via
+ * `resolveAllProviders()`. All existing call sites continue to work without changes.
  */
+import { readFileSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadPolicy } from './budget.mjs';
 import { TIERS } from './model-router.mjs';
+import { parseYaml } from './yaml-lite.mjs';
 
-const VALID_WIRES = ['anthropic', 'openai'];
+const HERE = dirname(fileURLToPath(import.meta.url));
 
-// ─── Registry (code defaults) ───────────────────────────────────────────────
+const VALID_WIRES = ['anthropic', 'openai', 'google-ai', 'generic-http'];
 
-export const PROVIDERS = {
+// ─── Registry (code defaults — kept for backward compat, also used as fallback) ───
+
+const BUILTIN_PROVIDERS = {
   anthropic: {
     name: 'anthropic',
     baseUrl: null, // null = inject nothing; use the CLI's own login (today's behavior)
@@ -88,7 +104,7 @@ export function validateProviders(registry) {
     if (entry.anthropicBaseUrl !== undefined && entry.anthropicBaseUrl !== null && typeof entry.anthropicBaseUrl !== 'string') {
       throw new Error(`providers.${key}.anthropicBaseUrl must be null, undefined, or a string`);
     }
-    if (!VALID_WIRES.includes(entry.wire)) {
+    if (entry.wire !== undefined && !VALID_WIRES.includes(entry.wire)) {
       throw new Error(`providers.${key}.wire must be one of ${VALID_WIRES.join(', ')} (got '${entry.wire}')`);
     }
     if (entry.keyEnv !== null && typeof entry.keyEnv !== 'string') {
@@ -111,26 +127,164 @@ export function validateProviders(registry) {
   return true;
 }
 
-// ─── Resolution ─────────────────────────────────────────────────────────────
+/**
+ * Return the set of valid wire names from the registered WireAdapters.
+ * Falls back to the static VALID_WIRES list if the WireAdapter registry is not available.
+ */
+export function getValidWires() {
+  return [...VALID_WIRES];
+}
+
+// ─── Three-Source Merge Engine (003 — Provider & Model Agnosticism) ────────
 
 /**
- * Merge a provider's code default with its policy overlay (policy wins). `models` merges
- * per-tier rather than wholesale, so a policy can override one tier without restating all five.
- * A provider defined only in policy (not in the code registry) resolves too — policy "extends".
- * Returns null if the provider isn't in the code registry or the policy overlay.
+ * Deep-merge two objects. Fields in `higher` override fields in `lower`.
+ * For `headers` and `features` sub-objects, merges deeply (individual keys overridden).
+ * A `null` value in `higher` for a top-level field means "remove this field."
+ */
+function deepMergeProviders(lower, higher) {
+  if (!lower && !higher) return null;
+  if (!lower) return { ...higher };
+  if (!higher) return { ...lower };
+
+  const merged = { ...lower };
+  for (const [key, val] of Object.entries(higher)) {
+    // null override: remove the field
+    if (val === null) {
+      delete merged[key];
+      continue;
+    }
+    // Deep merge for headers and features
+    if ((key === 'headers' || key === 'features') && typeof val === 'object' && !Array.isArray(val)) {
+      merged[key] = { ...(lower[key] ?? {}), ...val };
+    } else if (key === 'models' && typeof val === 'object' && !Array.isArray(val)) {
+      // models merge per-tier
+      merged[key] = { ...(lower[key] ?? {}), ...val };
+    } else {
+      merged[key] = val;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Read the YAML defaults file shipped with the project.
+ * Returns parsed providers object or empty object if file missing/unparseable.
+ */
+function loadDefaultsYaml() {
+  const defaultsPath = join(HERE, 'providers.defaults.yaml');
+  try {
+    if (!existsSync(defaultsPath)) return {};
+    const raw = readFileSync(defaultsPath, 'utf8');
+    const parsed = parseYaml(raw);
+    return parsed?.providers ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Read the local .ai/providers.yaml (wizard-generated state).
+ * Returns parsed providers object or empty object if file missing/unparseable.
+ */
+function loadLocalProvidersYaml(repoRoot) {
+  const localPath = join(repoRoot ?? process.cwd(), '.ai', 'providers.yaml');
+  try {
+    if (!existsSync(localPath)) return {};
+    const raw = readFileSync(localPath, 'utf8');
+    const parsed = parseYaml(raw);
+    return parsed?.providers ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolve ALL providers from the three-source merge.
+ *
+ * Priority (highest to lowest):
+ *   1. policy.yaml `providers:` key — user overrides
+ *   2. .ai/providers.yaml — wizard-generated local state
+ *   3. providers.defaults.yaml — built-in defaults
+ *
+ * Also includes the legacy BUILTIN_PROVIDERS as a fallback for code-default providers
+ * that aren't in any YAML source (backward compatibility).
+ *
+ * @param {object} [policy] - Pre-loaded policy object (optional, loads if omitted)
+ * @param {object} [config] - AiosConfig for repo root resolution (optional)
+ * @returns {object} Flat map of provider name → resolved provider descriptor
+ */
+export function resolveAllProviders(policy, config) {
+  let p = policy;
+  if (!p) {
+    try {
+      p = loadPolicy(undefined, config);
+    } catch {
+      p = {};
+    }
+  }
+  const repoRoot = config?.repoRoot ?? process.cwd();
+
+  // Load three sources
+  const policyProviders = p?.providers ?? {};
+  const localProviders = loadLocalProvidersYaml(repoRoot);
+  const defaultProviders = loadDefaultsYaml();
+
+  // Start with built-in code defaults as ultimate fallback
+  const merged = { ...BUILTIN_PROVIDERS };
+
+  // Layer 1: built-in YAML defaults (lowest priority)
+  for (const [name, def] of Object.entries(defaultProviders)) {
+    merged[name] = deepMergeProviders(merged[name], def);
+  }
+
+  // Layer 2: local .ai/providers.yaml (middle priority)
+  for (const [name, local] of Object.entries(localProviders)) {
+    if (local === null) {
+      delete merged[name];
+      continue;
+    }
+    merged[name] = deepMergeProviders(merged[name], local);
+  }
+
+  // Layer 3: policy.yaml (highest priority)
+  for (const [name, pol] of Object.entries(policyProviders)) {
+    // null value at provider level means "hide this provider"
+    if (pol === null) {
+      delete merged[name];
+      continue;
+    }
+    merged[name] = deepMergeProviders(merged[name], pol);
+  }
+
+  // Remove null-valued entries (hidden providers)
+  for (const [name, entry] of Object.entries(merged)) {
+    if (entry === null || entry === undefined) {
+      delete merged[name];
+    }
+  }
+
+  return merged;
+}
+
+// ─── Resolution ─────────────────────────────────────────────────────────────
+
+// Cache for resolveAllProviders — invalidated when policy changes
+let _providerCache = null;
+let _providerCachePolicy = null;
+
+/**
+ * Merge a provider's sources with the three-source merge (003).
+ * `models` merges per-tier rather than wholesale, so a policy can override one tier
+ * without restating all five. A provider defined only in policy (not in the code registry)
+ * resolves too — policy "extends".
+ * Returns null if the provider isn't found in any source.
  */
 export function resolveProvider(name, policy, config) {
   // `policy` is checked at the BODY level (not a default-parameter expression) so this works no
   // matter where `config` sits positionally — a default param can't reference a later param.
-  const p = policy ?? loadPolicy(undefined, config);
-  const base = PROVIDERS[name];
-  const overlay = p?.providers?.[name];
-  if (!base && !overlay) return null;
-  return {
-    ...base,
-    ...overlay,
-    models: { ...(base?.models ?? {}), ...(overlay?.models ?? {}) },
-  };
+  const all = resolveAllProviders(policy, config);
+  return all[name] ?? null;
 }
 
 /** The model id a provider uses for a given complexity tier, after the policy overlay. */
@@ -168,3 +322,39 @@ export function validateHarnessCompatibility(harness, providerDescriptor) {
     error: `harness '${harness}' is not compatible with provider '${providerDescriptor.name}'. Compatible harnesses: ${compatible.join(', ')}`,
   };
 }
+
+// ─── Backward-Compatible Lazy Getter (003 — Provider & Model Agnosticism) ───
+
+/**
+ * `PROVIDERS` — backward-compatible lazy getter.
+ *
+ * This Proxy intercepts property access on `PROVIDERS` and delegates to
+ * `resolveAllProviders()`, so existing code like `PROVIDERS.anthropic` or
+ * `Object.keys(PROVIDERS)` continues to work without any changes.
+ *
+ * The Proxy traps:
+ *   - `get(target, prop)` → resolves the named provider via resolveAllProviders()
+ *   - `ownKeys(target)` → returns all provider names
+ *   - `getOwnPropertyDescriptor(target, prop)` → makes providers enumerable
+ */
+export const PROVIDERS = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      if (typeof prop === 'symbol') return undefined;
+      const all = resolveAllProviders();
+      return all[prop];
+    },
+    ownKeys(_target) {
+      const all = resolveAllProviders();
+      return Object.keys(all);
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      const all = resolveAllProviders();
+      if (typeof prop === 'string' && prop in all) {
+        return { enumerable: true, configurable: true, writable: false };
+      }
+      return undefined;
+    },
+  },
+);

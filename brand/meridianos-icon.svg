@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Outer ring -->
+  <circle cx="32" cy="32" r="29" stroke="#3b82f6" stroke-width="2.5" opacity="0.85"/>
+  
+  <!-- Meridian line (vertical, slightly extends beyond ring) -->
+  <line x1="32" y1="1" x2="32" y2="63" stroke="#3b82f6" stroke-width="2" opacity="0.7"/>
+  
+  <!-- Top node -->
+  <circle cx="32" cy="8" r="3" fill="#00f0ff"/>
+  
+  <!-- Center node (hub) -->
+  <circle cx="32" cy="32" r="5.5" fill="#3b82f6"/>
+  <circle cx="32" cy="32" r="3" fill="#00f0ff" opacity="0.6"/>
+  
+  <!-- Bottom node -->
+  <circle cx="32" cy="56" r="3" fill="#00f0ff"/>
+  
+  <!-- Subtle orbital arc (Latitude hint) -->
+  <path d="M 14 32 A 18 8 0 0 1 50 32" stroke="#3b82f6" stroke-width="1" opacity="0.35" fill="none"/>
+</svg>
