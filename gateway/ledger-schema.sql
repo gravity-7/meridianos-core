@@ -58,3 +58,31 @@ CREATE TABLE IF NOT EXISTS request_logs (
 
 CREATE INDEX IF NOT EXISTS idx_request_logs_ts ON request_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON request_logs(provider);
+
+-- model_registry — auto-discovered AI models from configured providers (003 — Provider & Model Agnosticism).
+-- Composite PK `provider:model_id` scopes model identity to provider. Models are upserted
+-- on each discovery run; unseen models are marked deprecated. Tiers auto-assigned by heuristic.
+CREATE TABLE IF NOT EXISTS model_registry (
+    id              TEXT PRIMARY KEY,          -- "provider:model_id"
+    provider        TEXT NOT NULL,             -- Provider name
+    model_id        TEXT NOT NULL,             -- Provider-specific model ID
+    display_name    TEXT,                      -- Human-readable name
+    context_window  INTEGER,                   -- Max context tokens, NULL if unknown
+    max_output_tokens INTEGER,                -- Max output tokens, NULL if unknown
+    features        TEXT DEFAULT '{}',         -- JSON: capability flags
+    pricing_input_per_m         REAL,          -- USD per million input tokens
+    pricing_cached_input_per_m  REAL,          -- USD per million cached input tokens
+    pricing_output_per_m        REAL,          -- USD per million output tokens
+    pricing_source              TEXT,          -- provider-native, openrouter, models-dev, cache
+    pricing_refreshed           TEXT,          -- ISO-8601 timestamp
+    deprecated      INTEGER DEFAULT 0,         -- 0 = active, 1 = deprecated
+    deprecated_successor TEXT,                 -- Recommended replacement model_id
+    tier_assigned   TEXT,                      -- quick, medium, best, or custom
+    last_seen       TEXT NOT NULL,             -- ISO-8601 timestamp
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_registry_provider ON model_registry(provider);
+CREATE INDEX IF NOT EXISTS idx_model_registry_tier ON model_registry(tier_assigned);
+CREATE INDEX IF NOT EXISTS idx_model_registry_deprecated ON model_registry(deprecated);

@@ -261,21 +261,29 @@ async function refreshModelPricing(model, providerConfig, db) {
 
 async function tryProviderPricing(providerConfig, modelId) {
   if (providerConfig.wire === 'anthropic') {
-    const RATES = {
-      'claude-sonnet-4-20250514': { input: 3.00, cachedInput: 0.30, output: 15.00 },
-      'claude-sonnet-5': { input: 3.00, cachedInput: 0.30, output: 15.00 },
-      'claude-sonnet-4': { input: 3.00, cachedInput: 0.30, output: 15.00 },
-      'claude-opus-4-20250514': { input: 15.00, cachedInput: 1.50, output: 75.00 },
-      'claude-opus-4-8': { input: 15.00, cachedInput: 1.50, output: 75.00 },
-      'claude-opus-4': { input: 15.00, cachedInput: 1.50, output: 75.00 },
-      'claude-haiku-4-5-20251001': { input: 1.00, cachedInput: 0.10, output: 5.00 },
-      'claude-fable-5': { input: 15.00, cachedInput: 1.50, output: 75.00 },
-    };
-    for (const [prefix, rates] of Object.entries(RATES)) {
-      if (modelId.startsWith(prefix)) {
-        return { inputPerM: rates.input, cachedInputPerM: rates.cachedInput, outputPerM: rates.output };
+    // Read from data file per Constitution V (Configuration over Code).
+    // New Anthropic models only require updating pricing-anthropic.json — no code change.
+    const { readFileSync } = await import('node:fs');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const HERE = dirname(fileURLToPath(import.meta.url));
+    try {
+      const raw = readFileSync(join(HERE, 'pricing-anthropic.json'), 'utf8');
+      const data = JSON.parse(raw);
+      const models = data?.models ?? {};
+      // Exact match first, then prefix match
+      if (models[modelId]) {
+        const r = models[modelId];
+        return { inputPerM: r.inputPerM, cachedInputPerM: r.cachedInputPerM, outputPerM: r.outputPerM };
       }
-    }
+      if (data._prefixMatch) {
+        for (const [prefix, rates] of Object.entries(models)) {
+          if (modelId.startsWith(prefix)) {
+            return { inputPerM: rates.inputPerM, cachedInputPerM: rates.cachedInputPerM, outputPerM: rates.outputPerM };
+          }
+        }
+      }
+    } catch { /* file missing — fall through to next tier */ }
   }
   return null;
 }

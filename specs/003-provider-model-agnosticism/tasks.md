@@ -306,3 +306,13 @@ After US1 completes, these phases can run in parallel:
 | **M3: Discovered** | US1 + US2 + US4 | Models auto-discovered, daily refresh |
 | **M4: Intelligent** | US1-US6 | Weighted routing, fallback chains, auto-pricing |
 | **M5: Complete** | US1-US8 | Full dashboard management, zero-config auto-detection |
+
+---
+
+## Phase 12: Convergence (2026-07-29)
+
+**Purpose**: Gaps identified by `/speckit-converge` — not captured in existing tasks. Ordered by severity.
+
+- [X] T073 [CRITICAL] Move Anthropic pricing `RATES` table from `pricing-refresh.mjs` source code to a data file (e.g., `providers.defaults.yaml` or `pricing-anthropic.json`) per Constitution V (Configuration over Code). A new Anthropic model MUST NOT require a code change to get provider-native pricing. (contradicts Constitution V)
+- [X] T074 Wire `schema/provider.schema.json` into `policy-validate.mjs` validation — import the schema and validate `providers:` entries structurally against it at boot time, replacing the hand-rolled duplicate `VALID_WIRES` set. Currently the schema file exists but is dead code (never imported). (partial FR-003)
+- [X] T075 Add `model_registry` table DDL to `gateway/ledger-schema.sql` — the canonical schema file does not reflect the new table. `model-registry.mjs` creates it at runtime via `ensureModelRegistry()`, but the ledger-schema.sql is the authoritative reference and should be kept in sync. (partial US4/AC3)

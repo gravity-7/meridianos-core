@@ -1,0 +1,15 @@
+{
+  "_description": "Anthropic model pricing (USD per million tokens). Source: https://www.anthropic.com/pricing — update this file when Anthropic releases new models or changes prices. No code change required.",
+  "_updated": "2026-07-29",
+  "models": {
+    "claude-sonnet-4-20250514": { "inputPerM": 3.00, "cachedInputPerM": 0.30, "outputPerM": 15.00 },
+    "claude-sonnet-5":            { "inputPerM": 3.00, "cachedInputPerM": 0.30, "outputPerM": 15.00 },
+    "claude-sonnet-4":            { "inputPerM": 3.00, "cachedInputPerM": 0.30, "outputPerM": 15.00 },
+    "claude-opus-4-20250514":     { "inputPerM": 15.00, "cachedInputPerM": 1.50, "outputPerM": 75.00 },
+    "claude-opus-4-8":            { "inputPerM": 15.00, "cachedInputPerM": 1.50, "outputPerM": 75.00 },
+    "claude-opus-4":              { "inputPerM": 15.00, "cachedInputPerM": 1.50, "outputPerM": 75.00 },
+    "claude-haiku-4-5-20251001":  { "inputPerM": 1.00, "cachedInputPerM": 0.10, "outputPerM": 5.00 },
+    "claude-fable-5":             { "inputPerM": 15.00, "cachedInputPerM": 1.50, "outputPerM": 75.00 }
+  },
+  "_prefixMatch": true
+}
