@@ -295,6 +295,107 @@ export function createDashboardServer(config) {
         const breakdown = providerBreakdownFromLedger(config);
         return send(res, 200, JSON.stringify({ ok: true, available: breakdown !== null, providers: breakdown || {} }));
       }
+      // ── Provider test endpoint (US2) ──────────────────────────────────
+      if (req.method === 'POST' && url.pathname === '/api/providers/test') {
+        const { provider: providerName } = JSON.parse((await readBody(req)) || '{}');
+        if (!providerName) return send(res, 400, JSON.stringify({ ok: false, error: 'provider name required' }));
+        try {
+          const { resolveProvider } = await import('../providers.mjs');
+          const { testProviderConnection } = await import('../provider-conformance.mjs');
+          const policy = loadPolicy(undefined, config);
+          const providerConfig = resolveProvider(providerName, policy);
+          if (!providerConfig) return send(res, 404, JSON.stringify({ ok: false, error: `unknown provider: ${providerName}` }));
+          const resolvedKey = providerConfig.keyEnv ? process.env[providerConfig.keyEnv] ?? null : null;
+          const result = await testProviderConnection(providerConfig, resolvedKey);
+          return send(res, 200, JSON.stringify({ ok: true, ...result }));
+        } catch (err) {
+          return send(res, 500, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+
+      // ── Provider add endpoint (US3) ────────────────────────────────────
+      if (req.method === 'POST' && url.pathname === '/api/providers') {
+        const { name, keyEnv, apiKey, source } = JSON.parse((await readBody(req)) || '{}');
+        if (!name) return send(res, 400, JSON.stringify({ ok: false, error: 'name required' }));
+        try {
+          const { runProviderWizardDashboard } = await import('../provider-wizard.mjs');
+          const result = await runProviderWizardDashboard(name, keyEnv, apiKey, config.repoRoot);
+          if (result.conflict) return send(res, 409, JSON.stringify({ ok: false, error: result.error }));
+          if (!result.ok) return send(res, 400, JSON.stringify({ ok: false, error: result.error }));
+          statusCache.t = 0;
+          return send(res, 201, JSON.stringify({ ok: true, provider: result.provider }));
+        } catch (err) {
+          return send(res, 500, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+
+      // ── Pricing endpoints (US6) ────────────────────────────────────────
+      if (req.method === 'POST' && url.pathname === '/api/pricing/refresh') {
+        try {
+          const { openDb } = await import('../db.mjs');
+          const { refreshAllModelPricing } = await import('../pricing-refresh.mjs');
+          const db = openDb(undefined, config);
+          const policy = loadPolicy(undefined, config);
+          const result = await refreshAllModelPricing(db, policy, config);
+          db.close();
+          return send(res, 200, JSON.stringify({ ok: true, ...result }));
+        } catch (err) {
+          return send(res, 500, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/pricing') {
+        try {
+          const { openDb } = await import('../db.mjs');
+          const { getModels } = await import('../model-registry.mjs');
+          const db = openDb(undefined, config);
+          const provider = url.searchParams.get('provider');
+          const models = getModels(db, { provider, deprecated: false });
+          db.close();
+          return send(res, 200, JSON.stringify({ ok: true, models, count: models.length }));
+        } catch (err) {
+          return send(res, 500, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+
+      // ── Models endpoints (US8) ─────────────────────────────────────────
+      if (req.method === 'GET' && url.pathname === '/api/models') {
+        try {
+          const { openDb } = await import('../db.mjs');
+          const { getModels } = await import('../model-registry.mjs');
+          const db = openDb(undefined, config);
+          const provider = url.searchParams.get('provider');
+          const tier = url.searchParams.get('tier');
+          const deprecated = url.searchParams.get('deprecated') === 'true' ? true : (url.searchParams.get('deprecated') === 'false' ? false : null);
+          const search = url.searchParams.get('search');
+          const models = getModels(db, { provider, tier, deprecated, search });
+          db.close();
+          return send(res, 200, JSON.stringify({ ok: true, models, count: models.length }));
+        } catch (err) {
+          return send(res, 500, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/models/refresh') {
+        try {
+          const { openDb } = await import('../db.mjs');
+          const { discoverAllModels } = await import('../model-discovery.mjs');
+          const db = openDb(undefined, config);
+          const policy = loadPolicy(undefined, config);
+          // Fire and forget for 202
+          discoverAllModels(db, policy, config).then(() => db.close()).catch(() => db.close());
+          return send(res, 202, JSON.stringify({ ok: true, message: 'Model refresh started', estimatedDurationSec: 60 }));
+        } catch (err) {
+          return send(res, 500, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/models/refresh/status') {
+        // Best-effort: check if refresh is in progress via a simple flag
+        const refreshing = globalThis.__modelsRefreshing ?? false;
+        return send(res, 200, JSON.stringify({ ok: true, running: refreshing }));
+      }
+
       // ── Run detail (links a run to its ledger costs) ────────────────────
       if (req.method === 'GET' && url.pathname === '/api/run') {
         const runId = url.searchParams.get('id');

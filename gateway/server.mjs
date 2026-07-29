@@ -474,6 +474,7 @@ export function startGateway({
   logging = false,
   ledger = null,
   keyRotators = new Map(),
+  circuitBreaker = null,
 } = {}) {
   // Resolve adapters: use provided map, or discover from default directory
   let adaptersPromise;
@@ -545,7 +546,7 @@ export function startGateway({
     }
 
     const adaps = await getAdapters();
-    handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn, adapters: adaps, logging, ledger, keyRotators }).catch((err) => {
+    handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn, adapters: adaps, logging, ledger, keyRotators, circuitBreaker }).catch((err) => {
       if (!res.headersSent) {
         sendJson(res, 502, { error: 'gateway: unexpected failure', detail: String(err?.message ?? err) });
       }
@@ -564,7 +565,7 @@ export function startGateway({
   });
 }
 
-async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn, adapters, logging, ledger, keyRotators }) {
+async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKey, now, checkVerdict, costFn, adapters, logging, ledger, keyRotators, circuitBreaker }) {
   const start = now();
   const requestId = randomUUID();
 
@@ -685,6 +686,10 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   } catch (err) {
     // Mark key as failed on connection error (not auth-specific, but indicates key issues)
     if (rotator && selectedKeyIndex !== null) rotator.markKeyFailed(selectedKeyIndex);
+    // Circuit breaker: record upstream connection failure
+    if (circuitBreaker && ctx.model) {
+      circuitBreaker.recordFailure(ctx.model, { message: err?.message ?? String(err), status: null });
+    }
     emitEvent({
       onTokenEvent,
       ctx,
@@ -798,6 +803,15 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     verdict,
     costFn,
   });
+
+  // Circuit breaker: record success or failure based on upstream status
+  if (circuitBreaker && ctx.model) {
+    if (upstreamRes.statusCode >= 200 && upstreamRes.statusCode < 400) {
+      circuitBreaker.recordSuccess(ctx.model);
+    } else {
+      circuitBreaker.recordFailure(ctx.model, { status: upstreamRes.statusCode, message: `upstream returned ${upstreamRes.statusCode}` });
+    }
+  }
 
   // ── Reverse Translation: translate upstream response back to client wire ────
   let clientResponseBody = responseBody;

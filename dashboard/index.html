@@ -520,6 +520,18 @@ button:active { transform: translateY(0); box-shadow: none; }
     <div id="capMatrixBody" style="font-size:12px;color:var(--text-muted);padding:.4rem 0">loading…</div>
   </div>
 
+  <div class="card live" id="providersCard">
+    <div class="h">providers <span style="color:var(--text-muted);font-weight:400">· managed via policy.yaml</span></div>
+    <div id="providersList" style="font-size:12px;color:var(--text-muted);padding:.4rem 0">loading…</div>
+  </div>
+
+  <div class="card live" id="modelsCard">
+    <div class="h">models <span style="color:var(--text-muted);font-weight:400">· auto-discovered</span>
+      <button onclick="refreshModels()" style="font-size:11px;padding:4px 8px;margin-left:auto">⟳ Refresh Models</button>
+    </div>
+    <div id="modelsList" style="font-size:12px;color:var(--text-muted);padding:.4rem 0">loading…</div>
+  </div>
+
   <div class="card live" id="taskCategoriesCard">
     <div class="h">task categories <span style="color:var(--text-muted);font-weight:400">· live counts by task_type (constitution §11)</span></div>
     <div id="taskCategoriesBody" style="font-size:12px;color:var(--text-muted);padding:.4rem 0">loading…</div>
@@ -1268,6 +1280,9 @@ async function poll(){
     if(!kill)$('dot').style.background='#0ca30c'; 
   }
   catch(e){ $('dot').style.background='#e34948'; $('clock').textContent='offline'; }
+  // Fetch providers and models every poll (lighter-weight, separate from /api/status)
+  fetchProviders().catch(() => {});
+  fetchModels().catch(() => {});
 }
 async function save(){
   try{ const r=await fetch('/api/policy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(collectLevers())});
@@ -1290,6 +1305,132 @@ function renderSystemLog(events) {
     const d = e.detail ? ('<div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:2px;word-break:break-all">' + esc(String(e.detail).slice(0, 200)) + '</div>') : '';
     return `<div class="row" style="align-items:flex-start"><span class="mono" style="font-size:11px;color:var(--text-muted);min-width:60px">${t}</span><span class="badge ${lvlBadge(e.level)}" style="min-width:38px;text-align:center">${esc(e.level)}</span><div style="flex:1;min-width:0"><div style="font-size:12px"><span style="color:var(--text-secondary)">${esc(e.source)}</span> <span class="mono">${esc(e.event)}</span></div>${d}</div></div>`;
   }).join('');
+}
+
+// ─── Providers tab (US8 T065) ───────────────────────────────────────────────
+
+async function fetchProviders() {
+  try {
+    const r = await fetch('/api/providers');
+    const j = await r.json();
+    if (j.ok) renderProviders(j.providers);
+    else $('providersList').innerHTML = '<div style="font-size:12px;color:var(--text-danger)">Failed to load providers</div>';
+  } catch (e) {
+    $('providersList').innerHTML = '<div style="font-size:12px;color:var(--text-danger)">Failed to load providers: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderProviders(providers) {
+  const el = $('providersList');
+  if (!providers || !providers.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no providers configured — run <code>node gateway/cli.mjs provider add --auto</code> to auto-detect</div>';
+    return;
+  }
+  const healthDot = (status) => {
+    const color = status === 'ok' ? 'var(--text-success)' : (status === 'degraded' ? 'var(--text-warning)' : (status === 'down' ? 'var(--text-danger)' : 'var(--text-muted)'));
+    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:4px" title="${esc(status)}"></span>`;
+  };
+  let htm = '<div style="display:grid;grid-template-columns:auto">';
+  for (const p of providers) {
+    const h = p.health || {};
+    const status = h.status || 'unknown';
+    const latency = h.latencyMs != null ? h.latencyMs + 'ms' : '—';
+    htm += `<div class="row" style="align-items:center">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${healthDot(status)}
+          <span style="font-size:13px;font-weight:500">${esc(p.displayName || p.name)}</span>
+          <span class="model" style="font-size:10px">${esc(p.wire)}</span>
+          <span class="badge ${status === 'ok' ? 'b-ok' : (status === 'degraded' ? 'b-warn' : (status === 'down' ? 'b-danger' : 'b-muted'))}">${esc(status)}</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(p.baseUrl || 'local')} · latency: ${latency}</div>
+      </div>
+      <button onclick="testProvider('${esc(p.name)}')" style="font-size:11px;padding:4px 8px;margin-left:8px">Test Connection</button>
+    </div>`;
+  }
+  htm += '</div>';
+  el.innerHTML = htm;
+}
+
+async function testProvider(name) {
+  try {
+    const r = await fetch('/api/providers/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: name }) });
+    const j = await r.json();
+    const status = j.ok ? '✓ OK' : '✗ FAILED';
+    const detail = j.errorCode ? ` [${j.errorCode}] ${j.errorMessage || ''}` : '';
+    alert(`${name}: ${status} (${j.latencyMs}ms)${detail}`);
+  } catch (e) {
+    alert(`${name}: Test failed — ${e.message}`);
+  }
+}
+
+// ─── Models tab (US8 T066) ──────────────────────────────────────────────────
+
+async function fetchModels() {
+  try {
+    const r = await fetch('/api/models');
+    const j = await r.json();
+    if (j.ok) renderModels(j.models);
+    else $('modelsList').innerHTML = '<div style="font-size:12px;color:var(--text-danger)">Failed to load models</div>';
+  } catch (e) {
+    $('modelsList').innerHTML = '<div style="font-size:12px;color:var(--text-danger)">Failed to load models: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderModels(models) {
+  const el = $('modelsList');
+  if (!models || !models.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no models discovered — click "Refresh Models" to discover from configured providers</div>';
+    return;
+  }
+  // Group by provider
+  const grouped = {};
+  for (const m of models) {
+    const prov = m.provider || 'unknown';
+    if (!grouped[prov]) grouped[prov] = [];
+    grouped[prov].push(m);
+  }
+  let htm = '';
+  for (const [provider, providerModels] of Object.entries(grouped)) {
+    htm += `<div style="font-weight:600;font-size:13px;margin:12px 0 6px;color:var(--text-primary)">${esc(provider)} <span style="font-weight:400;color:var(--text-muted);font-size:11px">(${providerModels.length} models)</span></div>`;
+    for (const m of providerModels) {
+      const tier = m.tier_assigned ? `<span class="badge ${m.tier_assigned === 'best' ? 'b-ok' : (m.tier_assigned === 'medium' ? 'b-accent' : 'b-muted')}">${esc(m.tier_assigned)}</span>` : '';
+      const ctx = m.context_window != null ? `${(m.context_window / 1000).toFixed(0)}k` : '—';
+      const inp = m.pricing_input_per_m != null ? `$${Number(m.pricing_input_per_m).toFixed(1)}` : '—';
+      const out = m.pricing_output_per_m != null ? `$${Number(m.pricing_output_per_m).toFixed(1)}` : '—';
+      const dep = m.deprecated ? '<span class="badge b-warn" style="font-size:10px">deprecated</span>' : '';
+      htm += `<div class="row" style="align-items:center">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span class="mono" style="font-size:12px">${esc(m.model_id)}</span>
+            ${dep}
+            ${tier}
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">
+            ctx: ${ctx} · in: ${inp}/M · out: ${out}/M
+            ${m.pricing_source ? ` · src: ${esc(m.pricing_source)}` : ''}
+          </div>
+        </div>
+      </div>`;
+    }
+  }
+  el.innerHTML = htm;
+}
+
+async function refreshModels() {
+  try {
+    const r = await fetch('/api/models/refresh', { method: 'POST' });
+    const j = await r.json();
+    if (j.ok) {
+      $('modelsList').innerHTML = '<div style="font-size:12px;color:var(--text-accent);padding:.4rem 0">Model refresh started… this may take up to 60 seconds. Models will appear here when done.</div>';
+      // Poll for models after a delay
+      setTimeout(fetchModels, 15000);
+      setTimeout(fetchModels, 30000);
+      setTimeout(fetchModels, 60000);
+    }
+  } catch (e) {
+    alert('Model refresh failed: ' + e.message);
+  }
 }
 
 function renderCapabilityMatrix(matrix, workStealing) {

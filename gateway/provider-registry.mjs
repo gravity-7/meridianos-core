@@ -13,7 +13,7 @@
  */
 import { validateProviders } from '../providers.mjs';
 
-const VALID_WIRES = ['anthropic', 'openai', 'generic-http'];
+const VALID_WIRES = ['anthropic', 'openai', 'google-ai', 'generic-http'];
 const KEY_ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 function isKeyEnvName(v) {
