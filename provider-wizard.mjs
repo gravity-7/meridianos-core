@@ -118,14 +118,30 @@ function writePolicyWithBackup(repoRoot, policy, expectedMtimeMs) {
 }
 
 /**
- * Convert a policy object to YAML string (simple serialization).
+ * Convert a value to a YAML-safe string representation.
+ * Handles nested objects via JSON serialization for depth > 2.
+ */
+function yamlValue(val, indent) {
+  if (val === null || val === undefined) return 'null';
+  if (typeof val === 'boolean') return val ? 'true' : 'false';
+  if (typeof val === 'number') return String(val);
+  if (typeof val === 'string') return `"${val}"`;
+  if (typeof val === 'object') {
+    // Beyond 2 levels deep, use inline JSON to avoid serialization bugs
+    return JSON.stringify(val);
+  }
+  return String(val);
+}
+
+/**
+ * Convert a policy object to YAML string (simple serialization, supports 3+ levels via JSON).
  */
 function policyToYaml(policy) {
   const lines = [];
   for (const [sectionKey, sectionVal] of Object.entries(policy)) {
     if (sectionVal == null) continue;
     if (typeof sectionVal !== 'object' || Array.isArray(sectionVal)) {
-      lines.push(`${sectionKey}: ${JSON.stringify(sectionVal)}`);
+      lines.push(`${sectionKey}: ${yamlValue(sectionVal)}`);
       continue;
     }
     lines.push(`${sectionKey}:`);
@@ -134,16 +150,10 @@ function policyToYaml(policy) {
       if (typeof val === 'object' && !Array.isArray(val)) {
         lines.push(`  ${key}:`);
         for (const [subKey, subVal] of Object.entries(val)) {
-          if (typeof subVal === 'string') {
-            lines.push(`    ${subKey}: "${subVal}"`);
-          } else {
-            lines.push(`    ${subKey}: ${subVal}`);
-          }
+          lines.push(`    ${subKey}: ${yamlValue(subVal)}`);
         }
-      } else if (typeof val === 'string') {
-        lines.push(`  ${key}: "${val}"`);
       } else {
-        lines.push(`  ${key}: ${val}`);
+        lines.push(`  ${key}: ${yamlValue(val)}`);
       }
     }
   }
@@ -233,6 +243,13 @@ export async function runProviderWizardDashboard(name, keyEnv, apiKey, repoRoot)
     return { ok: false, error: `Unknown provider '${name}'. Must be one of the known providers.` };
   }
 
+  // Store the API key in process.env so providerKeyPresent() sees it at runtime.
+  // The key is NOT written to policy.yaml (security: policy is committed, keys are not).
+  const effectiveKeyEnv = keyEnv ?? known.keyEnv;
+  if (effectiveKeyEnv && apiKey) {
+    process.env[effectiveKeyEnv] = apiKey;
+  }
+
   const { policy, mtimeMs } = readPolicyState(repoRoot ?? process.cwd());
   const providers = policy.providers ?? {};
 
@@ -241,7 +258,7 @@ export async function runProviderWizardDashboard(name, keyEnv, apiKey, repoRoot)
     displayName: known.displayName,
     wire: known.wire,
     baseUrl: known.baseUrl,
-    keyEnv: keyEnv ?? known.keyEnv,
+    keyEnv: effectiveKeyEnv,
   };
   if (known.features) entry.features = { ...known.features };
 

@@ -24,6 +24,18 @@ export async function testProviderConnection(providerConfig, resolvedKey) {
   const { name, wire, baseUrl } = providerConfig;
   const start = Date.now();
 
+  // Guard: null baseUrl means no remote endpoint to test (e.g., native CLI auth)
+  if (baseUrl === null) {
+    return {
+      ok: true,
+      latencyMs: 0,
+      modelsFound: null,
+      features: null,
+      errorCode: undefined,
+      errorMessage: undefined,
+    };
+  }
+
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);

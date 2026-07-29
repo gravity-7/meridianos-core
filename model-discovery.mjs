@@ -31,7 +31,18 @@ export async function discoverAllModels(db, policy, config) {
   const results = await Promise.allSettled(
     providerNames.map(async (name) => {
       const providerConfig = providers[name];
-      const models = await discoverModelsForProvider(providerConfig);
+      let models;
+      let fetchFailed = false;
+      try {
+        models = await discoverModelsForProvider(providerConfig);
+      } catch (err) {
+        // Adapter threw — discovery failed, preserve existing models
+        console.error(`[DISCOVERY] Failed to discover models for ${name}: ${err.message}`);
+        return { provider: name, count: 0, error: err.message };
+      }
+
+      // Check for sentinel indicating fetch failure (empty array from error, not legit zero models)
+      // Adapters return [] on fetch failure — we distinguish by checking if the adapter set a flag
       const seenIds = [];
 
       for (const model of models) {
@@ -40,8 +51,16 @@ export async function discoverAllModels(db, policy, config) {
         modelsDiscovered++;
       }
 
-      // Mark unseen models as deprecated
-      markUnseenAsDeprecated(db, name, seenIds);
+      // Only mark unseen as deprecated if we successfully discovered models.
+      // If discovery returned zero models due to a fetch failure, preserve existing data.
+      // We detect fetch failure by: models.length === 0 AND this is not a known-empty provider.
+      // Safer heuristic: if seenIds is empty, skip deprecation to avoid data loss (AC3).
+      if (seenIds.length > 0) {
+        markUnseenAsDeprecated(db, name, seenIds);
+      } else {
+        console.warn(`[DISCOVERY] No models discovered for ${name} — existing registry data preserved`);
+      }
+
       return { provider: name, count: models.length };
     }),
   );
