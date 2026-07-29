@@ -232,6 +232,272 @@ function printBanner({ url, tenant, ledgerPath, token, registeredRun, detectedPr
   }
 }
 
+// ─── Subcommand: provider ───────────────────────────────────────────────────
+
+function parseSubcommandArgs(args, subcommand) {
+  // Find subcommand position and extract args after it
+  const idx = args.indexOf(subcommand);
+  if (idx === -1) return [];
+  return args.slice(idx + 1).filter(a => !a.startsWith('--'));
+}
+
+async function handleProviderCommand(args, flags) {
+  const subArgs = parseSubcommandArgs(args, 'provider');
+  const action = subArgs[0];
+
+  if (action === 'test') {
+    return handleProviderTest(subArgs, flags);
+  }
+  if (action === 'add') {
+    return handleProviderAdd(flags);
+  }
+  if (action === 'list') {
+    return handleProviderList(flags);
+  }
+
+  process.stderr.write('Usage: node gateway/cli.mjs provider <test|add|list> [options]\n');
+  process.stderr.write('  provider test <name>    Test provider connection\n');
+  process.stderr.write('  provider add [--auto]   Add a new provider\n');
+  process.stderr.write('  provider list           List all providers\n');
+  process.exit(1);
+}
+
+async function handleProviderTest(subArgs, flags) {
+  const providerName = subArgs[1] ?? flags.name;
+  if (!providerName) {
+    process.stderr.write('Usage: node gateway/cli.mjs provider test <name>\n');
+    process.exit(1);
+  }
+
+  try {
+    const { resolveProvider } = await import('../providers.mjs');
+    const { testProviderConnection } = await import('../provider-conformance.mjs');
+    const policy = loadPolicy();
+
+    const providerConfig = resolveProvider(providerName, policy);
+    if (!providerConfig) {
+      process.stderr.write(`Unknown provider: ${providerName}\n`);
+      process.exit(1);
+    }
+
+    const resolvedKey = providerConfig.keyEnv ? process.env[providerConfig.keyEnv] ?? null : null;
+    const result = await testProviderConnection(providerConfig, resolvedKey);
+
+    const status = result.ok ? '✓' : '✗';
+    process.stdout.write(`${status} ${providerName}: ${result.ok ? 'OK' : 'FAILED'}\n`);
+    process.stdout.write(`  Latency: ${result.latencyMs}ms\n`);
+    if (result.modelsFound !== null && result.modelsFound !== undefined) {
+      process.stdout.write(`  Models found: ${result.modelsFound}\n`);
+    }
+    if (result.errorCode) {
+      process.stdout.write(`  Error: [${result.errorCode}] ${result.errorMessage}\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleProviderAdd(flags) {
+  try {
+    const { runProviderWizard } = await import('../provider-wizard.mjs');
+    const policy = loadPolicy();
+
+    if (flags.auto) {
+      const result = await runProviderWizard({ interactive: false, auto: true, policy });
+      const detected = result.detected ?? [];
+      process.stdout.write(`Auto-detected ${detected.length} provider(s)\n`);
+      for (const p of detected) {
+        process.stdout.write(`  + ${p.name} (${p.keyEnv})\n`);
+      }
+    } else if (flags.name && flags.wire && flags.baseUrl) {
+      const result = await runProviderWizard({
+        interactive: false,
+        auto: false,
+        name: flags.name,
+        wire: flags.wire,
+        baseUrl: flags.baseUrl,
+        keyEnv: flags.keyEnv ?? null,
+        policy,
+      });
+      if (result.ok) {
+        process.stdout.write(`Provider added: ${result.provider?.name ?? flags.name}\n`);
+      } else {
+        process.stderr.write(`Failed to add provider: ${result.error}\n`);
+        process.exit(1);
+      }
+    } else {
+      const result = await runProviderWizard({ interactive: true, policy });
+      if (result.ok) {
+        process.stdout.write(`Provider added: ${result.provider?.name}\n`);
+      } else {
+        process.stderr.write(`Failed to add provider: ${result.error}\n`);
+        process.exit(1);
+      }
+    }
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleProviderList(flags) {
+  try {
+    const { resolveAllProviders } = await import('../providers.mjs');
+    const { getProviderHealth } = await import('../provider-health.mjs');
+    const policy = loadPolicy();
+    const providers = resolveAllProviders(policy);
+    const healthMap = getProviderHealth();
+
+    process.stdout.write('Providers:\n');
+    for (const [name, cfg] of Object.entries(providers)) {
+      const health = healthMap[name];
+      const hStatus = health?.status ?? 'unknown';
+      const hLatency = health?.latencyMs != null ? `${health.latencyMs}ms` : '-';
+      process.stdout.write(`  ${name.padEnd(16)} ${(cfg.displayName ?? cfg.name ?? '').padEnd(20)} ${cfg.wire.padEnd(14)} ${hStatus.padEnd(10)} ${hLatency}\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+// ─── Subcommand: models ─────────────────────────────────────────────────────
+
+async function handleModelsCommand(args, flags) {
+  const subArgs = parseSubcommandArgs(args, 'models');
+  const action = subArgs[0];
+
+  if (action === 'refresh') {
+    return handleModelsRefresh(flags);
+  }
+  if (action === 'list') {
+    return handleModelsList(flags);
+  }
+
+  process.stderr.write('Usage: node gateway/cli.mjs models <refresh|list> [options]\n');
+  process.stderr.write('  models refresh              Refresh model registry from all providers\n');
+  process.stderr.write('  models list [--provider X] [--tier Y]  List discovered models\n');
+  process.exit(1);
+}
+
+async function handleModelsRefresh(flags) {
+  try {
+    const { openDb } = await import('../db.mjs');
+    const { discoverAllModels } = await import('../model-discovery.mjs');
+    const policy = loadPolicy();
+    const config = { repoRoot: process.cwd() };
+    const db = openDb(undefined, config);
+
+    process.stdout.write('Discovering models...\n');
+    const result = await discoverAllModels(db, policy, config);
+    process.stdout.write(`Done. ${result.modelsDiscovered} model(s) discovered from ${result.providersScanned} provider(s).\n`);
+    if (result.errors.length > 0) {
+      for (const err of result.errors) {
+        process.stdout.write(`  ⚠ ${err.provider}: ${err.error}\n`);
+      }
+    }
+    db.close();
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleModelsList(flags) {
+  try {
+    const { openDb } = await import('../db.mjs');
+    const { getModels } = await import('../model-registry.mjs');
+    const config = { repoRoot: process.cwd() };
+    const db = openDb(undefined, config);
+
+    const models = getModels(db, {
+      provider: flags.provider ?? null,
+      tier: flags.tier ?? null,
+      deprecated: false,
+    });
+
+    process.stdout.write('Models:\n');
+    for (const m of models) {
+      const tier = m.tier_assigned ?? '-';
+      const ctx = m.context_window != null ? `${(m.context_window / 1000).toFixed(0)}k` : '-';
+      process.stdout.write(`  ${m.provider.padEnd(16)} ${m.model_id.padEnd(32)} tier:${tier.padEnd(8)} ctx:${ctx.padEnd(6)}\n`);
+    }
+    db.close();
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+// ─── Subcommand: pricing ────────────────────────────────────────────────────
+
+async function handlePricingCommand(args, flags) {
+  const subArgs = parseSubcommandArgs(args, 'pricing');
+  const action = subArgs[0];
+
+  if (action === 'refresh') {
+    return handlePricingRefresh(flags);
+  }
+  if (action === 'show') {
+    return handlePricingShow(flags);
+  }
+
+  process.stderr.write('Usage: node gateway/cli.mjs pricing <refresh|show> [options]\n');
+  process.stderr.write('  pricing refresh                 Refresh pricing for all models\n');
+  process.stderr.write('  pricing show [--provider X]     Show pricing data\n');
+  process.exit(1);
+}
+
+async function handlePricingRefresh(flags) {
+  try {
+    const { openDb } = await import('../db.mjs');
+    const { refreshAllModelPricing } = await import('../pricing-refresh.mjs');
+    const policy = loadPolicy();
+    const config = { repoRoot: process.cwd() };
+    const db = openDb(undefined, config);
+
+    process.stdout.write('Refreshing pricing...\n');
+    const result = await refreshAllModelPricing(db, policy, config);
+    process.stdout.write(`Done. ${result.refreshed ?? 0} model(s) priced, ${result.errors?.length ?? 0} error(s).\n`);
+    if (result.errors?.length > 0) {
+      for (const err of result.errors) {
+        process.stdout.write(`  ⚠ ${err.model ?? err.provider}: ${err.error}\n`);
+      }
+    }
+    db.close();
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handlePricingShow(flags) {
+  try {
+    const { openDb } = await import('../db.mjs');
+    const { getModels } = await import('../model-registry.mjs');
+    const config = { repoRoot: process.cwd() };
+    const db = openDb(undefined, config);
+
+    const models = getModels(db, {
+      provider: flags.provider ?? null,
+      deprecated: false,
+    });
+
+    process.stdout.write('Pricing (USD per 1M tokens):\n');
+    for (const m of models) {
+      const inp = m.pricing_input_per_m != null ? `$${m.pricing_input_per_m.toFixed(2)}` : '-';
+      const out = m.pricing_output_per_m != null ? `$${m.pricing_output_per_m.toFixed(2)}` : '-';
+      const src = m.pricing_source ?? '-';
+      process.stdout.write(`  ${m.provider.padEnd(16)} ${m.model_id.padEnd(32)} in:${inp.padEnd(8)} out:${out.padEnd(8)} [${src}]\n`);
+    }
+    db.close();
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
 async function main() {
   const flags = parseArgs(process.argv.slice(2));
 

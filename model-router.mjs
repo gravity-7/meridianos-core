@@ -390,3 +390,152 @@ export function categoryIndex(domain) {
   }
   return out;
 }
+
+// ─── US5: Weighted candidate selection & fallback chains ────────────────────
+
+/**
+ * Select a model from a list of weighted candidates using cumulative distribution.
+ *
+ * Supports two tier config formats:
+ *   - New: `{ candidates: [{ model: "x", weight: 90 }, { model: "y", weight: 10 }] }`
+ *   - Legacy: `{ model: "x" }` → auto-wrapped as single-candidate with weight 100
+ *
+ * @param {object} tierConfig - The tier configuration from policy or provider
+ * @param {object} [opts]
+ * @param {number} [opts.seed] - Seeded PRNG value for deterministic testing
+ * @param {object} [opts.circuitBreaker] - CircuitBreaker instance for filtering
+ * @returns {{ model: string, weight: number } | null}
+ */
+export function selectModelFromCandidates(tierConfig, opts = {}) {
+  // Backward-compatible: old format `model: "x"` → auto-wrap
+  let candidates;
+  if (tierConfig.candidates && Array.isArray(tierConfig.candidates)) {
+    candidates = tierConfig.candidates;
+  } else if (typeof tierConfig.model === 'string' && tierConfig.model) {
+    // Legacy format: single model string
+    console.warn('[ROUTER] Deprecated tier format: `model: "x"` — auto-wrapped as single candidate. Migrate to `candidates: [{ model: "x", weight: 100 }]`.');
+    candidates = [{ model: tierConfig.model, weight: 100 }];
+  } else {
+    return null;
+  }
+
+  // Filter out circuit-broken models
+  const cb = opts.circuitBreaker;
+  const available = cb
+    ? candidates.filter((c) => cb.isAvailable(c.model))
+    : candidates;
+
+  if (available.length === 0) return null;
+
+  return pickWeighted(available, opts);
+}
+
+/**
+ * Shared helper: pick one candidate from a list using weighted random selection.
+ * Uses cumulative distribution with optional seeded PRNG for deterministic tests.
+ * Returns { model, weight } or null if weights sum to zero.
+ * @param {Array<{model: string, weight: number}>} candidates — pre-filtered (circuit-broken/attempted already removed)
+ * @param {object} [opts]
+ * @param {number} [opts.seed] — seeded PRNG value
+ * @returns {{ model: string, weight: number } | null}
+ */
+function pickWeighted(candidates, opts = {}) {
+  const totalWeight = candidates.reduce((sum, c) => sum + (c.weight ?? 0), 0);
+  if (totalWeight <= 0) return null;
+
+  const rand = opts.seed !== undefined ? seededRandom(opts.seed)() : Math.random();
+  let cumulative = 0;
+  for (const c of candidates) {
+    cumulative += (c.weight ?? 0) / totalWeight;
+    if (rand <= cumulative) {
+      return { model: c.model, weight: c.weight ?? 0 };
+    }
+  }
+
+  // Fallback to last candidate (floating-point safety)
+  return { model: candidates[candidates.length - 1].model, weight: candidates[candidates.length - 1].weight ?? 0 };
+}
+
+/**
+ * Simple seeded PRNG (mulberry32) for deterministic testing.
+ * @param {number} seed
+ * @returns {number} pseudo-random value in [0, 1)
+ */
+function seededRandom(seed) {
+  let s = seed | 0;
+  return function () {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Error thrown when all tiers are exhausted and no model can be selected.
+ */
+export class AllModelsExhaustedError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'AllModelsExhaustedError';
+  }
+}
+
+/**
+ * Resolve a model with fallback across candidates and tiers.
+ *
+ * Strategy:
+ *   1. Try tier 0 candidates in weighted order
+ *   2. On retryable error (5xx, timeout, rate-limit), try next candidate in same tier
+ *   3. On tier exhaustion, advance to next tier
+ *   4. On all tiers exhausted, throw AllModelsExhaustedError
+ *   5. Track attempted models to avoid re-selecting the same model
+ *
+ * @param {object} taskConfig - Task configuration with tiers array
+ * @param {Array<object>} taskConfig.tiers - Ordered tier configs (tier 0 first)
+ * @param {object} [opts]
+ * @param {object} [opts.circuitBreaker] - CircuitBreaker instance
+ * @param {number} [opts.seed] - Seeded PRNG for deterministic testing
+ * @param {Set<string>} [opts.attemptedModels] - Models already attempted (mutated in place)
+ * @returns {{ model: string, tierIndex: number }}
+ */
+export function resolveModelWithFallback(taskConfig, opts = {}) {
+  const tiers = taskConfig.tiers ?? [];
+  if (tiers.length === 0) {
+    throw new AllModelsExhaustedError('No tiers configured for task');
+  }
+
+  const attempted = opts.attemptedModels ?? new Set();
+
+  for (let tierIdx = 0; tierIdx < tiers.length; tierIdx++) {
+    const tierConfig = tiers[tierIdx];
+
+    // Build candidate list, excluding already-attempted models
+    let candidates = [];
+    if (tierConfig.candidates && Array.isArray(tierConfig.candidates)) {
+      candidates = tierConfig.candidates;
+    } else if (typeof tierConfig.model === 'string' && tierConfig.model) {
+      candidates = [{ model: tierConfig.model, weight: 100 }];
+    }
+
+    // Filter out already attempted and circuit-broken models
+    const cb = opts.circuitBreaker;
+    const available = candidates.filter((c) => {
+      if (attempted.has(c.model)) return false;
+      if (cb && !cb.isAvailable(c.model)) return false;
+      return true;
+    });
+
+    if (available.length === 0) continue; // No available models in this tier, try next
+
+    const selected = pickWeighted(available, { seed: opts.seed !== undefined ? opts.seed + tierIdx : undefined });
+    if (!selected) continue;
+
+    attempted.add(selected.model);
+    return { model: selected.model, tierIndex: tierIdx };
+  }
+
+  throw new AllModelsExhaustedError(
+    `All ${tiers.length} tier(s) exhausted. Attempted models: ${[...attempted].join(', ')}`,
+  );
+}

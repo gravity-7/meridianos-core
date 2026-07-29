@@ -514,7 +514,54 @@ export async function start({ domain } = {}) {
   setInterval(watchdogTick, WATCHDOG_INTERVAL_MS);
   watchdogTick(); // first tick immediately
 
-  // 3. Runner on cadence
+  // 3. Model discovery tick (daily, 003 US4)
+  const MODEL_DISCOVERY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+  try {
+    const { discoverAllModels: discoverModels } = await import('./model-discovery.mjs');
+    const runModelDiscovery = async () => {
+      try {
+        const policy = loadPolicy(undefined, config);
+        const gwDb = openDb(undefined, config);
+        globalThis.__modelsRefreshing = true;
+        const result = await discoverModels(gwDb, policy, config);
+        globalThis.__modelsRefreshing = false;
+        logger.log('discovery', `${result.modelsDiscovered} model(s) from ${result.providersScanned} provider(s)`);
+        gwDb.close();
+      } catch (e) {
+        globalThis.__modelsRefreshing = false;
+        logger.error('discovery', `model discovery failed: ${e.message}`, e);
+      }
+    };
+    setInterval(runModelDiscovery, MODEL_DISCOVERY_INTERVAL_MS);
+    // First discovery after 5min boot delay
+    setTimeout(runModelDiscovery, 5 * 60 * 1000);
+  } catch (e) {
+    logger.log('discovery', `model discovery not available: ${e.message}`);
+  }
+
+  // 4. Pricing refresh tick (daily, sequenced after model discovery, 003 US6)
+  const PRICING_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+  try {
+    const { refreshAllModelPricing: refreshPricing } = await import('./pricing-refresh.mjs');
+    const runPricingRefresh = async () => {
+      try {
+        const policy = loadPolicy(undefined, config);
+        const gwDb = openDb(undefined, config);
+        const result = await refreshPricing(gwDb, policy, config);
+        logger.log('pricing', `${result.refreshed ?? 0} model(s) priced`);
+        gwDb.close();
+      } catch (e) {
+        logger.error('pricing', `pricing refresh failed: ${e.message}`, e);
+      }
+    };
+    // Offset pricing refresh by 30 minutes from model discovery to let discovery finish first
+    setInterval(runPricingRefresh, PRICING_REFRESH_INTERVAL_MS);
+    setTimeout(runPricingRefresh, 35 * 60 * 1000);
+  } catch (e) {
+    logger.log('pricing', `pricing refresh not available: ${e.message}`);
+  }
+
+  // 5. Runner on cadence
   scheduleRunner({ force: true });
   startPolicyWatcher();
 
