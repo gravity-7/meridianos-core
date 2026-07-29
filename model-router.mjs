@@ -427,15 +427,25 @@ export function selectModelFromCandidates(tierConfig, opts = {}) {
 
   if (available.length === 0) return null;
 
-  // Calculate total weight
-  const totalWeight = available.reduce((sum, c) => sum + (c.weight ?? 0), 0);
+  return pickWeighted(available, opts);
+}
+
+/**
+ * Shared helper: pick one candidate from a list using weighted random selection.
+ * Uses cumulative distribution with optional seeded PRNG for deterministic tests.
+ * Returns { model, weight } or null if weights sum to zero.
+ * @param {Array<{model: string, weight: number}>} candidates — pre-filtered (circuit-broken/attempted already removed)
+ * @param {object} [opts]
+ * @param {number} [opts.seed] — seeded PRNG value
+ * @returns {{ model: string, weight: number } | null}
+ */
+function pickWeighted(candidates, opts = {}) {
+  const totalWeight = candidates.reduce((sum, c) => sum + (c.weight ?? 0), 0);
   if (totalWeight <= 0) return null;
 
-  // Weighted random selection using cumulative distribution
-  // Use seeded PRNG for deterministic testing when seed is provided
   const rand = opts.seed !== undefined ? seededRandom(opts.seed)() : Math.random();
   let cumulative = 0;
-  for (const c of available) {
+  for (const c of candidates) {
     cumulative += (c.weight ?? 0) / totalWeight;
     if (rand <= cumulative) {
       return { model: c.model, weight: c.weight ?? 0 };
@@ -443,7 +453,7 @@ export function selectModelFromCandidates(tierConfig, opts = {}) {
   }
 
   // Fallback to last candidate (floating-point safety)
-  return { model: available[available.length - 1].model, weight: available[available.length - 1].weight ?? 0 };
+  return { model: candidates[candidates.length - 1].model, weight: candidates[candidates.length - 1].weight ?? 0 };
 }
 
 /**
@@ -518,20 +528,8 @@ export function resolveModelWithFallback(taskConfig, opts = {}) {
 
     if (available.length === 0) continue; // No available models in this tier, try next
 
-    // Select using weighted random
-    const totalWeight = available.reduce((sum, c) => sum + (c.weight ?? 0), 0);
-    if (totalWeight <= 0) continue;
-
-    const rand = opts.seed !== undefined ? seededRandom(opts.seed + tierIdx)() : Math.random();
-    let cumulative = 0;
-    let selected = available[0];
-    for (const c of available) {
-      cumulative += (c.weight ?? 0) / totalWeight;
-      if (rand <= cumulative) {
-        selected = c;
-        break;
-      }
-    }
+    const selected = pickWeighted(available, { seed: opts.seed !== undefined ? opts.seed + tierIdx : undefined });
+    if (!selected) continue;
 
     attempted.add(selected.model);
     return { model: selected.model, tierIndex: tierIdx };

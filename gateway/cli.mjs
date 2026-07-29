@@ -330,8 +330,11 @@ async function handleProviderAdd(flags) {
       }
     } else {
       const result = await runProviderWizard({ interactive: true, policy });
-      if (result.name) {
-        process.stdout.write(`Provider added: ${result.name}\n`);
+      if (result.ok) {
+        process.stdout.write(`Provider added: ${result.provider?.name}\n`);
+      } else {
+        process.stderr.write(`Failed to add provider: ${result.error}\n`);
+        process.exit(1);
       }
     }
   } catch (err) {
