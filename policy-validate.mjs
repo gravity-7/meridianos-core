@@ -109,11 +109,27 @@ export function applyDottedUpdates(policy, updates) {
 const VALID_WIRES = new Set(['anthropic', 'openai', 'google-ai', 'generic-http']);
 
 /**
+ * Load the provider JSON Schema from schema/provider.schema.json for structural validation.
+ * Returns the parsed schema or null if file is missing/unparseable.
+ */
+function loadProviderSchema() {
+  try {
+    const schemaPath = join(HERE, 'schema', 'provider.schema.json');
+    const raw = readFileSync(schemaPath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Phase 0: Validate policy.yaml against JSON Schema at boot time.
  * Returns { ok, errors[] } with field-level error messages including file path and line hints.
+ * Uses schema/provider.schema.json for provider structural validation.
  */
 export function validatePolicySchema(policy = {}) {
   const errors = [];
+  const providerSchema = loadProviderSchema();
 
   // Validate model_routing references valid providers
   const definedProviders = new Set(Object.keys(policy?.providers ?? {}));
@@ -123,20 +139,49 @@ export function validatePolicySchema(policy = {}) {
       if (config?.provider && !definedProviders.has(config.provider)) {
         errors.push(`policy.yaml: model_routing.${agent}.${tier}.provider '${config.provider}' references unknown provider — defined providers: [${[...definedProviders].join(', ')}]`);
       }
-      // Also validate that model is set
       if (!config?.model) {
         errors.push(`policy.yaml: model_routing.${agent}.${tier}.model is required when a provider is specified`);
       }
     }
   }
 
-  // Validate provider wire values
+  // Validate provider entries against JSON Schema (003 — schema-driven validation)
   for (const [name, provider] of Object.entries(policy?.providers ?? {})) {
-    if (provider?.wire && !VALID_WIRES.has(provider.wire)) {
-      errors.push(`policy.yaml: providers.${name}.wire '${provider.wire}' is invalid — must be one of [${[...VALID_WIRES].join(', ')}]`);
-    }
-    if (!provider?.baseUrl) {
-      errors.push(`policy.yaml: providers.${name}.baseUrl is required`);
+    // Schema-driven validation
+    if (providerSchema && providerSchema.required) {
+      for (const req of providerSchema.required) {
+        if (!(req in (provider ?? {}))) {
+          errors.push(`policy.yaml: providers.${name}.${req} is required`);
+        }
+      }
+      // Validate name pattern
+      if (provider?.name && providerSchema.properties?.name?.pattern) {
+        const re = new RegExp(providerSchema.properties.name.pattern);
+        if (!re.test(provider.name)) {
+          errors.push(`policy.yaml: providers.${name}.name '${provider.name}' must match ${providerSchema.properties.name.pattern}`);
+        }
+      }
+      // Validate wire enum via dynamic WiresAdapter registry check
+      if (provider?.wire && !VALID_WIRES.has(provider.wire)) {
+        errors.push(`policy.yaml: providers.${name}.wire '${provider.wire}' is invalid — must be one of [${[...VALID_WIRES].join(', ')}]`);
+      }
+      // Validate baseUrl format (required, must be HTTPS)
+      if (provider?.baseUrl == null || provider?.baseUrl === '') {
+        errors.push(`policy.yaml: providers.${name}.baseUrl is required`);
+      } else if (providerSchema.properties?.baseUrl?.pattern) {
+        const re = new RegExp(providerSchema.properties.baseUrl.pattern);
+        if (!re.test(provider.baseUrl)) {
+          errors.push(`policy.yaml: providers.${name}.baseUrl must be an HTTPS URL (got '${provider.baseUrl}')`);
+        }
+      }
+    } else {
+      // Fallback: basic structural validation without schema
+      if (provider?.wire && !VALID_WIRES.has(provider.wire)) {
+        errors.push(`policy.yaml: providers.${name}.wire '${provider.wire}' is invalid — must be one of [${[...VALID_WIRES].join(', ')}]`);
+      }
+      if (!provider?.baseUrl) {
+        errors.push(`policy.yaml: providers.${name}.baseUrl is required`);
+      }
     }
   }
 
