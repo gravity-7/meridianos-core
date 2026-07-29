@@ -19,6 +19,10 @@ node_modules/
 # Transient PR review artifacts — auto-generated per-PR (prompts, outputs, diffs, context)
 .ai/reviews/
 
+# Provider wizard backup files — timestamped policy snapshots created during provider add
+.ai/policy.backup.*.yaml
+.ai/reports/
+
 # Spec-kit runtime state (actual feature specs are committed in specs/)
 .ai/features/
 
