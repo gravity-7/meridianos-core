@@ -232,8 +232,6 @@ function printBanner({ url, tenant, ledgerPath, token, registeredRun, detectedPr
   }
 }
 
-<<<<<<< Updated upstream
-=======
 // ─── Subcommand: provider ───────────────────────────────────────────────────
 
 function parseSubcommandArgs(args, subcommand) {
@@ -500,7 +498,6 @@ async function handlePricingShow(flags) {
   }
 }
 
->>>>>>> Stashed changes
 async function main() {
   const flags = parseArgs(process.argv.slice(2));
 

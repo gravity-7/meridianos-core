@@ -1,4 +1,4 @@
-# Tasks: Provider &amp; Model Agnosticism
+# Tasks: Provider & Model Agnosticism
 
 **Input**: Design documents from `specs/003-provider-model-agnosticism/`
 
@@ -26,7 +26,7 @@
 
 ---
 
-## Phase 2: Foundational — Provider Schema &amp; Registry Core (Blocks US1, US2, US3)
+## Phase 2: Foundational — Provider Schema & Registry Core (Blocks US1, US2, US3)
 
 **Purpose**: JSON Schema for provider definitions and the three-source merge engine. All provider-related stories depend on this.
 
@@ -205,7 +205,7 @@
 
 ---
 
-## Phase 10: User Story 8 — Dashboard Model &amp; Provider Management (Priority: P3)
+## Phase 10: User Story 8 — Dashboard Model & Provider Management (Priority: P3)
 
 **Goal**: Provide visual management of providers and models via dashboard with health status, tier assignment, and refresh controls.
 
@@ -225,7 +225,7 @@
 
 ---
 
-## Phase 11: Polish &amp; Cross-Cutting Concerns
+## Phase 11: Polish & Cross-Cutting Concerns
 
 **Purpose**: Final integration validation, edge case hardening, documentation.
 
@@ -237,7 +237,7 @@
 
 ---
 
-## Dependencies &amp; Execution Order
+## Dependencies & Execution Order
 
 ### User Story Dependency Graph
 
@@ -316,8 +316,7 @@ After US1 completes, these phases can run in parallel:
 - [X] T073 [CRITICAL] Move Anthropic pricing `RATES` table from `pricing-refresh.mjs` source code to a data file (e.g., `providers.defaults.yaml` or `pricing-anthropic.json`) per Constitution V (Configuration over Code). A new Anthropic model MUST NOT require a code change to get provider-native pricing. (contradicts Constitution V)
 - [X] T074 Wire `schema/provider.schema.json` into `policy-validate.mjs` validation — import the schema and validate `providers:` entries structurally against it at boot time, replacing the hand-rolled duplicate `VALID_WIRES` set. Currently the schema file exists but is dead code (never imported). (partial FR-003)
 - [X] T075 Add `model_registry` table DDL to `gateway/ledger-schema.sql` — the canonical schema file does not reflect the new table. `model-registry.mjs` creates it at runtime via `ensureModelRegistry()`, but the ledger-schema.sql is the authoritative reference and should be kept in sync. (partial US4/AC3)
-<<<<<<< Updated upstream
-=======
+
 
 ---
 
@@ -326,4 +325,3 @@ After US1 completes, these phases can run in parallel:
 **Purpose**: Gaps identified by `/speckit-converge` — not captured in existing tasks. Ordered by severity.
 
 - [X] T076 [HIGH] Update `gateway/provider-registry.mjs` to derive VALID_WIRES from a single source of truth — call `getValidWires()` from `providers.mjs` or import from a shared constant. Currently uses static `['anthropic', 'openai', 'generic-http']` which is missing `google-ai`, diverging from `providers.mjs` and `policy-validate.mjs` (both accept `google-ai`). The plan (`plan.md` §Source Code) explicitly calls for "Dynamic VALID_WIRES from WireAdapter registry" on this file but no task existed. At minimum, sync the wire list with `providers.mjs` to prevent Google AI configurations from being rejected by the provider registry while other modules accept them. (partial plan: provider-registry.mjs modification)
->>>>>>> Stashed changes
