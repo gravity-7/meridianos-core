@@ -50,6 +50,12 @@ export function openLedger(path, { config } = {}) {
 
 function migrate(db) {
   db.exec(readFileSync(LEDGER_SCHEMA_PATH, 'utf8')); // all statements are CREATE ... IF NOT EXISTS
+
+  // Phase 4 migration: add ide_name and billing_type columns to existing ledger databases.
+  // ALTER TABLE ... ADD COLUMN does not rewrite rows and is O(1) in SQLite; wrapped in
+  // try/catch because the columns may already exist from a fresh CREATE TABLE run above.
+  try { db.exec('ALTER TABLE token_events ADD COLUMN ide_name TEXT'); } catch { /* already present */ }
+  try { db.exec("ALTER TABLE token_events ADD COLUMN billing_type TEXT NOT NULL DEFAULT 'api_key'"); } catch { /* already present */ }
 }
 
 /**
