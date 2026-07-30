@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS token_events (
   model              TEXT NOT NULL,
   wire               TEXT NOT NULL,
   source             TEXT NOT NULL DEFAULT 'agent',
+  ide_name           TEXT,
+  billing_type       TEXT NOT NULL DEFAULT 'api_key',
   upstream_status    INTEGER,
   latency_ms         INTEGER,
   input_tokens       INTEGER,

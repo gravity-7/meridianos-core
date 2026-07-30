@@ -121,6 +121,7 @@ export function resolveRoute(reg, providerName) {
     ...(route.thinking != null ? { thinking: route.thinking } : {}),
     ...(route.translate != null ? { translate: route.translate } : {}),
     ...(route.headers != null ? { headers: route.headers } : {}),
+    ...(route.auth != null ? { auth: route.auth } : {}),
   };
 }
 

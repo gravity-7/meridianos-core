@@ -25,6 +25,8 @@
   },
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test \"tests/*.test.mjs\" \"gateway/tests/*.test.mjs\"",
+    "test:ci": "node --disable-warning=ExperimentalWarning --test \"tests/*.test.mjs\" \"gateway/tests/cli.test.mjs\" \"gateway/tests/ide-attribution.test.mjs\" \"gateway/tests/inject-openai.test.mjs\" \"gateway/tests/inject.test.mjs\" \"gateway/tests/ledger.test.mjs\" \"gateway/tests/provider-registry.test.mjs\" \"gateway/tests/registry-pull.test.mjs\" \"gateway/tests/registry-source.test.mjs\" \"gateway/tests/run-registry.test.mjs\" \"gateway/tests/token-event.test.mjs\" \"gateway/tests/windows.test.mjs\" \"gateway/tests/wire-adapter-registry.test.mjs\"",
+    "test:slow": "node --disable-warning=ExperimentalWarning --test \"gateway/tests/server.test.mjs\" \"gateway/tests/server-openai.test.mjs\" \"gateway/tests/index.test.mjs\"",
     "lint": "eslint ."
   }
 }

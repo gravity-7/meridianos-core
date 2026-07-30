@@ -50,6 +50,12 @@ export function openLedger(path, { config } = {}) {
 
 function migrate(db) {
   db.exec(readFileSync(LEDGER_SCHEMA_PATH, 'utf8')); // all statements are CREATE ... IF NOT EXISTS
+
+  // Phase 4 migration: add ide_name and billing_type columns to existing ledger databases.
+  // ALTER TABLE ... ADD COLUMN does not rewrite rows and is O(1) in SQLite; wrapped in
+  // try/catch because the columns may already exist from a fresh CREATE TABLE run above.
+  try { db.exec('ALTER TABLE token_events ADD COLUMN ide_name TEXT'); } catch { /* already present */ }
+  try { db.exec("ALTER TABLE token_events ADD COLUMN billing_type TEXT NOT NULL DEFAULT 'api_key'"); } catch { /* already present */ }
 }
 
 /**
@@ -63,13 +69,13 @@ export function appendEvent(ledger, event) {
     ledger.prepare(
       `INSERT INTO token_events (
          id, ts, tenant, agent, session, task, run_id, request_id,
-         provider, model, wire, source, upstream_status, latency_ms,
+         provider, model, wire, source, ide_name, billing_type, upstream_status, latency_ms,
          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens,
          cost_usd, enforcement_decision, cap_window, raw
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       event.id, event.ts, event.tenant, event.agent, event.session, event.task, event.runId, event.requestId,
-      event.provider, event.model, event.wire, event.source, event.upstreamStatus, event.latencyMs,
+      event.provider, event.model, event.wire, event.source, event.ideName, event.billingType, event.upstreamStatus, event.latencyMs,
       event.inputTokens, event.outputTokens, event.cacheReadTokens, event.cacheWriteTokens, event.totalTokens,
       event.costUsd, event.enforcementDecision, event.capWindow, JSON.stringify(event),
     );
@@ -83,12 +89,13 @@ export function appendEvent(ledger, event) {
  * column contributes to `unknownRuns`/`costUnknownRuns` instead of being fabricated as 0.
  * `since`/`until` are ISO-8601 strings, each optional (an omitted bound is unbounded on that side).
  */
-export function queryWindow(ledger, { tenant, agent, source, since, until } = {}) {
+export function queryWindow(ledger, { tenant, agent, source, ideName, since, until } = {}) {
   try {
     const clauses = ['tenant = ?'];
     const params = [tenant];
     if (agent) { clauses.push('agent = ?'); params.push(agent); }
     if (source) { clauses.push('source = ?'); params.push(source); }
+    if (ideName) { clauses.push('ide_name = ?'); params.push(ideName); }
     if (since != null) { clauses.push('ts >= ?'); params.push(since); }
     if (until != null) { clauses.push('ts < ?'); params.push(until); }
 
