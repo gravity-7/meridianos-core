@@ -315,32 +315,38 @@ async function handleRequest(msg) {
   }
 }
 
-// ─── Main: stdio transport ───────────────────────────────────────────────
+// ─── Main: stdio transport (only when run directly, not when imported) ───
 
-const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
 
-rl.on('line', async (line) => {
-  line = line.trim();
-  if (!line) return;
+  rl.on('line', async (line) => {
+    line = line.trim();
+    if (!line) return;
 
-  let msg;
-  try {
-    msg = JSON.parse(line);
-  } catch {
-    const err = jsonRpcError(null, -32700, 'Parse error: invalid JSON received');
-    process.stdout.write(err + '\n');
-    return;
-  }
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      const err = jsonRpcError(null, -32700, 'Parse error: invalid JSON received');
+      process.stdout.write(err + '\n');
+      return;
+    }
 
-  const response = await handleRequest(msg);
-  if (response) {
-    process.stdout.write(response + '\n');
-  }
-});
+    const response = await handleRequest(msg);
+    if (response) {
+      process.stdout.write(response + '\n');
+    }
+  });
 
-rl.on('close', () => {
-  process.exit(0);
-});
+  rl.on('close', () => {
+    process.exit(0);
+  });
+
+  process.stderr.write(`MeridianOS MCP Server v${SERVER_VERSION} started (dashboard: ${DASHBOARD_URL})\n`);
+}
 
 // Log startup to stderr (stdout is the MCP transport channel)
-process.stderr.write(`MeridianOS MCP Server v${SERVER_VERSION} started (dashboard: ${DASHBOARD_URL})\n`);
+// ─── Exports for unit testing ────────────────────────────────────────────
+
+export { TOOLS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION, jsonRpcResult, jsonRpcError, toolResult };

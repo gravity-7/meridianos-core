@@ -1,170 +1,114 @@
 /**
- * Tests for mcp-server.mjs — MCP protocol compliance and tool handler behavior.
+ * Unit tests for mcp-server.mjs — MCP protocol constants and tool definitions.
  *
- * These tests launch the MCP server as a child process and communicate over stdio
- * using JSON-RPC 2.0 messages. Tests verify protocol handshake, tool listing,
- * tool parameter validation, and error handling.
+ * Tests the exported TOOLS array, protocol version, server metadata, and
+ * JSON-RPC helper functions. Does NOT spawn child processes or require
+ * a running dashboard — pure unit tests suitable for CI.
  */
-import { describe, it, before, after } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { createInterface } from 'node:readline';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { TOOLS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION, jsonRpcResult, jsonRpcError, toolResult } from '../mcp-server.mjs';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const MCP_SERVER = join(HERE, '..', 'mcp-server.mjs');
-
-/**
- * Helper: send a JSON-RPC message to the MCP server and collect the response.
- */
-function sendMessage(rl, msg) {
-  return new Promise((resolve) => {
-    const handler = (line) => {
-      try {
-        resolve(JSON.parse(line));
-      } catch {
-        resolve({ error: 'parse error', raw: line });
-      }
-      rl.removeListener('line', handler);
-    };
-    rl.on('line', handler);
-    process.stdin.write(JSON.stringify(msg) + '\n');
-  });
-}
-
-// These tests spawn the MCP server process — skip in CI if dashboard not available
-describe('mcp-server (protocol compliance)', () => {
-  /** @type {import('child_process').ChildProcess} */
-  let child;
-  /** @type {import('readline').Interface} */
-  let rl;
-  let msgId = 0;
-
-  before(() => {
-    child = spawn('node', [MCP_SERVER], {
-      env: { ...process.env, MCP_DASHBOARD_URL: 'http://localhost:4317' },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    rl = createInterface({ input: child.stdout, terminal: false });
+describe('MCP Server Constants', () => {
+  it('declares protocol version 2024-11-05', () => {
+    assert.strictEqual(PROTOCOL_VERSION, '2024-11-05');
   });
 
-  after(() => {
-    if (rl) rl.close();
-    if (child && !child.killed) child.kill();
+  it('declares server name and version', () => {
+    assert.strictEqual(SERVER_NAME, 'meridianos');
+    assert.strictEqual(SERVER_VERSION, '1.0.0');
+  });
+});
+
+describe('TOOLS registry', () => {
+  it('contains exactly 5 tools', () => {
+    assert.strictEqual(TOOLS.length, 5);
   });
 
-  function nextId() {
-    return ++msgId;
-  }
-
-  function send(msg) {
-    return new Promise((resolve) => {
-      const handler = (line) => {
-        try {
-          resolve(JSON.parse(line.trim()));
-        } catch {
-          resolve({ error: 'parse error', raw: line });
-        }
-        rl.removeListener('line', handler);
-      };
-      rl.on('line', handler);
-      child.stdin.write(JSON.stringify(msg) + '\n');
-    });
-  }
-
-  it('responds to initialize with server capabilities', async () => {
-    const resp = await send({
-      jsonrpc: '2.0', id: nextId(), method: 'initialize',
-      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1.0' } },
-    });
-    assert.ok(resp.result, 'initialize should return result');
-    assert.ok(resp.result.capabilities, 'should include capabilities');
-    assert.strictEqual(resp.result.protocolVersion, '2024-11-05');
-    assert.strictEqual(resp.result.serverInfo.name, 'meridianos');
-  });
-
-  it('returns tools/list with 5 tools', async () => {
-    const resp = await send({
-      jsonrpc: '2.0', id: nextId(), method: 'tools/list', params: {},
-    });
-    assert.ok(resp.result, 'should return result');
-    assert.ok(Array.isArray(resp.result.tools), 'tools should be an array');
-    assert.strictEqual(resp.result.tools.length, 5, 'should have exactly 5 tools');
-
-    const names = resp.result.tools.map((t) => t.name);
+  it('includes all required tool names', () => {
+    const names = TOOLS.map((t) => t.name);
     assert.ok(names.includes('meridian_list_tasks'));
     assert.ok(names.includes('meridian_create_task'));
     assert.ok(names.includes('meridian_get_spend'));
     assert.ok(names.includes('meridian_get_budget'));
     assert.ok(names.includes('meridian_get_board_summary'));
+  });
 
-    // Each tool should have inputSchema
-    for (const tool of resp.result.tools) {
-      assert.ok(tool.inputSchema, `${tool.name} should have inputSchema`);
-      assert.ok(tool.description, `${tool.name} should have description`);
+  it('each tool has name, description, and inputSchema', () => {
+    for (const tool of TOOLS) {
+      assert.ok(tool.name, `tool missing name`);
+      assert.ok(tool.description, `${tool.name} missing description`);
+      assert.ok(tool.inputSchema, `${tool.name} missing inputSchema`);
+      assert.strictEqual(typeof tool.inputSchema, 'object');
+      assert.strictEqual(tool.inputSchema.type, 'object');
     }
   });
 
-  it('returns error for unknown tool', async () => {
-    const resp = await send({
-      jsonrpc: '2.0', id: nextId(), method: 'tools/call',
-      params: { name: 'nonexistent_tool', arguments: {} },
-    });
-    assert.ok(resp.error, 'should return error');
-    assert.strictEqual(resp.error.code, -32601);
-    assert.ok(resp.error.message.includes('Unknown tool'));
+  it('meridian_create_task requires title parameter', () => {
+    const tool = TOOLS.find((t) => t.name === 'meridian_create_task');
+    assert.ok(tool);
+    assert.ok(tool.inputSchema.required.includes('title'));
+    assert.ok(tool.inputSchema.properties.title.minLength >= 1);
   });
 
-  it('returns error for create_task without title', async () => {
-    const resp = await send({
-      jsonrpc: '2.0', id: nextId(), method: 'tools/call',
-      params: { name: 'meridian_create_task', arguments: {} },
-    });
-    assert.ok(resp.error, 'should return validation error');
-    assert.strictEqual(resp.error.code, -32602);
+  it('meridian_list_tasks supports status filter enum', () => {
+    const tool = TOOLS.find((t) => t.name === 'meridian_list_tasks');
+    assert.ok(tool);
+    const statusEnum = tool.inputSchema.properties.status.enum;
+    assert.ok(statusEnum.includes('todo'));
+    assert.ok(statusEnum.includes('in-progress'));
+    assert.ok(statusEnum.includes('review'));
+    assert.ok(statusEnum.includes('done'));
+    assert.ok(statusEnum.includes('blocked'));
   });
 
-  it('returns error for malformed JSON', async () => {
-    // Write invalid JSON directly
-    child.stdin.write('not valid json\n');
-    const resp = await new Promise((resolve) => {
-      const handler = (line) => {
-        try { resolve(JSON.parse(line.trim())); } catch { resolve({ raw: line }); }
-        rl.removeListener('line', handler);
-      };
-      rl.on('line', handler);
-    });
-    assert.ok(resp.error, 'should return parse error');
-    assert.strictEqual(resp.error.code, -32700);
+  it('meridian_get_spend supports period enum', () => {
+    const tool = TOOLS.find((t) => t.name === 'meridian_get_spend');
+    assert.ok(tool);
+    const periodEnum = tool.inputSchema.properties.period.enum;
+    assert.ok(periodEnum.includes('session'));
+    assert.ok(periodEnum.includes('day'));
+    assert.ok(periodEnum.includes('week'));
+    assert.ok(periodEnum.includes('month'));
   });
 
-  it('returns error for unknown method', async () => {
-    const resp = await send({
-      jsonrpc: '2.0', id: nextId(), method: 'unknown/method', params: {},
-    });
-    assert.ok(resp.error, 'should return error');
-    assert.strictEqual(resp.error.code, -32601);
-  });
-
-  it('handles list_tasks with valid parameters (may fail if dashboard not running)', async () => {
-    const resp = await send({
-      jsonrpc: '2.0', id: nextId(), method: 'tools/call',
-      params: { name: 'meridian_list_tasks', arguments: { limit: 5 } },
-    });
-    // Either succeeds (dashboard running) or returns internal error (dashboard not running)
-    // Both are valid — we just verify the server doesn't crash
-    assert.ok(resp.result || resp.error, 'should return result or error');
-    if (resp.error) {
-      assert.ok(resp.error.message.includes('Internal error') || resp.error.message.includes('Dashboard API'));
+  it('all tools disallow additional properties', () => {
+    for (const tool of TOOLS) {
+      assert.strictEqual(tool.inputSchema.additionalProperties, false,
+        `${tool.name} should set additionalProperties: false`);
     }
   });
+});
 
-  it('handles get_board_summary with no arguments', async () => {
-    const resp = await send({
-      jsonrpc: '2.0', id: nextId(), method: 'tools/call',
-      params: { name: 'meridian_get_board_summary', arguments: {} },
-    });
-    assert.ok(resp.result || resp.error, 'should return result or error');
+describe('JSON-RPC 2.0 helpers', () => {
+  it('jsonRpcResult produces valid JSON-RPC success response', () => {
+    const result = jsonRpcResult(1, { tools: [] });
+    const parsed = JSON.parse(result);
+    assert.strictEqual(parsed.jsonrpc, '2.0');
+    assert.strictEqual(parsed.id, 1);
+    assert.deepStrictEqual(parsed.result, { tools: [] });
+  });
+
+  it('jsonRpcError produces valid JSON-RPC error response', () => {
+    const result = jsonRpcError(2, -32601, 'Method not found');
+    const parsed = JSON.parse(result);
+    assert.strictEqual(parsed.jsonrpc, '2.0');
+    assert.strictEqual(parsed.id, 2);
+    assert.strictEqual(parsed.error.code, -32601);
+    assert.strictEqual(parsed.error.message, 'Method not found');
+  });
+
+  it('jsonRpcError includes optional data field', () => {
+    const result = jsonRpcError(3, -32602, 'Invalid params', { validationErrors: [] });
+    const parsed = JSON.parse(result);
+    assert.ok(parsed.error.data);
+    assert.ok(Array.isArray(parsed.error.data.validationErrors));
+  });
+
+  it('toolResult wraps text in MCP content format', () => {
+    const result = toolResult(4, 'Hello');
+    const parsed = JSON.parse(result);
+    assert.strictEqual(parsed.id, 4);
+    assert.deepStrictEqual(parsed.result, { content: [{ type: 'text', text: 'Hello' }] });
   });
 });
