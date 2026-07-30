@@ -165,6 +165,25 @@ export function getModels(db, filters = {}) {
 }
 
 /**
+ * Find a single model by provider and model_id.
+ *
+ * @param {object} db - better-sqlite3 database instance
+ * @param {string} provider - Provider name
+ * @param {string} modelId - Provider-specific model ID
+ * @returns {object|null} The model row with parsed features, or null if not found
+ */
+export function findModel(db, provider, modelId) {
+  ensureModelRegistry(db);
+  const id = `${provider}:${modelId}`;
+  const row = db.prepare('SELECT * FROM model_registry WHERE id = ?').get(id);
+  if (!row) return null;
+  return {
+    ...row,
+    features: safeJsonParse(row.features),
+  };
+}
+
+/**
  * Mark models as deprecated that are no longer in the active set.
  *
  * @param {object} db
