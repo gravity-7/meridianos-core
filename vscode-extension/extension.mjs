@@ -4,17 +4,18 @@
  * Activates on VS Code startup. Registers the sidebar task board, status bar spend
  * indicator, and all MeridianOS commands. Manages daemon lifecycle via daemon-manager.
  */
-const vscode = require('vscode');
-const { TaskBoardProvider } = require('./sidebar');
-const { SpendIndicator } = require('./status-bar');
-const {
+import vscode from 'vscode';
+import http from 'node:http';
+import { TaskBoardProvider } from './sidebar.mjs';
+import { SpendIndicator } from './status-bar.mjs';
+import {
   checkNodeJs,
   checkDaemonHealth,
   startDaemon,
   stopDaemon,
   downloadAndInstallDaemon,
   launchWizardInWebview,
-} = require('./daemon-manager');
+} from './daemon-manager.mjs';
 
 let taskBoardProvider;
 let spendIndicator;
@@ -131,7 +132,6 @@ async function activate(context) {
       if (!priority) return;
 
       try {
-        const http = require('http');
         const body = JSON.stringify({ title: title.trim(), category, priority });
         const url = new URL('/api/task', 'http://localhost:4317');
 
@@ -201,7 +201,7 @@ async function activate(context) {
       );
       if (confirm === 'Pause All Spend') {
         try {
-          const http = require('http');
+
           const url = new URL('/api/policy', 'http://localhost:4317');
           const body = JSON.stringify({ 'spend.paused': true });
           await new Promise((resolve, reject) => {
@@ -252,4 +252,4 @@ async function deactivate() {
   }
 }
 
-module.exports = { activate, deactivate };
+export { activate, deactivate };

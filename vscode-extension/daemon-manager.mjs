@@ -8,11 +8,11 @@
  * - Starts/stops the daemon synchronized with VS Code lifecycle
  * - Health checks the daemon via dashboard API
  */
-const vscode = require('vscode');
-const { spawn, execSync } = require('child_process');
-const http = require('http');
-const path = require('path');
-const os = require('os');
+import vscode from 'vscode';
+import { spawn, execSync } from 'node:child_process';
+import http from 'node:http';
+import path from 'node:path';
+import os from 'node:os';
 
 const DASHBOARD_URL = process.env.MERIDIAN_DASHBOARD_URL || 'http://localhost:4317';
 const DASHBOARD_PORT = 4317;
@@ -197,7 +197,7 @@ function getWizardHtml() {
 </html>`;
 }
 
-module.exports = {
+export {
   checkNodeJs,
   checkDaemonHealth,
   startDaemon,

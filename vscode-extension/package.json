@@ -15,7 +15,8 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "main": "./extension.js",
+  "type": "module",
+  "main": "./extension.mjs",
   "contributes": {
     "viewsContainers": {
       "activitybar": [

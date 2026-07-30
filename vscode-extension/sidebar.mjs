@@ -4,8 +4,8 @@
  * Fetches board state from the MeridianOS dashboard API and renders tasks
  * grouped by status in the VS Code sidebar TreeView. Refreshes every 30 seconds.
  */
-const vscode = require('vscode');
-const http = require('http');
+import vscode from 'vscode';
+import http from 'node:http';
 
 const DASHBOARD_URL = process.env.MERIDIAN_DASHBOARD_URL || 'http://localhost:4317';
 const REFRESH_INTERVAL_MS = 30000;
@@ -112,4 +112,4 @@ class TaskBoardProvider {
   }
 }
 
-module.exports = { TaskBoardProvider };
+export { TaskBoardProvider };
