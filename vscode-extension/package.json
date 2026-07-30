@@ -1,0 +1,70 @@
+{
+  "name": "meridianos",
+  "displayName": "MeridianOS",
+  "description": "AI task orchestration with cost governance — task board, spend tracking, and one-click Copilot routing from within VS Code",
+  "version": "0.1.0",
+  "publisher": "gravity-7",
+  "license": "MIT",
+  "repository": "https://github.com/gravity-7/meridianos-core",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "meridianos",
+          "title": "MeridianOS",
+          "icon": "$(organization)"
+        }
+      ]
+    },
+    "views": {
+      "meridianos": [
+        {
+          "id": "meridianos.board",
+          "name": "Task Board"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "meridian.setup",
+        "title": "MeridianOS: Run Setup Wizard"
+      },
+      {
+        "command": "meridian.openDashboard",
+        "title": "MeridianOS: Open Dashboard"
+      },
+      {
+        "command": "meridian.createTask",
+        "title": "MeridianOS: Create Task from Selection"
+      },
+      {
+        "command": "meridian.routeCopilot",
+        "title": "MeridianOS: Route Copilot Through Gateway"
+      },
+      {
+        "command": "meridian.toggleGateway",
+        "title": "MeridianOS: Toggle Gateway Proxy"
+      },
+      {
+        "command": "meridian.pauseAllSpend",
+        "title": "MeridianOS: Pause All AI Spend"
+      }
+    ]
+  },
+  "scripts": {
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^2.4.0"
+  }
+}

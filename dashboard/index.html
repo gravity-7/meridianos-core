@@ -521,7 +521,24 @@ button:active { transform: translateY(0); box-shadow: none; }
   </div>
 
   <div class="card live" id="providersCard">
-    <div class="h">providers <span style="color:var(--text-muted);font-weight:400">· managed via policy.yaml</span></div>
+    <div class="h">providers <span style="color:var(--text-muted);font-weight:400">· managed via policy.yaml</span>
+      <button onclick="toggleAddProvider()" style="font-size:11px;padding:4px 8px;margin-left:auto">＋ Add Provider</button>
+    </div>
+    <div id="addProviderForm" style="display:none;padding:.6rem;margin-bottom:.4rem;background:var(--bg-secondary);border-radius:6px">
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <div style="flex:1;min-width:140px">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:2px">Provider</label>
+          <select id="addProvSelect" style="width:100%;padding:4px 6px;font-size:12px;background:var(--bg);color:var(--text-primary);border:1px solid var(--border);border-radius:4px"></select>
+        </div>
+        <div style="flex:1;min-width:140px">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:2px">API Key</label>
+          <input id="addProvKey" type="password" placeholder="sk-…" style="width:100%;padding:4px 6px;font-size:12px;background:var(--bg);color:var(--text-primary);border:1px solid var(--border);border-radius:4px">
+        </div>
+        <button onclick="submitAddProvider()" style="font-size:11px;padding:6px 12px;white-space:nowrap">Save</button>
+        <button onclick="toggleAddProvider()" style="font-size:11px;padding:6px 8px;white-space:nowrap;background:var(--bg)">Cancel</button>
+      </div>
+      <div id="addProvMsg" style="font-size:11px;margin-top:4px;display:none"></div>
+    </div>
     <div id="providersList" style="font-size:12px;color:var(--text-muted);padding:.4rem 0">loading…</div>
   </div>
 
@@ -589,6 +606,88 @@ button:active { transform: translateY(0); box-shadow: none; }
     </div>
   </div>
 </div>
+
+<!-- ── P4: IDE Connect Panel ───────────────────────────────────────────── -->
+<div class="card live" id="ideConnectPanel">
+  <div class="h">🖥 Connect Your IDE</div>
+  <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Route AI traffic from your IDE through the MeridianOS gateway for unified cost tracking.</div>
+  <div id="ideDetectStatus" style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">Loading…</div>
+  <div id="ideCards" style="display:flex;flex-direction:column;gap:10px"></div>
+  <div id="ideNoIdes" style="display:none;padding:16px;background:var(--surface-1);border-radius:var(--radius);font-size:13px;color:var(--text-secondary);text-align:center">
+    No supported IDEs detected. Use the generic proxy configuration:<br>
+    <code style="display:inline-block;margin-top:8px;padding:6px 12px;background:var(--surface-2);border-radius:4px;font-size:12px">HTTP_PROXY=<span id="genericProxyUrl">http://127.0.0.1:8787</span></code>
+  </div>
+</div>
+
+<!-- ── P4: Copilot Status Panel ────────────────────────────────────────── -->
+<div class="card live" id="copilotPanel" style="display:none">
+  <div class="h">🤖 GitHub Copilot Monitoring</div>
+  <div id="copilotStatusBadge" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;font-size:13px;font-weight:500"></div>
+  <div id="copilotNote" style="font-size:12px;color:var(--text-secondary);margin-top:8px"></div>
+  <div id="copilotPrivacy" style="display:none;margin-top:10px;padding:10px 14px;background:var(--bg-warning);border-radius:var(--radius);font-size:12px;color:var(--text-warning);line-height:1.45">
+    ⚠️ <strong>Privacy Notice:</strong> Copilot code context is visible in gateway logs when logging is enabled. <a href="#" onclick="document.querySelector('#settingsPanel')?.scrollIntoView()" style="color:var(--text-accent)">Disable request logging</a> in Settings → Gateway if processing sensitive code.
+  </div>
+</div>
+
+<!-- ── P4: MCP Server Config Panel ─────────────────────────────────────── -->
+<div class="card live" id="mcpConfigPanel">
+  <div class="h">🔌 Connect Claude Code (MCP)</div>
+  <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Add MeridianOS tools to Claude Code or Claude Cowork for natural-language task and spend management.</div>
+  <div style="margin-bottom:10px;font-size:12px;color:var(--text-secondary)">
+    Prerequisites: Node.js 22+ ✓ · Daemon running · Claude Code/Cowork installed
+  </div>
+  <div style="position:relative">
+    <pre id="mcpConfigJson" style="background:var(--surface-1);padding:14px;border-radius:var(--radius);font-size:12px;overflow-x:auto;max-height:200px">Loading…</pre>
+    <button id="mcpCopyBtn" style="position:absolute;top:8px;right:8px;padding:4px 10px;font-size:11px;cursor:pointer">📋 Copy</button>
+  </div>
+  <div style="font-size:11px;color:var(--text-muted);margin-top:6px">
+    Available tools: meridian_list_tasks · meridian_create_task · meridian_get_spend · meridian_get_budget · meridian_get_board_summary
+  </div>
+  <div style="font-size:12px;color:var(--text-secondary);margin-top:8px">
+    Add the config above to your <code>.mcp.json</code> file, then restart Claude.
+  </div>
+</div>
+
+<!-- ── P4: Subscription Plans Panel ────────────────────────────────────── -->
+<div class="card live" id="subscriptionsPanel">
+  <div class="h">💳 Subscription Plans</div>
+  <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Manage subscription-based AI plans (Claude Pro, Copilot, Anti-Gravity) alongside BYO-key API traffic.</div>
+  <div id="subscriptionsList" style="margin-bottom:12px"></div>
+  <div id="apiKeysList" style="margin-bottom:12px"></div>
+  <div id="combinedTotal" style="font-size:14px;font-weight:600;color:var(--text-primary);padding:10px 14px;background:var(--bg-accent);border-radius:var(--radius);margin-bottom:12px">Combined monthly: —</div>
+  <button id="addSubscriptionBtn" style="padding:8px 16px;font-size:13px">+ Add Subscription</button>
+</div>
+
+<!-- ── P4: Add Subscription Modal (hidden by default) ──────────────────── -->
+<div id="addSubModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:var(--surface-2);border-radius:var(--radius);padding:24px;max-width:480px;width:90%;box-shadow:var(--shadow-lg)">
+    <div class="h" style="margin-bottom:16px">Add Subscription Plan</div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px">Plan Type</label>
+      <select id="subPlanType" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--surface-1);color:var(--text-primary)">
+        <option value="Claude Pro">Claude Pro ($20/mo)</option>
+        <option value="GitHub Copilot">GitHub Copilot ($10/mo)</option>
+        <option value="Anti-Gravity">Anti-Gravity</option>
+      </select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px">Environment Variable Name</label>
+      <input id="subKeyEnv" type="text" placeholder="e.g., CLAUDE_PRO_SESSION_TOKEN" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--surface-1);color:var(--text-primary);font-size:13px">
+    </div>
+    <div style="margin-bottom:16px;padding:12px;background:var(--bg-warning);border-radius:var(--radius);font-size:12px;color:var(--text-warning);line-height:1.5">
+      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+        <input type="checkbox" id="subLegalCheck" style="margin-top:2px">
+        <span>I confirm my subscription terms allow this usage. MeridianOS does not bypass or circumvent any provider's authentication — it proxies your existing session tokens.</span>
+      </label>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button id="subCancelBtn" style="background:var(--surface-1);color:var(--text-primary);padding:8px 16px;border:1px solid var(--border);border-radius:6px;cursor:pointer">Cancel</button>
+      <button id="subSaveBtn" style="padding:8px 16px;border-radius:6px;cursor:pointer">Save</button>
+    </div>
+    <div id="subSaveError" style="display:none;margin-top:10px;font-size:12px;color:var(--text-danger)"></div>
+  </div>
+</div>
+
 <script>
 // Same-origin CSRF/local-process guard (postmortem security P1): the server injects a per-boot
 // token into __AIOS_TOKEN__ below; we attach it to every same-origin request via a fetch wrapper
@@ -1364,6 +1463,69 @@ async function testProvider(name) {
   }
 }
 
+// ─── Add Provider form (US8 T078) ───────────────────────────────────────────
+
+const KNOWN_PROVIDERS = [
+  { name: 'anthropic', display: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY' },
+  { name: 'openai', display: 'OpenAI', keyEnv: 'OPENAI_API_KEY' },
+  { name: 'deepseek', display: 'DeepSeek', keyEnv: 'DEEPSEEK_KEY' },
+  { name: 'openrouter', display: 'OpenRouter', keyEnv: 'OPENROUTER_KEY' },
+  { name: 'ollama', display: 'Ollama', keyEnv: 'OLLAMA_HOST' },
+  { name: 'groq', display: 'Groq', keyEnv: 'GROQ_API_KEY' },
+  { name: 'together', display: 'Together', keyEnv: 'TOGETHER_API_KEY' },
+  { name: 'fireworks', display: 'Fireworks', keyEnv: 'FIREWORKS_API_KEY' },
+  { name: 'google-ai', display: 'Google Gemini', keyEnv: 'GOOGLE_AI_API_KEY' },
+  { name: 'mistral', display: 'Mistral', keyEnv: 'MISTRAL_API_KEY' },
+  { name: 'cohere', display: 'Cohere', keyEnv: 'COHERE_API_KEY' },
+  { name: 'perplexity', display: 'Perplexity', keyEnv: 'PPLX_API_KEY' },
+  { name: 'xai', display: 'xAI', keyEnv: 'XAI_API_KEY' },
+  { name: 'azure-openai', display: 'Azure OpenAI', keyEnv: 'AZURE_OPENAI_API_KEY' },
+  { name: 'aws-bedrock', display: 'AWS Bedrock', keyEnv: 'AWS_ACCESS_KEY_ID' },
+];
+
+function populateProviderSelect() {
+  const sel = $('addProvSelect');
+  sel.innerHTML = '<option value="">— select provider —</option>' +
+    KNOWN_PROVIDERS.map(p => `<option value="${esc(p.name)}">${esc(p.display)} (${esc(p.keyEnv)})</option>`).join('');
+}
+
+function toggleAddProvider() {
+  const form = $('addProviderForm');
+  const visible = form.style.display !== 'none';
+  form.style.display = visible ? 'none' : 'block';
+  if (!visible) {
+    populateProviderSelect();
+    $('addProvKey').value = '';
+    $('addProvMsg').style.display = 'none';
+  }
+}
+
+async function submitAddProvider() {
+  const name = $('addProvSelect').value;
+  const apiKey = $('addProvKey').value;
+  const msg = $('addProvMsg');
+  if (!name) { msg.style.display = 'block'; msg.style.color = 'var(--text-danger)'; msg.textContent = 'Select a provider'; return; }
+  if (!apiKey) { msg.style.display = 'block'; msg.style.color = 'var(--text-danger)'; msg.textContent = 'API key required'; return; }
+  msg.style.display = 'block'; msg.style.color = 'var(--text-accent)'; msg.textContent = 'Saving…';
+  try {
+    const provider = KNOWN_PROVIDERS.find(p => p.name === name);
+    const r = await fetch('/api/providers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, keyEnv: provider?.keyEnv || '', apiKey, source: 'dashboard' }),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      msg.style.color = 'var(--text-success)'; msg.textContent = `✓ ${j.provider?.displayName || name} added`;
+      setTimeout(() => { toggleAddProvider(); fetchProviders(); }, 1200);
+    } else {
+      msg.style.color = 'var(--text-danger)'; msg.textContent = '✗ ' + (j.error || 'Unknown error');
+    }
+  } catch (e) {
+    msg.style.color = 'var(--text-danger)'; msg.textContent = '✗ ' + e.message;
+  }
+}
+
 // ─── Models tab (US8 T066) ──────────────────────────────────────────────────
 
 async function fetchModels() {
@@ -1556,6 +1718,232 @@ $('refresh').addEventListener('click',poll);
 document.addEventListener('visibilitychange',()=>{ document.hidden ? stopPolling() : startPolling(); });
 startPolling();
 setInterval(renderQuiet,60000);
+
+// ─── P4: IDE Connect Panel ──────────────────────────────────────────────────
+
+async function fetchIdeDetect() {
+  try {
+    const r = await fetch('/api/ide/detect');
+    const j = await r.json();
+    if (j.ides) renderIdeCards(j.ides);
+    else $('ideDetectStatus').textContent = 'Detection unavailable.';
+  } catch {
+    $('ideDetectStatus').textContent = 'Detection unavailable — is the daemon running?';
+  }
+}
+
+function renderIdeCards(ides) {
+  if (!ides || !ides.length) return;
+  const installed = ides.filter(i => i.installed);
+  $('ideDetectStatus').textContent = installed.length + ' of ' + ides.length + ' supported IDEs detected';
+
+  const cardsEl = $('ideCards');
+  let htm = '';
+  for (const ide of ides) {
+    const statusIcon = ide.installed ? '✓ Installed' : '✗ Not found';
+    const statusColor = ide.installed ? 'var(--text-success)' : 'var(--text-muted)';
+    htm += `<div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-weight:500">${esc(ide.displayName)}</span>
+        <span style="font-size:11px;color:${statusColor}">${statusIcon}</span>
+        ${ide.installed && ide.detectionMethod ? `<span class="badge b-muted" style="font-size:10px">${esc(ide.detectionMethod)}</span>` : ''}
+      </div>
+      ${ide.installed ? `
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button onclick="fetchIdeConfig('${esc(ide.ideName)}')" style="font-size:11px;padding:4px 8px">View Config</button>
+          <button onclick="testIdeConn('${esc(ide.ideName)}')" style="font-size:11px;padding:4px 8px">Test Connection</button>
+        </div>
+        <pre id="ideCfg-${esc(ide.ideName)}" style="display:none;margin-top:8px;padding:8px;background:var(--surface-1);border-radius:4px;font-size:11px;max-height:120px;overflow:auto"></pre>
+        <span id="ideTest-${esc(ide.ideName)}" style="display:block;margin-top:6px;font-size:11px;color:var(--text-muted)"></span>
+      ` : ''}
+    </div>`;
+  }
+
+  if (!installed.length) {
+    $('ideNoIdes').style.display = 'block';
+    htm += '<div style="font-size:12px;color:var(--text-muted);text-align:center;padding:8px">No IDEs detected. Use the generic proxy above.</div>';
+  } else {
+    $('ideNoIdes').style.display = 'none';
+  }
+  cardsEl.innerHTML = htm;
+}
+
+async function fetchIdeConfig(ideName) {
+  const pre = $('ideCfg-' + ideName);
+  if (pre.style.display === 'block') { pre.style.display = 'none'; return; }
+  try {
+    const r = await fetch('/api/ide/config/' + ideName);
+    const j = await r.json();
+    pre.textContent = j.content || JSON.stringify(j, null, 2);
+    pre.style.display = 'block';
+    if (j.instructions) {
+      pre.textContent = '// ' + j.instructions.replace(/\n/g, '\n// ') + '\n\n' + pre.textContent;
+    }
+  } catch {
+    pre.textContent = 'Failed to load config.';
+    pre.style.display = 'block';
+  }
+}
+
+async function testIdeConn(ideName) {
+  const el = $('ideTest-' + ideName);
+  el.textContent = 'Testing…';
+  try {
+    const r = await fetch('/api/ide/test/' + ideName, { method: 'POST' });
+    const j = await r.json();
+    el.textContent = j.ok ? `✓ Connected (${j.latencyMs}ms)` : `✗ ${j.errorCode}: ${j.errorMessage || 'Test failed'}`;
+    el.style.color = j.ok ? 'var(--text-success)' : 'var(--text-danger)';
+  } catch {
+    el.textContent = '✗ Test request failed.';
+    el.style.color = 'var(--text-danger)';
+  }
+}
+
+// ─── P4: MCP Config Panel ───────────────────────────────────────────────────
+
+async function fetchMcpConfig() {
+  try {
+    const r = await fetch('/api/mcp/config');
+    const j = await r.json();
+    $('mcpConfigJson').textContent = JSON.stringify(j.config, null, 2);
+  } catch {
+    $('mcpConfigJson').textContent = 'Failed to load MCP config. Is the daemon running?';
+  }
+}
+$('mcpCopyBtn').addEventListener('click', () => {
+  const text = $('mcpConfigJson').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = $('mcpCopyBtn');
+    btn.textContent = '✓ Copied!';
+    setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
+  });
+});
+
+// ─── P4: IDE Traffic Status (Copilot Panel) ─────────────────────────────────
+
+async function fetchIdeStatus() {
+  try {
+    const r = await fetch('/api/ide/status?period=week');
+    const j = await r.json();
+    if (j.byIde && j.byIde.length > 0) {
+      $('copilotPanel').style.display = 'block';
+      const badge = $('copilotStatusBadge');
+      const statusColors = {
+        working: { bg: 'var(--bg-success)', color: 'var(--text-success)', text: '✓ Copilot Working' },
+        partial: { bg: 'var(--bg-warning)', color: 'var(--text-warning)', text: '⚠️ Partial Coverage' },
+        unavailable: { bg: 'var(--bg-danger)', color: 'var(--text-danger)', text: '✗ Copilot Unavailable' },
+        unknown: { bg: 'var(--surface-1)', color: 'var(--text-muted)', text: '— Copilot Status Unknown' },
+      };
+      const s = statusColors[j.copilotStatus] || statusColors.unknown;
+      badge.style.background = s.bg;
+      badge.style.color = s.color;
+      badge.textContent = s.text;
+
+      $('copilotNote').textContent = j.copilotStatusNote || '';
+      $('copilotPrivacy').style.display = 'block';
+    }
+  } catch { /* Copilot monitoring requires gateway */ }
+}
+
+// ─── P4: Subscription Plans Panel ───────────────────────────────────────────
+
+async function fetchSubscriptions() {
+  try {
+    const r = await fetch('/api/subscriptions');
+    const j = await r.json();
+
+    // Render subscription plans
+    const subEl = $('subscriptionsList');
+    if (j.subscriptions && j.subscriptions.length) {
+      subEl.innerHTML = j.subscriptions.map(s => `
+        <div class="row" style="align-items:center">
+          <div style="flex:1">
+            <span style="font-weight:500">${esc(s.planName)}</span>
+            <span class="badge b-ok">Active</span>
+            <span style="font-size:12px;color:var(--text-muted);margin-left:8px">$${s.monthlyCostUsd}/mo · env: ${esc(s.tokenEnv || '—')}</span>
+            ${s.lastVerified ? `<span style="font-size:11px;color:var(--text-muted);margin-left:4px">Last verified: ${esc(s.lastVerified)}</span>` : ''}
+          </div>
+          <button onclick="reportBrokenSub('${esc(s.providerName)}')" style="font-size:10px;padding:3px 6px" title="Report broken token extraction">Report broken</button>
+        </div>
+      `).join('');
+    } else {
+      subEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">No subscription plans configured.</div>';
+    }
+
+    // Combined total
+    $('combinedTotal').textContent = 'Combined monthly: $' + (j.combinedMonthlyTotal || 0).toFixed(2);
+  } catch { /* subscriptions unavailable */ }
+}
+
+function reportBrokenSub(providerName) {
+  const url = 'https://github.com/gravity-7/meridianos-core/issues/new?title=Subscription%20token%20extraction%20broken:%20' + encodeURIComponent(providerName) + '&labels=bug,docs';
+  window.open(url, '_blank');
+}
+
+// ─── P4: Add Subscription Modal ─────────────────────────────────────────────
+
+$('addSubscriptionBtn').addEventListener('click', () => {
+  $('addSubModal').style.display = 'flex';
+  $('subKeyEnv').value = '';
+  $('subLegalCheck').checked = false;
+  $('subSaveError').style.display = 'none';
+});
+
+$('subCancelBtn').addEventListener('click', () => {
+  $('addSubModal').style.display = 'none';
+});
+
+$('subSaveBtn').addEventListener('click', async () => {
+  const planType = $('subPlanType').value;
+  const keyEnv = $('subKeyEnv').value.trim();
+  const legalAccepted = $('subLegalCheck').checked;
+  const errEl = $('subSaveError');
+
+  if (!keyEnv) { errEl.textContent = 'Environment variable name is required.'; errEl.style.display = 'block'; return; }
+  if (!legalAccepted) { errEl.textContent = 'You must accept the legal disclaimer before saving.'; errEl.style.display = 'block'; return; }
+
+  const planCosts = { 'Claude Pro': 20, 'GitHub Copilot': 10, 'Anti-Gravity': 0 };
+  errEl.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/subscriptions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        providerName: 'subscription-' + planType.toLowerCase().replace(/\s+/g, '-'),
+        planName: planType,
+        keyEnv,
+        monthlyCostUsd: planCosts[planType] || 0,
+        wire: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+        legalAccepted: true,
+      }),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      $('addSubModal').style.display = 'none';
+      fetchSubscriptions();
+    } else {
+      errEl.textContent = j.error || 'Save failed.';
+      errEl.style.display = 'block';
+    }
+  } catch (e) {
+    errEl.textContent = 'Save failed: ' + e.message;
+    errEl.style.display = 'block';
+  }
+});
+
+// ─── P4: Poll new panels alongside existing poll ────────────────────────────
+
+const _origPoll = poll;
+poll = async function() {
+  await _origPoll();
+  fetchIdeDetect().catch(() => {});
+  fetchMcpConfig().catch(() => {});
+  fetchIdeStatus().catch(() => {});
+  fetchSubscriptions().catch(() => {});
+};
+
 </script>
 </body>
 </html>

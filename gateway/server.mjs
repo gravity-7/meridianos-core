@@ -377,6 +377,7 @@ function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestI
       model,
       wire,
       source,
+      ideName,
       upstreamStatus: upstreamRes.statusCode ?? null,
       latencyMs: now() - start,
       usage: tracker.usage,
@@ -404,7 +405,7 @@ function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestI
   });
 }
 
-function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, source, upstreamStatus, latencyMs, usage, verdict, costFn }) {
+function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, source, ideName, upstreamStatus, latencyMs, usage, verdict, costFn }) {
   const usageFields = usage ?? { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null };
   const v = verdict ?? {};
   // costFn is a seam into domain pricing (see assembleGateway in index.mjs) — this module never
@@ -416,6 +417,9 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, source
   } catch {
     costUsd = null;
   }
+  // Determine billing type — subscription if route has auth.mode === 'subscription'
+  const billingType = (route.auth?.mode === 'subscription') ? 'subscription' : ((ctx.billingType) || 'api_key');
+
   const evt = makeTokenEvent(
     {
       tenant: ctx.tenant,
@@ -438,6 +442,8 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, source
       enforcementDecision: v.decision ?? 'allow',
       capWindow: v.capWindow ?? null,
       source,
+      ideName: ideName ?? null,
+      billingType,
     },
     { defaultTenant: ctx.tenant },
   );
@@ -583,6 +589,13 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   const rawSource = req.headers['x-meridianos-source'];
   const source = (rawSource && VALID_SOURCES.has(rawSource)) ? rawSource : 'agent';
 
+  // Phase 4: IDE traffic attribution — extract ide_name from request header.
+  // Valid values: vscode-copilot, claude-code, cursor, windsurf, unknown-ide
+  const rawIdeName = req.headers['x-meridianos-ide-name'];
+  const VALID_IDE_NAMES = new Set(['vscode-copilot', 'claude-code', 'cursor', 'windsurf', 'unknown-ide']);
+  const ideName = (rawIdeName && VALID_IDE_NAMES.has(rawIdeName)) ? rawIdeName
+    : (source === 'ide' ? 'unknown-ide' : null);
+
   // `registry` may be a plain envelope or a zero-arg provider function (see startGateway's doc
   // comment) — resolved fresh on EVERY request so a live registry-store's updates take effect
   // immediately, without needing to restart the gateway or re-resolve per-connection.
@@ -622,6 +635,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       model: ctx.model,
       wire: route.wire,
       source,
+      ideName,
       upstreamStatus: null,
       latencyMs: now() - start,
       usage: null,
@@ -698,6 +712,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       model: ctx.model,
       wire: route.wire,
       source,
+      ideName,
       upstreamStatus: null,
       latencyMs: now() - start,
       usage: null,
@@ -757,6 +772,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       model: ctx.model,
       wire: route.wire,
       source,
+      ideName,
       upstreamStatus: upstreamRes.statusCode ?? null,
       latencyMs,
       usage: null,
@@ -797,6 +813,7 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
     model: ctx.model,
     wire: route.wire,
     source,
+    ideName,
     upstreamStatus: upstreamRes.statusCode ?? null,
     latencyMs,
     usage,

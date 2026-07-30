@@ -43,6 +43,8 @@ export function makeTokenEvent(partial = {}, { defaultTenant = 'pv' } = {}) {
     model: partial.model ?? null,
     wire: partial.wire ?? null,
     source: partial.source ?? 'agent',
+    ideName: partial.ideName ?? null,
+    billingType: partial.billingType ?? 'api_key',
     upstreamStatus: partial.upstreamStatus ?? null,
     latencyMs: partial.latencyMs ?? null,
     // Usage

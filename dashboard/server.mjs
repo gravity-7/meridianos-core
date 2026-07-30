@@ -26,6 +26,7 @@ import { readSpec, writeSpec } from './spec-file.mjs';
 import { openLedger, queryWindow, listEvents } from '../gateway/ledger.mjs';
 import { readRuns } from '../runlog.mjs';
 import { getProviderHealth } from '../provider-health.mjs';
+import { detectInstalledIdes, generateProxyConfig, testIdeConnectivity, KNOWN_IDES } from '../ide-proxy.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.html');
@@ -394,6 +395,221 @@ export function createDashboardServer(config) {
         // Best-effort: check if refresh is in progress via a simple flag
         const refreshing = globalThis.__modelsRefreshing ?? false;
         return send(res, 200, JSON.stringify({ ok: true, running: refreshing }));
+      }
+
+      // ── IDE Detection ─────────────────────────────────────────────────
+      if (req.method === 'GET' && url.pathname === '/api/ide/detect') {
+        const customPaths = config?.policy?.ide_detection?.paths ?? [];
+        const ides = detectInstalledIdes({ customPaths });
+        return send(res, 200, JSON.stringify({
+          ides,
+          detectedCount: ides.filter((i) => i.installed).length,
+          totalChecked: ides.length,
+        }));
+      }
+
+      // ── IDE Proxy Config Snippet ──────────────────────────────────────
+      if (req.method === 'GET' && url.pathname.startsWith('/api/ide/config/')) {
+        const ideName = url.pathname.slice('/api/ide/config/'.length);
+        const validNames = [...KNOWN_IDES.map((i) => i.ideName), 'generic'];
+        if (!validNames.includes(ideName)) {
+          return send(res, 400, JSON.stringify({
+            ok: false,
+            error: `Unknown IDE '${ideName}'. Valid values: ${validNames.join(', ')}`,
+          }));
+        }
+        const configSnippet = generateProxyConfig(
+          ideName,
+          `http://127.0.0.1:${config?.gateway?.port || 8787}`,
+        );
+        return send(res, 200, JSON.stringify(configSnippet));
+      }
+
+      // ── IDE Connectivity Test ─────────────────────────────────────────
+      if (req.method === 'POST' && url.pathname.startsWith('/api/ide/test/')) {
+        const ideName = url.pathname.slice('/api/ide/test/'.length);
+        const gatewayUrl = `http://127.0.0.1:${config?.gateway?.port || 8787}`;
+        const result = await testIdeConnectivity(gatewayUrl);
+        result.ideName = ideName;
+        return send(res, 200, JSON.stringify(result));
+      }
+
+      // ── IDE Traffic Status ────────────────────────────────────────────
+      if (req.method === 'GET' && url.pathname === '/api/ide/status') {
+        const period = url.searchParams.get('period') || 'week';
+        const now = new Date();
+        let since;
+        if (period === 'session') since = new Date(now - 3600000).toISOString();
+        else if (period === 'day') since = new Date(now - 86400000).toISOString();
+        else if (period === 'week') since = new Date(now - 604800000).toISOString();
+        else since = new Date(now - 2592000000).toISOString(); // month
+
+        let ideBreakdown = [];
+        let copilotStatus = 'unknown';
+
+        try {
+          const ledger = getLedger(config);
+          if (ledger) {
+            const tenant = getTenant(config);
+
+            // Group by ide_name for source='ide'
+            const rows = ledger.prepare(
+              `SELECT ide_name, SUM(cost_usd) AS cost, SUM(total_tokens) AS tokens, COUNT(*) AS calls, MAX(ts) AS last_seen
+                 FROM token_events WHERE tenant = ? AND source = 'ide' AND ts >= ? GROUP BY ide_name`,
+            ).all(tenant, since);
+
+            ideBreakdown = rows.map((r) => ({
+              ideName: r.ide_name || 'unknown-ide',
+              displayName: r.ide_name === 'vscode-copilot' ? 'GitHub Copilot'
+                : r.ide_name === 'claude-code' ? 'Claude Code'
+                : r.ide_name || 'Unknown IDE',
+              costUsd: r.cost ?? 0,
+              tokens: r.tokens ?? 0,
+              requestCount: r.calls,
+              lastSeen: r.last_seen,
+            }));
+
+            // Determine Copilot status
+            const copilotRow = rows.find((r) => r.ide_name === 'vscode-copilot');
+            if (copilotRow && copilotRow.calls > 0) {
+              copilotStatus = 'working';
+            } else {
+              // Check if proxy is configured but no traffic detected
+              const anyIdeTraffic = rows.some((r) => r.calls > 0);
+              copilotStatus = anyIdeTraffic ? 'partial' : 'unavailable';
+            }
+          }
+        } catch { /* best-effort */ }
+
+        const totalCost = ideBreakdown.reduce((s, i) => s + i.costUsd, 0);
+        const totalTokens = ideBreakdown.reduce((s, i) => s + i.tokens, 0);
+
+        return send(res, 200, JSON.stringify({
+          period,
+          totalCostUsd: totalCost,
+          totalTokens,
+          byIde: ideBreakdown,
+          copilotStatus,
+          copilotStatusNote: copilotStatus === 'unavailable'
+            ? 'No IDE traffic detected. Configure proxy settings from the IDE Connect page.'
+            : copilotStatus === 'partial'
+            ? 'Some IDE traffic detected but Copilot proxy coverage may be incomplete.'
+            : null,
+        }));
+      }
+
+      // ── MCP Server Config ─────────────────────────────────────────────
+      if (req.method === 'GET' && url.pathname === '/api/mcp/config') {
+        const mcpConfig = {
+          mcpServers: {
+            meridianos: {
+              command: 'node',
+              args: ['mcp-server.mjs'],
+              cwd: config?.repoRoot || process.cwd(),
+              env: {
+                MCP_DASHBOARD_URL: `http://localhost:${config?.gateway?.dashboardPort || 4317}`,
+              },
+            },
+          },
+        };
+        return send(res, 200, JSON.stringify({
+          config: mcpConfig,
+          instructions: "Add the above 'meridianos' entry to your .mcp.json file's 'mcpServers' object. If you already have other MCP servers configured, merge the 'meridianos' entry alongside them. Restart Claude Code after saving.",
+          prerequisites: [
+            'Node.js 22+ installed',
+            'MeridianOS daemon running (dashboard accessible at localhost:4317)',
+            'Claude Code or Claude Cowork installed',
+          ],
+          toolsAvailable: [
+            'meridian_list_tasks',
+            'meridian_create_task',
+            'meridian_get_spend',
+            'meridian_get_budget',
+            'meridian_get_board_summary',
+          ],
+        }));
+      }
+
+      // ── Subscription Plans ────────────────────────────────────────────
+      if (req.method === 'GET' && url.pathname === '/api/subscriptions') {
+        const providers = config?.policy?.providers ?? {};
+        const subscriptions = [];
+        const apiKeys = [];
+
+        for (const [name, p] of Object.entries(providers)) {
+          const auth = p.auth ?? {};
+          if (auth.mode === 'subscription') {
+            subscriptions.push({
+              providerName: name,
+              planName: p.displayName || auth.planName || name,
+              mode: 'subscription',
+              monthlyCostUsd: auth.monthlyCostUsd ?? 0,
+              active: true, // best-effort; actual token validity checked on next request
+              lastVerified: auth.lastVerified ?? null,
+              tokenEnv: auth.keyEnv ?? null,
+              usageThisMonth: { tokens: 0, costIncluded: auth.monthlyCostUsd ?? 0, costOverage: 0 },
+            });
+          } else {
+            apiKeys.push({
+              providerName: name,
+              planName: null,
+              mode: 'api_key',
+              active: true,
+              usageThisMonth: { tokens: 0, costUsd: 0 },
+            });
+          }
+        }
+
+        const combinedTotal = subscriptions.reduce((s, p) => s + (p.monthlyCostUsd ?? 0), 0);
+
+        return send(res, 200, JSON.stringify({
+          subscriptions,
+          apiKeys,
+          combinedMonthlyTotal: combinedTotal,
+        }));
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/subscriptions') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        if (!body.legalAccepted) {
+          return send(res, 400, JSON.stringify({
+            ok: false,
+            error: 'You must accept the legal disclaimer before saving subscription configuration.',
+          }));
+        }
+        if (!body.providerName || !body.keyEnv) {
+          return send(res, 400, JSON.stringify({
+            ok: false,
+            error: 'providerName and keyEnv are required.',
+          }));
+        }
+
+        // Build the provider config entry
+        const providerEntry = {
+          name: body.providerName,
+          displayName: body.planName || body.providerName,
+          wire: body.wire || 'anthropic',
+          baseUrl: body.baseUrl || 'https://api.anthropic.com',
+          auth: {
+            mode: 'subscription',
+            keyEnv: body.keyEnv,
+            planName: body.planName || body.providerName,
+            monthlyCostUsd: body.monthlyCostUsd ?? 0,
+            lastVerified: new Date().toISOString().slice(0, 10),
+          },
+          features: { supportsStreaming: true, supportsToolUse: true },
+        };
+
+        // Apply provider config via policy update
+        const update = {};
+        update[`providers.${body.providerName}`] = providerEntry;
+        applyDottedUpdates(update, config);
+
+        return send(res, 201, JSON.stringify({
+          ok: true,
+          message: `Subscription configured. Set the ${body.keyEnv} environment variable and restart the daemon.`,
+          providerName: body.providerName,
+        }));
       }
 
       // ── Run detail (links a run to its ledger costs) ────────────────────
