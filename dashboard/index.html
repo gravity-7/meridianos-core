@@ -414,6 +414,62 @@ button:active { transform: translateY(0); box-shadow: none; }
     <div id="parkedList" style="display:none;margin-top:6px"></div>
   </div>
 
+  <div class="live" id="analyticsSection">
+    <div class="h">spend analytics <span id="analyticsDateRange" style="font-weight:400;color:var(--text-muted);margin-left:4px">· last 30d</span></div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <button onclick="setAnalyticsRange(1)" data-range="1" class="ar-btn" style="font-size:12px;padding:4px 10px">Today</button>
+      <button onclick="setAnalyticsRange(7)" data-range="7" class="ar-btn" style="font-size:12px;padding:4px 10px">7 days</button>
+      <button onclick="setAnalyticsRange(30)" data-range="30" class="ar-btn active" style="font-size:12px;padding:4px 10px">30 days</button>
+      <button onclick="setAnalyticsRange(90)" data-range="90" class="ar-btn" style="font-size:12px;padding:4px 10px">90 days</button>
+      <button onclick="exportAnalyticsCSV()" style="font-size:12px;padding:4px 10px;margin-left:auto">📥 Export CSV</button>
+    </div>
+    <div class="grid" id="kpiCards" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:1rem">
+      <div class="tile" id="kpiTotalSpend"><div class="h" style="margin:0;font-size:11px">Total Spend</div><div style="font-size:22px;font-weight:600" id="kvTotalSpend">—</div></div>
+      <div class="tile" id="kpiChange"><div class="h" style="margin:0;font-size:11px">vs Prev Period</div><div style="font-size:22px;font-weight:600" id="kvChange">—</div></div>
+      <div class="tile" id="kpiTokens"><div class="h" style="margin:0;font-size:11px">Total Tokens</div><div style="font-size:22px;font-weight:600" id="kvTokens">—</div></div>
+      <div class="tile" id="kpiCalls"><div class="h" style="margin:0;font-size:11px">API Calls</div><div style="font-size:22px;font-weight:600" id="kvCalls">—</div></div>
+      <div class="tile" id="kpiTopProvider"><div class="h" style="margin:0;font-size:11px">Top Provider</div><div style="font-size:14px;font-weight:600" id="kvTopProvider">—</div></div>
+      <div class="tile" id="kpiTopModel"><div class="h" style="margin:0;font-size:11px">Top Model</div><div style="font-size:14px;font-weight:600" id="kvTopModel">—</div></div>
+    </div>
+    <div class="grid" style="grid-template-columns:2fr 1fr">
+      <div class="tile" style="min-height:200px">
+        <div class="h" style="margin:0 0 8px;font-size:12px">Spend Over Time</div>
+        <canvas id="analyticsTimeseries" style="width:100%;height:200px"></canvas>
+      </div>
+      <div class="tile" style="min-height:200px">
+        <div class="h" style="margin:0 0 8px;font-size:12px">By Provider</div>
+        <canvas id="analyticsDonut" style="width:100%;height:200px"></canvas>
+      </div>
+    </div>
+    <div id="analyticsLoading" style="display:none;text-align:center;color:var(--text-muted);padding:20px">Loading analytics...</div>
+    <div id="analyticsEmpty" style="display:none;text-align:center;color:var(--text-muted);padding:20px">Connect a provider and run your first task to see spend analytics.</div>
+    <div id="analyticsError" style="display:none;text-align:center;color:var(--text-danger);padding:20px">Analytics unavailable. Is the gateway ledger accessible?</div>
+  </div>
+
+  <!-- P5: Budget Intelligence -->
+  <div class="live" id="budgetSection" style="margin-top:1rem">
+    <div class="h">budget intelligence <span id="budgetStatus" style="font-weight:400;color:var(--text-muted);margin-left:4px"></span></div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+      <div class="tile"><div class="h" style="margin:0;font-size:11px">Spend-to-Date</div><div style="font-size:22px;font-weight:600" id="bvSpend">—</div><div class="meter"><span id="budgetMeter" style="width:0%;background:var(--fill-accent)"></span></div><div style="font-size:11px;color:var(--text-muted)" id="bvPct">—</div></div>
+      <div class="tile"><div class="h" style="margin:0;font-size:11px">Forecast</div><div style="font-size:22px;font-weight:600" id="bvForecast">—</div><div style="font-size:12px"><span id="bvStatus">—</span></div><div style="font-size:11px;color:var(--text-muted)" id="bvBurn">—</div></div>
+      <div class="tile"><div class="h" style="margin:0;font-size:11px">Emergency</div><button id="pauseSpendBtn" onclick="toggleSpendPause()" style="font-size:13px;padding:8px 16px;margin-top:8px;width:100%">⏸ Pause AI Spend</button><div id="pauseReason" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div></div>
+    </div>
+  </div>
+
+  <!-- P5: Alerts -->
+  <div class="live" id="alertsSection" style="margin-top:1rem">
+    <div class="h">alerts <span id="alertsSummary" style="font-weight:400;color:var(--text-muted);margin-left:4px"></span></div>
+    <div id="alertsHistory" style="font-size:12px;color:var(--text-muted);max-height:200px;overflow-y:auto"></div>
+    <button onclick="testAlert()" style="font-size:12px;padding:4px 10px;margin-top:8px">🧪 Test Alert</button>
+    <span id="testAlertResult" style="font-size:11px;color:var(--text-muted);margin-left:8px"></span>
+  </div>
+
+  <!-- P5: Optimization -->
+  <div class="live" id="optimizationSection" style="margin-top:1rem">
+    <div class="h">optimization <span id="optSummary" style="font-weight:400;color:var(--text-muted);margin-left:4px"></span></div>
+    <div id="optList" style="font-size:12px"></div>
+  </div>
+
   <div class="live">
     <div class="h">compute budget</div>
     <!-- Roster-driven (§4b-ii): one 5h + one week tile per agent in config.domain.agents, built by
@@ -1943,6 +1999,296 @@ poll = async function() {
   fetchIdeStatus().catch(() => {});
   fetchSubscriptions().catch(() => {});
 };
+
+// ─── P5: Analytics Polling ─────────────────────────────────────────────────
+
+let analyticsRangeDays = 30;
+
+function setAnalyticsRange(days) {
+  analyticsRangeDays = days;
+  document.querySelectorAll('.ar-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.ar-btn[data-range="${days}"]`)?.classList.add('active');
+  const labels = {1:'Today',7:'7 days',30:'30 days',90:'90 days'};
+  $('analyticsDateRange').textContent = '· last ' + (labels[days]||days+'d');
+  fetchAnalytics();
+}
+
+// ─── HTML5 Canvas Chart Classes (T024) ──────────────────────────────────────
+
+class LineChart {
+  constructor(canvas) { this.canvas = canvas; this.ctx = canvas.getContext('2d'); }
+  render(series, opts={}) {
+    const {width, height} = this.canvas;
+    const ctx = this.ctx;
+    ctx.clearRect(0,0,width,height);
+    if (!series.length) return;
+    const pad = {top:10,right:20,bottom:30,left:50};
+    const w = width-pad.left-pad.right;
+    const h = height-pad.top-pad.bottom;
+
+    let maxCost = 0, pts = [];
+    for (const s of series) {
+      for (const d of s.data) { maxCost = Math.max(maxCost, d.cost||0); pts.push(d); }
+    }
+    if (maxCost===0) maxCost = 1;
+    const xScale = w / Math.max(1, pts.length-1);
+    const yScale = h / maxCost;
+
+    // Grid lines
+    ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--border').trim()||'#e2e8f0';
+    ctx.lineWidth = 0.5;
+    for (let i=0;i<=4;i++) {
+      const y = pad.top + h*(i/4);
+      ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(pad.left+w,y); ctx.stroke();
+      ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-muted').trim()||'#94a3b8';
+      ctx.font = '10px Inter,sans-serif';
+      ctx.fillText('$'+(maxCost*(1-i/4)).toFixed(2), 2, y+3);
+    }
+
+    // Lines
+    const colors = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#8b5cf6'];
+    series.forEach((s, si) => {
+      ctx.strokeStyle = colors[si%colors.length];
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      s.data.forEach((d,i) => {
+        const x = pad.left + i*xScale;
+        const y = pad.top + h - (d.cost||0)*yScale;
+        i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+      });
+      ctx.stroke();
+    });
+  }
+}
+
+class DonutChart {
+  constructor(canvas) { this.canvas = canvas; this.ctx = canvas.getContext('2d'); }
+  render(items, opts={}) {
+    const {width, height} = this.canvas;
+    const ctx = this.ctx;
+    ctx.clearRect(0,0,width,height);
+    if (!items.length) return;
+    const cx = width/2, cy = height/2, outerR = Math.min(cx,cy)-10, innerR = outerR*0.55;
+    let total = items.reduce((s,i)=>s+(i.cost||0),0);
+    if (total===0) total=1;
+
+    const colors = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#8b5cf6','#ec4899','#06b6d4','#84cc16'];
+    let angle = -Math.PI/2;
+    items.forEach((item, i) => {
+      const slice = ((item.cost||0)/total)*Math.PI*2;
+      ctx.fillStyle = colors[i%colors.length];
+      ctx.beginPath();
+      ctx.arc(cx,cy,outerR,angle,angle+slice);
+      ctx.arc(cx,cy,innerR,angle+slice,angle,true);
+      ctx.fill();
+      // Label
+      const midAngle = angle+slice/2;
+      const lx = cx + Math.cos(midAngle)*outerR*0.75;
+      const ly = cy + Math.sin(midAngle)*outerR*0.75;
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 9px Inter,sans-serif';
+      ctx.textAlign = 'center';
+      const pct = Math.round(((item.cost||0)/total)*100);
+      if (slice>0.2) ctx.fillText(pct+'%', lx, ly+3);
+      angle += slice;
+    });
+    // Center text
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-primary').trim();
+    ctx.font = 'bold 14px Inter,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('$'+total.toFixed(2), cx, cy+5);
+  }
+}
+
+// ─── Analytics Fetch & Render (T026) ────────────────────────────────────────
+
+async function fetchAnalytics() {
+  const from = new Date(Date.now()-analyticsRangeDays*86400000).toISOString();
+  const to = new Date().toISOString();
+  try {
+    $('analyticsLoading').style.display='block';
+    $('analyticsEmpty').style.display='none';
+    $('analyticsError').style.display='none';
+
+    const [ovr,tsr,brr] = await Promise.all([
+      fetch(`/api/analytics/overview?from=${from}&to=${to}`).then(r=>r.json()),
+      fetch(`/api/analytics/timeseries?from=${from}&to=${to}&groupBy=provider`).then(r=>r.json()),
+      fetch(`/api/analytics/breakdown?dimension=provider&from=${from}&to=${to}&limit=8`).then(r=>r.json()),
+    ]);
+
+    $('analyticsLoading').style.display='none';
+
+    if (!ovr.totalSpend && !ovr.totalTokens && !ovr.totalApiCalls) {
+      $('analyticsEmpty').style.display='block';
+      return;
+    }
+
+    // KPI cards
+    $('kvTotalSpend').textContent = '$'+(ovr.totalSpend||0).toFixed(2);
+    $('kvChange').textContent = ovr.spendChangePct!=null ? (ovr.spendChangePct>=0?'+':'')+ovr.spendChangePct+'%' : '—';
+    $('kvChange').style.color = ovr.spendChangePct>0?'var(--text-danger)':(ovr.spendChangePct<0?'var(--text-success)':'');
+    $('kvTokens').textContent = formatNumber(ovr.totalTokens||0);
+    $('kvCalls').textContent = formatNumber(ovr.totalApiCalls||0);
+    $('kvTopProvider').textContent = ovr.topProvider ? `${ovr.topProvider.name} (${ovr.topProvider.pct}%)` : '—';
+    $('kvTopModel').textContent = ovr.topModel ? ovr.topModel.name.split('-').slice(0,3).join('-') : '—';
+
+    // Charts
+    const tsCanvas = document.getElementById('analyticsTimeseries');
+    if (tsCanvas) new LineChart(tsCanvas).render(tsr.series||[]);
+
+    const donutCanvas = document.getElementById('analyticsDonut');
+    if (donutCanvas) new DonutChart(donutCanvas).render(brr.items||[]);
+
+  } catch(e) {
+    $('analyticsLoading').style.display='none';
+    $('analyticsError').style.display='block';
+    console.error('Analytics fetch error:', e);
+  }
+}
+
+function exportAnalyticsCSV() {
+  const from = new Date(Date.now()-analyticsRangeDays*86400000).toISOString();
+  const to = new Date().toISOString();
+  const a = document.createElement('a');
+  a.href = `/api/analytics/export?from=${from}&to=${to}`;
+  a.download = `analytics-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+}
+
+function formatNumber(n) {
+  if (n>=1e6) return (n/1e6).toFixed(1)+'M';
+  if (n>=1e3) return (n/1e3).toFixed(1)+'K';
+  return String(n);
+}
+
+// Add analytics to polls
+const _origPoll2 = poll;
+poll = async function() {
+  await _origPoll2();
+  fetchAnalytics().catch(()=>{});
+  fetchBudget().catch(()=>{});
+  fetchOptimization().catch(()=>{});
+};
+
+// ─── P5: Budget Intelligence (T042) ────────────────────────────────────────
+
+async function fetchBudget() {
+  try {
+    const r = await fetch('/api/analytics/budget').then(r=>r.json());
+    $('bvSpend').textContent = '$'+(r.spendToDate||0).toFixed(2);
+    $('bvForecast').textContent = '$'+(r.projectedTotal||0).toFixed(2);
+    $('bvBurn').textContent = 'burn: $'+(r.dailyBurnRate||0).toFixed(2)+'/day';
+    $('bvPct').textContent = (r.pctUsed||0)+'% of $'+(r.budget?.amount||0);
+    $('budgetMeter').style.width = Math.min(100, r.pctUsed||0)+'%';
+    if (r.pctUsed > 90) $('budgetMeter').style.background = 'var(--fill-danger)';
+    else if (r.pctUsed > 70) $('budgetMeter').style.background = 'var(--text-warning)';
+
+    $('bvStatus').textContent = r.status||'on-track';
+    if (r.status === 'over-budget') $('bvStatus').style.color = 'var(--text-danger)';
+    else if (r.status === 'at-risk') $('bvStatus').style.color = 'var(--text-warning)';
+    else $('bvStatus').style.color = 'var(--text-success)';
+
+    $('budgetStatus').textContent = '· '+(r.status||'on-track')+' · $'+(r.spendToDate||0).toFixed(2)+' / $'+(r.budget?.amount||0);
+
+    // Spend pause state
+    try {
+      const pr = await fetch('/api/analytics/spend-pause').then(r=>r.json());
+      if (pr.isPaused) {
+        $('pauseSpendBtn').textContent = '▶ Resume AI Spend';
+        $('pauseSpendBtn').style.background = 'var(--bg-success)';
+        $('pauseSpendBtn').style.color = 'var(--text-success)';
+        $('pauseReason').textContent = 'Paused: '+(pr.reason||'manual');
+      } else {
+        $('pauseSpendBtn').textContent = '⏸ Pause AI Spend';
+        $('pauseSpendBtn').style.background = 'var(--bg-danger)';
+        $('pauseSpendBtn').style.color = 'var(--text-danger)';
+        $('pauseReason').textContent = '';
+      }
+    } catch { /* spend-pause endpoint may not be available */ }
+  } catch { /* budget not available */ }
+}
+
+async function toggleSpendPause() {
+  const btn = $('pauseSpendBtn');
+  const isPaused = btn.textContent.includes('Resume');
+  const action = isPaused ? 'resume' : 'pause';
+  const reason = action === 'pause' ? prompt('Reason for pausing AI spend?') || 'Manual pause' : '';
+  try {
+    const r = await fetch('/api/analytics/spend-pause', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-aios-token': '__AIOS_TOKEN__' },
+      body: JSON.stringify({ action, reason }),
+    }).then(r=>r.json());
+    fetchBudget();
+  } catch(e) { alert('Failed: '+e.message); }
+}
+
+// ─── P5: Alerts (T052) ─────────────────────────────────────────────────────
+
+async function testAlert() {
+  $('testAlertResult').textContent = 'Sending...';
+  try {
+    const r = await fetch('/api/analytics/alerts/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-aios-token': '__AIOS_TOKEN__' },
+      body: '{}',
+    }).then(r=>r.json());
+    $('testAlertResult').textContent = r.ok ? '✓ Sent to '+r.results.length+' channel(s)' : '✗ '+r.error;
+    // Refresh alert history
+    try {
+      const ar = await fetch('/api/analytics/alerts/config').then(r=>r.json());
+      $('alertsSummary').textContent = '· '+(ar.channels||[]).length+' channel(s), '+(ar.rules||[]).length+' rule(s)';
+    } catch {}
+  } catch(e) { $('testAlertResult').textContent = '✗ '+e.message; }
+}
+
+// ─── P5: Optimization (T060) ────────────────────────────────────────────────
+
+async function fetchOptimization() {
+  try {
+    const r = await fetch('/api/analytics/optimization/recommendations?status=active').then(r=>r.json());
+    const recs = r.recommendations || [];
+    $('optSummary').textContent = '· '+recs.length+' active recommendation(s)';
+    if (recs.length === 0) {
+      $('optList').innerHTML = '<span style="color:var(--text-muted)">No recommendations yet. Requires 7+ days of usage data.</span>';
+      return;
+    }
+    let html = '';
+    for (const rec of recs.slice(0, 5)) {
+      html += `<div class="row" style="justify-content:space-between">
+        <span><strong>${rec.task_type}</strong>: ${rec.current_model} → ${rec.recommended_model}</span>
+        <span style="color:var(--text-success)">Save ~$${rec.estimated_weekly_savings}/wk</span>
+        <span style="font-size:11px">confidence: ${Math.round((rec.confidence||0)*100)}%</span>
+        <button onclick="applyOpt('${rec.id}')" style="font-size:11px;padding:2px 8px">Apply</button>
+        <button onclick="dismissOpt('${rec.id}')" style="font-size:11px;padding:2px 8px">Dismiss</button>
+      </div>`;
+    }
+    $('optList').innerHTML = html;
+  } catch { /* optimization not available */ }
+}
+
+async function applyOpt(id) {
+  try {
+    await fetch('/api/analytics/optimization/apply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-aios-token': '__AIOS_TOKEN__' },
+      body: JSON.stringify({ id }),
+    });
+    fetchOptimization();
+  } catch(e) { alert('Failed: '+e.message); }
+}
+
+async function dismissOpt(id) {
+  const reason = prompt('Reason for dismissal?') || '';
+  try {
+    await fetch('/api/analytics/optimization/dismiss', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-aios-token': '__AIOS_TOKEN__' },
+      body: JSON.stringify({ id, reason }),
+    });
+    fetchOptimization();
+  } catch(e) { alert('Failed: '+e.message); }
+}
 
 </script>
 </body>

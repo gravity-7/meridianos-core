@@ -211,3 +211,50 @@ export function reviewerFor(writer, roster) {
   if (!roster) return undefined;
   return roster.find((a) => a !== writer);
 }
+
+// ─── P5: Analytics config parsing ───────────────────────────────────────────
+
+/**
+ * Parse analytics config section from policy.yaml with defaults.
+ * Returns a normalized analytics config object safe for use by aggregation, alerts,
+ * budget forecasting, and optimization engines.
+ */
+export function resolveAnalyticsConfig(policy = {}) {
+  const a = policy?.analytics ?? {};
+
+  return {
+    aggregation: {
+      intervalMinutes: Number(a.aggregation?.intervalMinutes) || 60,
+    },
+    alerts: {
+      channels: (Array.isArray(a.alerts?.channels) ? a.alerts.channels : []).map((ch) => ({
+        type: ch.type || 'webhook',
+        url: ch.url || '',
+        severity: ch.severity || 'warning',
+        cooldownSeconds: Number(ch.cooldownSeconds) || 3600,
+        enabled: ch.enabled !== false,
+        // Email-specific fields
+        host: ch.host || '',
+        port: Number(ch.port) || 587,
+        user: ch.user || '',
+        pass: ch.pass || '',
+        from: ch.from || '',
+        to: ch.to || '',
+      })),
+      rules: (Array.isArray(a.alerts?.rules) ? a.alerts.rules : []).map((r) => ({
+        id: r.id || `rule-${Math.random().toString(36).slice(2, 8)}`,
+        type: r.type || 'budget_threshold',
+        thresholdPct: Number(r.thresholdPct) || 80,
+        severity: r.severity || 'warning',
+        cooldownSeconds: Number(r.cooldownSeconds) || 3600,
+        enabled: r.enabled !== false,
+      })),
+    },
+    budget: {
+      monthlyLimit: Number(a.budget?.monthlyLimit) || 0,
+    },
+    optimization: {
+      minDataDays: Number(a.optimization?.minDataDays) || 7,
+    },
+  };
+}

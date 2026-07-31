@@ -56,6 +56,12 @@ function migrate(db) {
   // try/catch because the columns may already exist from a fresh CREATE TABLE run above.
   try { db.exec('ALTER TABLE token_events ADD COLUMN ide_name TEXT'); } catch { /* already present */ }
   try { db.exec("ALTER TABLE token_events ADD COLUMN billing_type TEXT NOT NULL DEFAULT 'api_key'"); } catch { /* already present */ }
+
+  // P5: Ensure the single spend_pause_state row exists (first boot after schema creation).
+  const existing = db.prepare('SELECT COUNT(*) AS c FROM spend_pause_state').get();
+  if (existing && existing.c === 0) {
+    db.prepare('INSERT INTO spend_pause_state (is_paused) VALUES (0)').run();
+  }
 }
 
 /**

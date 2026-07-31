@@ -24,6 +24,8 @@ import { validatePolicy, applyDottedUpdates } from '../policy-validate.mjs';
 import { handleAction } from './actions.mjs';
 import { readSpec, writeSpec } from './spec-file.mjs';
 import { openLedger, queryWindow, listEvents } from '../gateway/ledger.mjs';
+import { queryOverview, queryTimeseries, queryBreakdown, queryTaskCost, queryProjectCosts, computeBudgetForecast, detectAnomalies } from '../analytics.mjs';
+import { getLastAggregatedHour, getLastAggregatedDay } from '../aggregation.mjs';
 import { readRuns } from '../runlog.mjs';
 import { getProviderHealth } from '../provider-health.mjs';
 import { detectInstalledIdes, generateProxyConfig, testIdeConnectivity, KNOWN_IDES } from '../ide-proxy.mjs';
@@ -296,6 +298,248 @@ export function createDashboardServer(config) {
         const breakdown = providerBreakdownFromLedger(config);
         return send(res, 200, JSON.stringify({ ok: true, available: breakdown !== null, providers: breakdown || {} }));
       }
+      // ── P5: Analytics endpoints (AI Spend Observability) ─────────────────
+
+      // Helper to open the gateway ledger and get tenant
+      const getAnalyticsLedger = () => getLedger(config);
+
+      // GET /api/analytics/overview — KPI aggregates (T019)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/overview') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable', reason: 'Ledger database not accessible' }));
+        const from = url.searchParams.get('from') || undefined;
+        const to = url.searchParams.get('to') || undefined;
+        const overview = queryOverview(ledger, from, to);
+        return send(res, 200, JSON.stringify(overview));
+      }
+
+      // GET /api/analytics/timeseries — spend time-series (T020)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/timeseries') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+        const from = url.searchParams.get('from') || undefined;
+        const to = url.searchParams.get('to') || undefined;
+        const groupBy = url.searchParams.get('groupBy') || 'provider';
+        const timeseries = queryTimeseries(ledger, from, to, groupBy);
+        return send(res, 200, JSON.stringify(timeseries));
+      }
+
+      // GET /api/analytics/breakdown — ranked breakdown (T021)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/breakdown') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+        const dimension = url.searchParams.get('dimension') || 'provider';
+        const from = url.searchParams.get('from') || undefined;
+        const to = url.searchParams.get('to') || undefined;
+        const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+        const breakdown = queryBreakdown(ledger, dimension, from, to, limit);
+        return send(res, 200, JSON.stringify(breakdown));
+      }
+
+      // GET /api/analytics/export — CSV export (T022)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/export') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+        const from = url.searchParams.get('from') || undefined;
+        const to = url.searchParams.get('to') || undefined;
+
+        // Query breakdown data as base for CSV
+        const breakdown = queryBreakdown(ledger, 'model', from, to, 1000);
+        const overview = queryOverview(ledger, from, to);
+
+        const csvLines = ['Date Range,Total Spend,Total Tokens,Total API Calls'];
+        csvLines.push(`${overview.period.from},${overview.totalSpend},${overview.totalTokens},${overview.totalApiCalls}`);
+        csvLines.push('');
+        csvLines.push('Model,Cost (USD),Tokens,API Calls,Share %');
+        for (const item of breakdown.items) {
+          const escapedKey = item.key.includes(',') ? `"${item.key}"` : item.key;
+          csvLines.push(`${escapedKey},${item.cost},${item.tokens},${item.apiCalls},${item.pct}`);
+        }
+
+        const csv = csvLines.join('\n');
+        return send(res, 200, csv, 'text/csv; charset=utf-8');
+      }
+
+      // GET /api/analytics/aggregation/status — aggregation debug info (T023)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/aggregation/status') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+        const lastHourly = getLastAggregatedHour(ledger);
+        const lastDaily = getLastAggregatedDay(ledger);
+        // Count pending windows: events newer than last aggregation
+        let pendingHours = 0;
+        if (lastHourly) {
+          const r = ledger.prepare(
+            'SELECT COUNT(DISTINCT substr(ts, 1, 13)) AS c FROM token_events WHERE ts > ? AND cost_usd IS NOT NULL',
+          ).get(lastHourly);
+          pendingHours = r?.c ?? 0;
+        }
+        return send(res, 200, JSON.stringify({
+          lastHourlyRun: lastHourly,
+          lastDailyRun: lastDaily,
+          hourlyWindowsPending: pendingHours,
+        }));
+      }
+
+      // POST /api/analytics/spend-pause — toggle spend pause (T041)
+      if (req.method === 'POST' && url.pathname === '/api/analytics/spend-pause') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+
+        const action = body.action || 'status';
+        const reason = body.reason || '';
+
+        if (action === 'pause') {
+          ledger.prepare(
+            "UPDATE spend_pause_state SET is_paused = 1, paused_at = ?, paused_by = 'dashboard', reason = ?, resumed_at = NULL",
+          ).run(new Date().toISOString(), reason);
+          return send(res, 200, JSON.stringify({ isPaused: true, message: 'All AI spend paused' }));
+        } else if (action === 'resume') {
+          ledger.prepare(
+            "UPDATE spend_pause_state SET is_paused = 0, resumed_at = ?, reason = NULL",
+          ).run(new Date().toISOString());
+          return send(res, 200, JSON.stringify({ isPaused: false, message: 'AI spend resumed' }));
+        } else {
+          return send(res, 400, JSON.stringify({ error: 'Invalid action. Use "pause" or "resume".' }));
+        }
+      }
+
+      // GET /api/analytics/spend-pause — read pause state (T041)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/spend-pause') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+        const row = ledger.prepare('SELECT * FROM spend_pause_state').get();
+        return send(res, 200, JSON.stringify({
+          isPaused: row?.is_paused === 1,
+          pausedAt: row?.paused_at || null,
+          pausedBy: row?.paused_by || null,
+          reason: row?.reason || null,
+          resumedAt: row?.resumed_at || null,
+        }));
+      }
+
+      // GET /api/analytics/budget — budget forecast (T039)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/budget') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+        try {
+          const policy = loadPolicy(undefined, config);
+          const aConfig = policy?.analytics ?? {};
+          const budgetConfig = {
+            monthlyLimit: aConfig?.budget?.monthlyLimit ?? 500,
+          };
+          const forecast = computeBudgetForecast(ledger, budgetConfig);
+          const anomalies = detectAnomalies(ledger);
+          return send(res, 200, JSON.stringify({ ...forecast, anomalies }));
+        } catch (e) {
+          return send(res, 200, JSON.stringify({ error: e.message }));
+        }
+      }
+
+      // GET /api/analytics/task-cost — per-task cost (T030)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/task-cost') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+        const taskId = url.searchParams.get('taskId');
+        const includeRuns = url.searchParams.get('includeRuns') === 'true';
+        if (!taskId) return send(res, 400, JSON.stringify({ error: 'taskId query parameter required' }));
+        const result = queryTaskCost(ledger, taskId, includeRuns);
+        return send(res, 200, JSON.stringify(result));
+      }
+
+      // GET /api/analytics/project-costs — per-project cost ranking (T031)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/project-costs') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+        const project = url.searchParams.get('project');
+        const orderBy = url.searchParams.get('orderBy') || 'cost';
+        const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+        if (!project) return send(res, 400, JSON.stringify({ error: 'project query parameter required' }));
+        const result = queryProjectCosts(ledger, project, orderBy, limit);
+        return send(res, 200, JSON.stringify(result));
+      }
+
+      // ── P5: Optimization endpoints (US6) ───────────────────────────────
+
+      // GET /api/analytics/optimization/recommendations (T056)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/optimization/recommendations') {
+        const ledger = getAnalyticsLedger();
+        if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+        try {
+          const status = url.searchParams.get('status') || 'active';
+          const rows = ledger.prepare(
+            "SELECT * FROM optimization_rules WHERE status = ? ORDER BY estimated_weekly_savings DESC",
+          ).all(status);
+          return send(res, 200, JSON.stringify({ ok: true, recommendations: rows }));
+        } catch (e) {
+          return send(res, 200, JSON.stringify({ ok: true, recommendations: [] }));
+        }
+      }
+
+      // POST /api/analytics/optimization/apply (T057)
+      if (req.method === 'POST' && url.pathname === '/api/analytics/optimization/apply') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        if (!body.id) return send(res, 400, JSON.stringify({ error: 'id required' }));
+        try {
+          const { applyRecommendation } = await import('../optimization.mjs');
+          const ledger = getAnalyticsLedger();
+          if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+          const result = applyRecommendation(ledger, body.id);
+          return send(res, 200, JSON.stringify(result));
+        } catch (e) {
+          return send(res, 500, JSON.stringify({ error: e.message }));
+        }
+      }
+
+      // POST /api/analytics/optimization/dismiss (T058)
+      if (req.method === 'POST' && url.pathname === '/api/analytics/optimization/dismiss') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        if (!body.id) return send(res, 400, JSON.stringify({ error: 'id required' }));
+        try {
+          const { dismissRecommendation } = await import('../optimization.mjs');
+          const ledger = getAnalyticsLedger();
+          if (!ledger) return send(res, 503, JSON.stringify({ error: 'Analytics unavailable' }));
+          const result = dismissRecommendation(ledger, body.id, body.reason || '');
+          return send(res, 200, JSON.stringify(result));
+        } catch (e) {
+          return send(res, 500, JSON.stringify({ error: e.message }));
+        }
+      }
+
+      // POST /api/analytics/alerts/test — test alert delivery (T050)
+      if (req.method === 'POST' && url.pathname === '/api/analytics/alerts/test') {
+        try {
+          const { dispatchAlert } = await import('../alerts.mjs');
+          const policy = loadPolicy(undefined, config);
+          const { resolveAnalyticsConfig: rac } = await import('../config.mjs');
+          const analyticsConfig = rac(policy);
+          const channels = analyticsConfig.alerts.channels.filter(c => c.enabled);
+
+          const alert = {
+            type: 'test',
+            severity: 'info',
+            title: 'MeridianOS Test Alert',
+            message: 'This is a test alert from the dashboard to verify your alert channel configuration.',
+            spendToDate: 0,
+            budgetLimit: analyticsConfig.budget.monthlyLimit || 500,
+            pctUsed: 0,
+          };
+
+          const results = await dispatchAlert(alert, channels);
+          return send(res, 200, JSON.stringify({ ok: true, message: `Test alert dispatched to ${results.length} channel(s)`, results }));
+        } catch (e) {
+          return send(res, 500, JSON.stringify({ error: e.message }));
+        }
+      }
+
+      // GET /api/analytics/alerts/config — alert configuration (T049)
+      if (req.method === 'GET' && url.pathname === '/api/analytics/alerts/config') {
+        const policy = loadPolicy(undefined, config);
+        const aConfig = policy?.analytics?.alerts ?? {};
+        return send(res, 200, JSON.stringify({ ok: true, channels: aConfig.channels || [], rules: aConfig.rules || [] }));
+      }
+
       // ── Provider test endpoint (US2) ──────────────────────────────────
       if (req.method === 'POST' && url.pathname === '/api/providers/test') {
         const { provider: providerName } = JSON.parse((await readBody(req)) || '{}');
