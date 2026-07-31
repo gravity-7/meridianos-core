@@ -58,16 +58,25 @@ export function aggregateHour(db, hourTs) {
     console.warn(`Aggregation: skipping ${corrupted.c} corrupted event(s) in hour ${hourTs} (NULL cost or negative tokens)`);
   }
 
-  for (const r of rows) {
-    const task = r.task === '__null__' ? null : r.task;
-    const windowKey = `${hourTs}:${r.provider}:${r.model}:${r.agent}:${task ?? 'null'}`;
+  // Wrap all INSERTs in a transaction to avoid N+1 auto-commit overhead
+  // and prevent SQLITE_BUSY contention with live gateway traffic.
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      const task = r.task === '__null__' ? null : r.task;
+      const windowKey = `${hourTs}:${r.provider}:${r.model}:${r.agent}:${task ?? 'null'}`;
 
-    insert.run(
-      windowKey, hourTs, r.provider, r.model, r.agent, task,
-      r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
-      r.total_tokens, r.cost_usd, r.api_calls, now,
-    );
-    count++;
+      insert.run(
+        windowKey, hourTs, r.provider, r.model, r.agent, task,
+        r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
+        r.total_tokens, r.cost_usd, r.api_calls, now,
+      );
+      count++;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
   }
 
   return count;
@@ -111,15 +120,23 @@ export function aggregateDay(db, dayTs) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
 
-  for (const r of rows) {
-    const windowKey = `${day}:${r.provider}:${r.model}:${r.agent}:${r.task ?? 'null'}`;
+  // Wrap in transaction to avoid N+1 auto-commit overhead
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      const windowKey = `${day}:${r.provider}:${r.model}:${r.agent}:${r.task ?? 'null'}`;
 
-    insert.run(
-      windowKey, day, r.provider, r.model, r.agent, r.task,
-      r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
-      r.total_tokens, r.cost_usd, r.api_calls, now,
-    );
-    count++;
+      insert.run(
+        windowKey, day, r.provider, r.model, r.agent, r.task,
+        r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
+        r.total_tokens, r.cost_usd, r.api_calls, now,
+      );
+      count++;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
   }
 
   return count;
@@ -158,6 +175,14 @@ export function aggregatePendingWindows(db) {
 
   // Find the earliest unaggregated event
   const lastHour = getLastAggregatedHour(db);
+
+  // Always re-aggregate the most recent previously-aggregated hour to catch
+  // late-arriving events that landed after the last aggregation window closed.
+  // INSERT OR REPLACE makes this safely idempotent.
+  if (lastHour) {
+    aggregateHour(db, lastHour);
+  }
+
   const startFrom = lastHour
     ? new Date(new Date(lastHour).getTime() + 3600000).toISOString()
     : null;

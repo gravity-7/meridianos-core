@@ -25,8 +25,9 @@ export function checkCooldown(db, ruleId, cooldownSecs = 3600) {
     const lastFired = new Date(row.last_fired_at).getTime();
     const now = Date.now();
     return (now - lastFired) < (cooldownSecs * 1000);
-  } catch {
-    return false; // On error, allow the alert (fail-open for safety)
+  } catch (e) {
+    console.warn(`Alerts: checkCooldown failed for rule ${ruleId} — ${e.message}. Allowing alert (fail-open).`);
+    return false;
   }
 }
 
@@ -46,7 +47,9 @@ function recordAlert(db, ruleId, value) {
         'INSERT INTO alert_state (rule_id, last_fired_at, last_value, fire_count, updated_at) VALUES (?, ?, ?, 1, ?)',
       ).run(ruleId, now, value, now);
     }
-  } catch { /* best-effort */ }
+  } catch (e) {
+    console.warn(`Alerts: recordAlert failed for rule ${ruleId} — ${e.message}. Alert state not persisted.`);
+  }
 }
 
 /**
@@ -215,6 +218,13 @@ export async function evaluateAlerts(db, analyticsConfig, state = {}) {
     if (rule.type === 'budget_threshold') {
       const threshold = rule.thresholdPct || 80;
       if ((state.pctUsed || 0) >= threshold) {
+        // Only fire if threshold was just crossed (alert fatigue prevention).
+        // Read last_value from alert_state; if the previous alert was already
+        // at or above this threshold, suppress re-firing.
+        const prevRow = db.prepare('SELECT last_value FROM alert_state WHERE rule_id = ?').get(rule.id);
+        const prevValue = prevRow?.last_value ?? 0;
+        if (prevValue >= threshold) continue; // Still above threshold from last fire — skip
+
         shouldFire = true;
         alert = {
           type: 'budget_threshold',
