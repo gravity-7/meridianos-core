@@ -86,6 +86,63 @@ export function validatePolicy(policy = {}) {
     }
   }
 
+  // --- P5 analytics ---
+  const VALID_ALERT_CHANNELS = new Set(['slack', 'email', 'webhook']);
+  const VALID_SEVERITIES = new Set(['info', 'warning', 'critical']);
+  const VALID_ALERT_TYPES = new Set(['budget_threshold', 'anomaly', 'optimization_available']);
+
+  // Validate analytics.aggregation
+  const aggInterval = num(policy?.analytics?.aggregation?.intervalMinutes);
+  if (aggInterval != null && (aggInterval < 1 || aggInterval > 1440)) {
+    err(`analytics.aggregation.intervalMinutes must be 1–1440 (got ${aggInterval})`);
+  }
+
+  // Validate analytics.budget
+  const monthlyLimit = num(policy?.analytics?.budget?.monthlyLimit);
+  if (monthlyLimit != null && monthlyLimit < 0) {
+    err(`analytics.budget.monthlyLimit must be ≥ 0 (got ${monthlyLimit})`);
+  }
+
+  // Validate analytics.alerts.channels
+  for (const ch of (policy?.analytics?.alerts?.channels ?? [])) {
+    if (ch.type && !VALID_ALERT_CHANNELS.has(ch.type)) {
+      err(`analytics.alerts.channels[].type '${ch.type}' must be one of ${[...VALID_ALERT_CHANNELS].join(' | ')}`);
+    }
+    if (ch.severity && !VALID_SEVERITIES.has(ch.severity)) {
+      err(`analytics.alerts.channels[].severity '${ch.severity}' must be one of ${[...VALID_SEVERITIES].join(' | ')}`);
+    }
+    if (ch.url && !/^https?:\/\//i.test(ch.url) && ch.type !== 'email') {
+      warn(`analytics.alerts.channels[].url '${ch.url}' may not be a valid URL — alerts will fail to dispatch`);
+    }
+    if (ch.type === 'email') {
+      if (ch.host && !ch.host.includes('.')) warn(`analytics.alerts.channels[].host '${ch.host}' looks invalid for SMTP`);
+      const port = num(ch.port);
+      if (port != null && (port < 1 || port > 65535)) err(`analytics.alerts.channels[].port must be 1–65535 (got ${port})`);
+    }
+  }
+
+  // Validate analytics.alerts.rules
+  for (const rule of (policy?.analytics?.alerts?.rules ?? [])) {
+    if (rule.type && !VALID_ALERT_TYPES.has(rule.type)) {
+      err(`analytics.alerts.rules[].type '${rule.type}' must be one of ${[...VALID_ALERT_TYPES].join(' | ')}`);
+    }
+    if (rule.severity && !VALID_SEVERITIES.has(rule.severity)) {
+      err(`analytics.alerts.rules[].severity '${rule.severity}' must be one of ${[...VALID_SEVERITIES].join(' | ')}`);
+    }
+    const tPct = num(rule.thresholdPct);
+    if (tPct != null && (tPct < 1 || tPct > 100)) {
+      err(`analytics.alerts.rules[].thresholdPct must be 1–100 (got ${tPct})`);
+    }
+    const cd = num(rule.cooldownSeconds);
+    if (cd != null && cd < 0) err(`analytics.alerts.rules[].cooldownSeconds must be ≥ 0 (got ${cd})`);
+  }
+
+  // Validate analytics.optimization
+  const minDays = num(policy?.analytics?.optimization?.minDataDays);
+  if (minDays != null && minDays < 1) {
+    err(`analytics.optimization.minDataDays must be ≥ 1 (got ${minDays})`);
+  }
+
   return { ok: errors.length === 0, errors, warnings };
 }
 

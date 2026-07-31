@@ -574,6 +574,21 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
   const start = now();
   const requestId = randomUUID();
 
+  // P5: Spend pause gate — single boolean read, <1ms overhead.
+  // Checked BEFORE token extraction so paused state blocks ALL requests immediately.
+  if (ledger) {
+    try {
+      const pauseState = ledger.prepare('SELECT is_paused, paused_at, reason FROM spend_pause_state').get();
+      if (pauseState && pauseState.is_paused === 1) {
+        return sendJson(res, 503, {
+          error: 'Spend is paused',
+          pausedAt: pauseState.paused_at,
+          reason: pauseState.reason || 'All AI spend has been paused by the operator',
+        });
+      }
+    } catch { /* table may not exist yet — allow request through */ }
+  }
+
   const token = extractToken(req);
   if (!token) return sendJson(res, 401, { error: 'gateway: missing token' });
 

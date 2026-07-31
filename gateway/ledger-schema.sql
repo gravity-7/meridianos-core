@@ -88,3 +88,87 @@ CREATE TABLE IF NOT EXISTS model_registry (
 CREATE INDEX IF NOT EXISTS idx_model_registry_provider ON model_registry(provider);
 CREATE INDEX IF NOT EXISTS idx_model_registry_tier ON model_registry(tier_assigned);
 CREATE INDEX IF NOT EXISTS idx_model_registry_deprecated ON model_registry(deprecated);
+
+-- P5: AI Spend Observability — analytics tables (005)
+
+-- analytics_hourly — materialized hourly aggregation of token_events.
+-- One row per (hour, provider, model, agent, task) combination.
+-- Idempotent upsert via INSERT OR REPLACE on window_key.
+CREATE TABLE IF NOT EXISTS analytics_hourly (
+  window_key        TEXT PRIMARY KEY,
+  hour_ts           TEXT NOT NULL,
+  provider          TEXT NOT NULL,
+  model             TEXT NOT NULL,
+  agent             TEXT NOT NULL,
+  task              TEXT,
+  input_tokens      INTEGER NOT NULL DEFAULT 0,
+  output_tokens     INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens      INTEGER NOT NULL DEFAULT 0,
+  cost_usd          REAL NOT NULL DEFAULT 0.0,
+  api_calls         INTEGER NOT NULL DEFAULT 0,
+  aggregated_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_hourly_hour ON analytics_hourly(hour_ts);
+CREATE INDEX IF NOT EXISTS idx_analytics_hourly_provider ON analytics_hourly(provider, hour_ts);
+CREATE INDEX IF NOT EXISTS idx_analytics_hourly_task ON analytics_hourly(task, hour_ts);
+
+-- analytics_daily — materialized daily aggregation rolled up from analytics_hourly.
+-- Same structure but day_ts instead of hour_ts.
+CREATE TABLE IF NOT EXISTS analytics_daily (
+  window_key        TEXT PRIMARY KEY,
+  day_ts            TEXT NOT NULL,
+  provider          TEXT NOT NULL,
+  model             TEXT NOT NULL,
+  agent             TEXT NOT NULL,
+  task              TEXT,
+  input_tokens      INTEGER NOT NULL DEFAULT 0,
+  output_tokens     INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens      INTEGER NOT NULL DEFAULT 0,
+  cost_usd          REAL NOT NULL DEFAULT 0.0,
+  api_calls         INTEGER NOT NULL DEFAULT 0,
+  aggregated_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_daily_day ON analytics_daily(day_ts);
+CREATE INDEX IF NOT EXISTS idx_analytics_daily_provider ON analytics_daily(provider, day_ts);
+
+-- alert_state — tracks alert firing state for cooldown enforcement.
+CREATE TABLE IF NOT EXISTS alert_state (
+  rule_id       TEXT PRIMARY KEY,
+  last_fired_at TEXT,
+  last_value    REAL,
+  fire_count    INTEGER NOT NULL DEFAULT 0,
+  updated_at    TEXT NOT NULL
+);
+
+-- optimization_rules — tracks applied and dismissed optimization recommendations.
+CREATE TABLE IF NOT EXISTS optimization_rules (
+  id                       TEXT PRIMARY KEY,
+  current_model            TEXT NOT NULL,
+  recommended_model        TEXT NOT NULL,
+  task_type                TEXT NOT NULL,
+  estimated_weekly_savings REAL NOT NULL,
+  confidence               REAL NOT NULL DEFAULT 0.0,
+  capability_check         TEXT NOT NULL DEFAULT '{}',
+  status                   TEXT NOT NULL DEFAULT 'active',
+  applied_at               TEXT,
+  dismissed_at             TEXT,
+  dismiss_reason           TEXT,
+  actual_savings_usd       REAL,
+  created_at               TEXT NOT NULL,
+  updated_at               TEXT NOT NULL
+);
+
+-- spend_pause_state — single-row table for global spend pause toggle.
+CREATE TABLE IF NOT EXISTS spend_pause_state (
+  is_paused   INTEGER NOT NULL DEFAULT 0,
+  paused_at   TEXT,
+  paused_by   TEXT,
+  reason      TEXT,
+  resumed_at  TEXT
+);

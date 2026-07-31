@@ -37,6 +37,11 @@ import { createProjectStore } from './project-store.mjs';
 import { createDashboardServer } from './dashboard/server.mjs';
 import { verifyCycle } from './verify-loop.mjs';
 import { pushEscalations } from './escalation-push.mjs';
+import { aggregatePendingWindows } from './aggregation.mjs';
+import { openLedger } from './gateway/ledger.mjs';
+import { evaluateAlerts } from './alerts.mjs';
+import { generateRecommendations } from './optimization.mjs';
+import { computeBudgetForecast, detectAnomalies as detectSpendAnomalies } from './analytics.mjs';
 import { selectModel } from './router.mjs';
 import { plannerCycle } from './planner.mjs';
 import { pruneAllWorktrees } from './worktree.mjs';
@@ -45,7 +50,7 @@ import { createRotatingLogger } from './daemon-logger.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createAios } from './config.mjs';
+import { createAios, resolveAnalyticsConfig } from './config.mjs';
 import { assembleGateway } from './gateway/index.mjs';
 import { syncFromAdo } from './azure-devops-source.mjs';
 import { validatePolicySchema } from './policy-validate.mjs';
@@ -513,6 +518,80 @@ export async function start({ domain } = {}) {
   // 2. Watchdog
   setInterval(watchdogTick, WATCHDOG_INTERVAL_MS);
   watchdogTick(); // first tick immediately
+
+  // 2b. Analytics aggregation (P5) — hourly/daily materialized summaries
+  //     Also runs alert evaluation and optimization analysis after aggregation.
+  try {
+    const analyticsConfig = resolveAnalyticsConfig(gwPolicy);
+    const aggregationIntervalMs = (analyticsConfig.aggregation.intervalMinutes || 60) * 60 * 1000;
+
+    const doAggregate = async () => {
+      let gwDb;
+      try {
+        gwDb = openLedger(undefined, { config });
+        const result = aggregatePendingWindows(gwDb);
+        if (result.hourly > 0 || result.daily > 0) {
+          logger.log('aggregation', `completed ${result.hourly} hourly, ${result.daily} daily windows`);
+        }
+
+        // T051: Alert evaluation — run after aggregation completes. Must await before closing DB.
+        try {
+          const budgetConfig = { monthlyLimit: analyticsConfig.budget.monthlyLimit || 500 };
+          const forecast = computeBudgetForecast(gwDb, budgetConfig);
+          const anoms = detectSpendAnomalies(gwDb);
+          const fired = await evaluateAlerts(gwDb, analyticsConfig, {
+            spendToDate: forecast.spendToDate || 0,
+            monthlyLimit: budgetConfig.monthlyLimit,
+            pctUsed: forecast.pctUsed || 0,
+            projectedTotal: forecast.projectedTotal || 0,
+            forecastStatus: forecast.status || 'on-track',
+            anomalies: anoms || [],
+          });
+          if (fired.length > 0) {
+            logger.log('alerts', `${fired.length} alert(s) triggered: ${fired.map(f => f.ruleId).join(', ')}`);
+          }
+        } catch (e2) {
+          logger.error('alerts', `alert evaluation failed: ${e2.message}`, e2);
+        }
+      } catch (e) {
+        logger.error('aggregation', `aggregation failed: ${e.message}`, e);
+      } finally {
+        try { gwDb?.close(); } catch { /* ignore */ }
+      }
+    };
+
+    // Run once at boot to catch up on missed windows
+    doAggregate();
+    // Then on interval
+    setInterval(doAggregate, aggregationIntervalMs);
+  } catch (e) {
+    logger.log('aggregation', `aggregation setup skipped: ${e.message}`);
+  }
+
+  // 2c. Optimization analysis (P5) — run daily after aggregation
+  try {
+    const optIntervalMs = 24 * 60 * 60 * 1000; // Daily
+    const runOptimization = () => {
+      let gwDb;
+      try {
+        gwDb = openLedger(undefined, { config });
+        const analyticsConfig = resolveAnalyticsConfig(gwPolicy);
+        const minDays = analyticsConfig.optimization.minDataDays || 7;
+        const recs = generateRecommendations(gwDb, minDays);
+        if (recs.length > 0) {
+          logger.log('optimization', `${recs.length} recommendation(s) generated`);
+        }
+      } catch (e) {
+        logger.error('optimization', `optimization analysis failed: ${e.message}`, e);
+      } finally {
+        try { gwDb?.close(); } catch { /* ignore */ }
+      }
+    };
+    setTimeout(runOptimization, 10 * 60 * 1000); // First run after 10min boot delay
+    setInterval(runOptimization, optIntervalMs);
+  } catch (e) {
+    logger.log('optimization', `optimization setup skipped: ${e.message}`);
+  }
 
   // 3. Model discovery tick (daily, 003 US4)
   const MODEL_DISCOVERY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
