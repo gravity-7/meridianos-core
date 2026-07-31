@@ -7,7 +7,7 @@
  * Exports: generateRecommendations, applyRecommendation, dismissRecommendation, trackActualSavings
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 /**
  * Get models with matching capabilities from the model_registry.
@@ -139,13 +139,15 @@ export function generateRecommendations(db, minDataDays = 7) {
 
       if (confidence < 0.5) continue;
 
+      const bestFeatures = (() => { try { return JSON.parse(bestCandidate.features || '{}'); } catch { return {}; } })();
       const capabilityCheck = {
-        vision: bestCandidate.features ? (JSON.parse(bestCandidate.features || '{}').vision || false) : false,
-        tools: bestCandidate.features ? (JSON.parse(bestCandidate.features || '{}').tools || false) : false,
-        streaming: bestCandidate.features ? (JSON.parse(bestCandidate.features || '{}').streaming || false) : false,
+        vision: bestFeatures.vision || false,
+        tools: bestFeatures.tools || false,
+        streaming: bestFeatures.streaming || false,
       };
 
-      const id = randomUUID();
+      // Deterministic ID so dismiss/apply persists across runs
+      const id = createHash('sha1').update(`${group.taskType}:${group.provider}:${group.model}:${bestCandidate.provider}:${bestCandidate.model_id}`).digest('hex').slice(0, 36);
       const now = new Date().toISOString();
 
       recommendations.push({

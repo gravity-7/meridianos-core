@@ -525,7 +525,7 @@ export async function start({ domain } = {}) {
     const analyticsConfig = resolveAnalyticsConfig(gwPolicy);
     const aggregationIntervalMs = (analyticsConfig.aggregation.intervalMinutes || 60) * 60 * 1000;
 
-    const doAggregate = () => {
+    const doAggregate = async () => {
       let gwDb;
       try {
         gwDb = openLedger(undefined, { config });
@@ -534,25 +534,22 @@ export async function start({ domain } = {}) {
           logger.log('aggregation', `completed ${result.hourly} hourly, ${result.daily} daily windows`);
         }
 
-        // T051: Alert evaluation — run after aggregation completes
+        // T051: Alert evaluation — run after aggregation completes. Must await before closing DB.
         try {
           const budgetConfig = { monthlyLimit: analyticsConfig.budget.monthlyLimit || 500 };
           const forecast = computeBudgetForecast(gwDb, budgetConfig);
           const anoms = detectSpendAnomalies(gwDb);
-          evaluateAlerts(gwDb, analyticsConfig, {
+          const fired = await evaluateAlerts(gwDb, analyticsConfig, {
             spendToDate: forecast.spendToDate || 0,
             monthlyLimit: budgetConfig.monthlyLimit,
             pctUsed: forecast.pctUsed || 0,
             projectedTotal: forecast.projectedTotal || 0,
             forecastStatus: forecast.status || 'on-track',
             anomalies: anoms || [],
-          }).then((fired) => {
-            if (fired.length > 0) {
-              logger.log('alerts', `${fired.length} alert(s) triggered: ${fired.map(f => f.ruleId).join(', ')}`);
-            }
-          }).catch((e) => {
-            logger.error('alerts', `alert evaluation failed: ${e.message}`, e);
           });
+          if (fired.length > 0) {
+            logger.log('alerts', `${fired.length} alert(s) triggered: ${fired.map(f => f.ruleId).join(', ')}`);
+          }
         } catch (e2) {
           logger.error('alerts', `alert evaluation failed: ${e2.message}`, e2);
         }

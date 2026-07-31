@@ -95,7 +95,7 @@ export async function sendEmail({ host, port = 587, user, pass, from, to, subjec
 
     try {
       const isSsl = port === 465;
-      socket = tls.connect({ host, port, rejectUnauthorized: false, servername: host }, async () => {
+      socket = tls.connect({ host, port, rejectUnauthorized: true, servername: host }, async () => {
         try {
           // Read greeting
           const greeting = await readResponse(socket);
@@ -115,7 +115,7 @@ export async function sendEmail({ host, port = 587, user, pass, from, to, subjec
             // Upgrade connection
             socket.removeAllListeners('data');
             const oldSocket = socket;
-            socket = tls.connect({ socket: oldSocket, host, rejectUnauthorized: false, servername: host }, () => {});
+            socket = tls.connect({ socket: oldSocket, host, rejectUnauthorized: true, servername: host }, () => {});
             await new Promise((res) => socket.once('secureConnect', res));
 
             // Re-EHLO after STARTTLS

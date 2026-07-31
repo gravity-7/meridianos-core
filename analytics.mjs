@@ -95,44 +95,23 @@ export function queryOverview(db, from, to) {
       ? Math.round(((totalSpend - prevSpend) / prevSpend) * 1000) / 10
       : null;
 
-    // Top provider
-    let topProvider = null;
-    try {
-      const src = table === 'analytics_daily' ? 'analytics_daily' : (table === 'analytics_hourly' ? 'analytics_hourly' : 'token_events');
-      const tsCol = src === 'analytics_daily' ? 'day_ts' : (src === 'analytics_hourly' ? 'hour_ts' : 'ts');
-      const topProv = db.prepare(
-        `SELECT provider, COALESCE(SUM(cost_usd), 0) AS cost FROM ${src} WHERE ${tsCol} >= ? AND ${tsCol} < ? GROUP BY provider ORDER BY cost DESC LIMIT 1`,
-      ).get(fromDate, toDate);
-      if (topProv && topProv.cost > 0 && totalSpend > 0) {
-        topProvider = { name: topProv.provider, cost: topProv.cost, pct: Math.round((topProv.cost / totalSpend) * 1000) / 10 };
-      }
-    } catch { /* fall through */ }
-
-    // Top model
-    let topModel = null;
-    try {
-      const src = table === 'analytics_daily' ? 'analytics_daily' : (table === 'analytics_hourly' ? 'analytics_hourly' : 'token_events');
-      const tsCol = src === 'analytics_daily' ? 'day_ts' : (src === 'analytics_hourly' ? 'hour_ts' : 'ts');
-      const topMdl = db.prepare(
-        `SELECT model, COALESCE(SUM(cost_usd), 0) AS cost FROM ${src} WHERE ${tsCol} >= ? AND ${tsCol} < ? GROUP BY model ORDER BY cost DESC LIMIT 1`,
-      ).get(fromDate, toDate);
-      if (topMdl && topMdl.cost > 0 && totalSpend > 0) {
-        topModel = { name: topMdl.model, cost: topMdl.cost, pct: Math.round((topMdl.cost / totalSpend) * 1000) / 10 };
-      }
-    } catch { /* fall through */ }
-
-    // Top agent
-    let topAgent = null;
-    try {
-      const src = table === 'analytics_daily' ? 'analytics_daily' : (table === 'analytics_hourly' ? 'analytics_hourly' : 'token_events');
-      const tsCol = src === 'analytics_daily' ? 'day_ts' : (src === 'analytics_hourly' ? 'hour_ts' : 'ts');
-      const topAg = db.prepare(
-        `SELECT agent, COALESCE(SUM(cost_usd), 0) AS cost FROM ${src} WHERE ${tsCol} >= ? AND ${tsCol} < ? GROUP BY agent ORDER BY cost DESC LIMIT 1`,
-      ).get(fromDate, toDate);
-      if (topAg && topAg.cost > 0 && totalSpend > 0) {
-        topAgent = { name: topAg.agent, cost: topAg.cost, pct: Math.round((topAg.cost / totalSpend) * 1000) / 10 };
-      }
-    } catch { /* fall through */ }
+    // Helper: fetch top item by dimension
+    const topBy = (dim) => {
+      try {
+        const src = table === 'analytics_daily' ? 'analytics_daily' : (table === 'analytics_hourly' ? 'analytics_hourly' : 'token_events');
+        const tsCol = src === 'analytics_daily' ? 'day_ts' : (src === 'analytics_hourly' ? 'hour_ts' : 'ts');
+        const r = db.prepare(
+          `SELECT ${dim}, COALESCE(SUM(cost_usd), 0) AS cost FROM ${src} WHERE ${tsCol} >= ? AND ${tsCol} < ? GROUP BY ${dim} ORDER BY cost DESC LIMIT 1`,
+        ).get(fromDate, toDate);
+        if (r && r.cost > 0 && totalSpend > 0) {
+          return { name: r[dim], cost: r.cost, pct: Math.round((r.cost / totalSpend) * 1000) / 10 };
+        }
+      } catch { /* fall through */ }
+      return null;
+    };
+    const topProvider = topBy('provider');
+    const topModel = topBy('model');
+    const topAgent = topBy('agent');
 
     return {
       totalSpend: Math.round(totalSpend * 100) / 100,
@@ -490,11 +469,12 @@ export function computeBudgetForecast(db, budgetConfig) {
 // ─── Anomaly Detection ──────────────────────────────────────────────────────
 
 /**
- * detectAnomalies(db) → detect spending anomalies using z-score.
+ * detectAnomalies(db, zScoreThreshold) → detect spending anomalies using z-score.
  * For each completed hour in the last 7 days, compute z-score against trailing mean/stddev.
- * Flag hours where z-score > 3.0.
+ * Flag hours where z-score > zScoreThreshold (default 3.0).
+ * @param {number} [zScoreThreshold=3.0] — hours with z-score above this are flagged
  */
-export function detectAnomalies(db) {
+export function detectAnomalies(db, zScoreThreshold = 3.0) {
   try {
     const now = new Date();
     const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000).toISOString();
@@ -544,7 +524,7 @@ export function detectAnomalies(db) {
       if (!range || range.stddev === 0) continue;
 
       const zScore = (r.cost - range.mean) / range.stddev;
-      if (zScore > 3.0) {
+      if (zScore > zScoreThreshold) {
         anomalies.push({
           hourTs: r.hourTs,
           provider: r.provider,
