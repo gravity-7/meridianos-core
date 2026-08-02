@@ -285,14 +285,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned Features
+### Added
 
-- Telemetry and usage analytics (opt-in)
-- Configuration hot-reload for non-critical settings
-- Database backup and restore functionality
-- Integration tests for edge cases
-- Performance testing with 10+ concurrent projects
-- Security audit and penetration testing
+**Phase 10 Polish (T194–T202)**
+- User documentation for multi-tenant platform features (`docs/user-guide.md`)
+- Integration tests for edge cases: control-plane crash recovery, concurrent `policy.yaml`
+  writes, and license-server-unreachable degradation (`tests/integration/test-edge-cases.mjs`)
+- Database backup and restore (`db-backup.mjs`, `scripts/backup-db.mjs`), wired into
+  `ProjectManager.backupDatabase()`/`restoreDatabase()`
+- Configuration hot-reload for non-critical `policy.yaml` settings while a project is running
+  (`config-hot-reload.mjs`), gated to a whitelist that excludes security-sensitive fields
+- Opt-in, local-only usage telemetry (`telemetry.mjs`) — no data leaves the machine unless the
+  operator explicitly enables it and ships it themselves
+- Final cross-story integration test exercising US1–US7 together against one control-plane DB
+  (`tests/integration/test-final-integration.mjs`)
+- Performance test for 10+ concurrently-running projects (`tests/performance/test-concurrent-projects.perf.mjs`)
+- Security audit (`docs/security-audit.md`) plus a re-runnable automated scanner
+  (`scripts/security-audit.mjs`)
+
+### Fixed
+
+- Stale `'running'` project rows left behind by a control-plane crash are now reconciled to
+  `'stopped'`/`down` on the next start (`ProjectManager.reconcileAfterCrash()`), instead of
+  reporting a phantom running project with no process behind it
+- `writePolicy()` now serializes concurrent writers with a short-lived lock file, closing a
+  lost-update race when two processes edit `policy.yaml` at the same time
+- Database backups now lock their output file to `0600` on POSIX instead of inheriting the
+  process umask (security-audit.md §6)
 
 ---
 

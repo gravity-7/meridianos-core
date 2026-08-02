@@ -346,15 +346,15 @@ plan.md's canonical directory layout and the `deploy/kubernetes` structure T001 
 - [X] T191 [P] Add performance monitoring and metrics collection
 - [X] T192 [P] Implement rate limiting for API endpoints
 - [X] T193 [P] Add comprehensive error messages with actionable remediation steps
-- [ ] T194 [P] Create user documentation for multi-tenant platform features
-- [ ] T195 [P] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable)
-- [ ] T196 [P] Optimize database queries with proper indexes
-- [ ] T197 [P] Add database backup and restore functionality
-- [ ] T198 [P] Implement configuration hot-reload for non-critical settings
-- [ ] T199 [P] Add telemetry and usage analytics (opt-in)
-- [ ] T200 [P] Final integration testing across all user stories
-- [ ] T201 [P] Performance testing with 10+ concurrent projects
-- [ ] T202 [P] Security audit and penetration testing
+- [X] T194 [P] Create user documentation for multi-tenant platform features
+- [X] T195 [P] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable)
+- [X] T196 [P] Optimize database queries with proper indexes
+- [X] T197 [P] Add database backup and restore functionality
+- [X] T198 [P] Implement configuration hot-reload for non-critical settings
+- [X] T199 [P] Add telemetry and usage analytics (opt-in)
+- [X] T200 [P] Final integration testing across all user stories
+- [X] T201 [P] Performance testing with 10+ concurrent projects
+- [X] T202 [P] Security audit and penetration testing
 - [X] T203 [P] Update README.md with multi-tenant platform documentation
 - [X] T204 [P] Create changelog entry for multi-tenant platform release
 
@@ -498,15 +498,15 @@ Phase 1 (Setup) → Phase 2 (Foundational) → [US1, US2, US5] (P1 - MVP) → [U
 - [ ] T191 [P] Add performance monitoring and metrics collection per Phase 10 (missing)
 - [ ] T192 [P] Implement rate limiting for API endpoints per Phase 10 (missing)
 - [ ] T193 [P] Add comprehensive error messages with actionable remediation steps per Phase 10 (missing)
-- [ ] T194 [P] Create user documentation for multi-tenant platform features per Phase 10 (missing)
-- [ ] T195 [P] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable) per Phase 10 (missing)
-- [ ] T196 [P] Optimize database queries with proper indexes per Phase 10 (missing)
-- [ ] T197 [P] Add database backup and restore functionality per Phase 10 (missing)
-- [ ] T198 [P] Implement configuration hot-reload for non-critical settings per Phase 10 (missing)
-- [ ] T199 [P] Add telemetry and usage analytics (opt-in) per Phase 10 (missing)
-- [ ] T200 [P] Final integration testing across all user stories per Phase 10 (missing)
-- [ ] T201 [P] Performance testing with 10+ concurrent projects per SC-001 (missing)
-- [ ] T202 [P] Security audit and penetration testing per Phase 10 (missing)
+- [X] T194 [P] Create user documentation for multi-tenant platform features per Phase 10 (done — docs/user-guide.md)
+- [X] T195 [P] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable) per Phase 10 (done — tests/integration/test-edge-cases.mjs)
+- [X] T196 [P] Optimize database queries with proper indexes per Phase 10 (done — schema/control-plane-schema.sql, schema/project-schema.sql)
+- [X] T197 [P] Add database backup and restore functionality per Phase 10 (done — db-backup.mjs, scripts/backup-db.mjs)
+- [X] T198 [P] Implement configuration hot-reload for non-critical settings per Phase 10 (done — config-hot-reload.mjs)
+- [X] T199 [P] Add telemetry and usage analytics (opt-in) per Phase 10 (done — telemetry.mjs)
+- [X] T200 [P] Final integration testing across all user stories per Phase 10 (done — tests/integration/test-final-integration.mjs)
+- [X] T201 [P] Performance testing with 10+ concurrent projects per SC-001 (done — tests/performance/test-concurrent-projects.perf.mjs)
+- [X] T202 [P] Security audit and penetration testing per Phase 10 (done — docs/security-audit.md, scripts/security-audit.mjs)
 - [ ] T203 [P] Update README.md with multi-tenant platform documentation per Phase 10 (missing)
 - [ ] T204 [P] Create changelog entry for multi-tenant platform release per Phase 10 (missing)
 

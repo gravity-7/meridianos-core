@@ -36,6 +36,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml } from './yaml-lite.mjs';
 import { getActivityLogger } from './compliance/audit-log.mjs';
+import { getTelemetryCollector } from './telemetry.mjs';
+import { watchPolicy, unwatchPolicy, getHotReloadedConfig } from './config-hot-reload.mjs';
+import { backupDatabaseTimestamped, restoreDatabase } from './db-backup.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -146,10 +149,79 @@ export function createControlPlane({ projects = [], gateway = null, tick = defau
  */
 export class ProjectManager {
   constructor(dbPath = path.join(__dirname, '.ai', 'control-plane.db')) {
+    this.dbPath = dbPath;
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.processes = new Map(); // project_id -> { pid, process, startTime, restartCount }
     this.restartHistory = new Map(); // project_id -> [timestamp, ...]
+    this.watchedConfigPaths = new Set(); // config_path values with an active hot-reload watch
+    this.ensureSchema();
+    this.reconcileAfterCrash();
+  }
+
+  /**
+   * Ensure the `projects` table exists with the columns this class relies on (template,
+   * config_path, state_path, port, created_by, health_status, last_health_check, restart_count,
+   * last_restart). `auth/user-store.mjs` also creates a `projects` table on the same db, for its own
+   * project_users/invitations FKs — a much narrower one, missing every column above. Whichever of
+   * the two constructors runs first against a fresh db wins the initial CREATE, so this backfills
+   * any columns a narrower create left out via ALTER TABLE, keeping both callers safe regardless of
+   * boot order instead of failing with "no such column" the first time a project is created.
+   */
+  ensureSchema() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'stopped',
+        created_at INTEGER NOT NULL
+      )
+    `);
+    const existingColumns = new Set(this.db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name));
+    const requiredColumns = {
+      template: 'TEXT',
+      config_path: 'TEXT',
+      state_path: 'TEXT',
+      port: 'INTEGER',
+      created_by: 'TEXT',
+      health_status: "TEXT NOT NULL DEFAULT 'unknown'",
+      last_health_check: 'INTEGER',
+      restart_count: 'INTEGER NOT NULL DEFAULT 0',
+      last_restart: 'INTEGER',
+    };
+    for (const [column, definition] of Object.entries(requiredColumns)) {
+      if (!existingColumns.has(column)) {
+        this.db.exec(`ALTER TABLE projects ADD COLUMN ${column} ${definition}`);
+      }
+    }
+  }
+
+  /**
+   * Reconcile project state after a control-plane crash/restart (T195 edge case). `this.processes`
+   * is ALWAYS empty right after construction — no in-memory process handle survives a crash — so
+   * any project whose DB row still says 'running' is stale: the control plane died (or was
+   * killed) while that project was tracked, and there is no live handle to reconnect to. Without
+   * this, a fresh ProjectManager would report a phantom 'running' project with no actual process
+   * behind it. Marks those 'stopped'/'down' so callers (dashboard, watchdog) see accurate state
+   * and can decide to restart them, and logs one activity event per reconciled project.
+   * @returns {string[]} ids of projects reconciled
+   */
+  reconcileAfterCrash() {
+    const stale = this.db.prepare("SELECT id FROM projects WHERE status = 'running'").all();
+    if (stale.length === 0) return [];
+    const now = Math.floor(Date.now() / 1000);
+    const update = this.db.prepare(
+      "UPDATE projects SET status = 'stopped', health_status = 'down', last_health_check = ? WHERE id = ?"
+    );
+    for (const { id } of stale) {
+      update.run(now, id);
+      getActivityLogger().log({
+        project_id: id,
+        action: 'project_reconciled_after_crash',
+        details: { previous_status: 'running' }
+      });
+    }
+    return stale.map((s) => s.id);
   }
 
   /**
@@ -202,6 +274,7 @@ export class ProjectManager {
       action: 'project_create',
       details: { name, template }
     });
+    getTelemetryCollector().record('project_create', { project_id: id, template: template ?? null });
 
     return this.getProject(id);
   }
@@ -238,11 +311,19 @@ export class ProjectManager {
     // Setup process monitoring
     this.monitorProcess(projectId, process);
 
+    // Hot-reload watch (T198): non-critical policy.yaml settings for this project apply live
+    // from now on, without needing a restart of this spawned process.
+    if (project.config_path) {
+      watchPolicy(project.config_path);
+      this.watchedConfigPaths.add(project.config_path);
+    }
+
     getActivityLogger().log({
       project_id: projectId,
       action: 'project_start',
       details: { pid: process.pid }
     });
+    getTelemetryCollector().record('project_start', { project_id: projectId });
 
     return this.getProject(projectId);
   }
@@ -287,11 +368,17 @@ export class ProjectManager {
     // Update status
     this.db.prepare('UPDATE projects SET status = ? WHERE id = ?').run('stopped', projectId);
 
+    if (project.config_path && this.watchedConfigPaths.has(project.config_path)) {
+      unwatchPolicy(project.config_path);
+      this.watchedConfigPaths.delete(project.config_path);
+    }
+
     getActivityLogger().log({
       project_id: projectId,
       action: 'project_stop',
       details: {}
     });
+    getTelemetryCollector().record('project_stop', { project_id: projectId });
 
     return this.getProject(projectId);
   }
@@ -333,11 +420,30 @@ export class ProjectManager {
     this.processes.delete(projectId);
     this.restartHistory.delete(projectId);
 
+    if (project.config_path && this.watchedConfigPaths.has(project.config_path)) {
+      unwatchPolicy(project.config_path);
+      this.watchedConfigPaths.delete(project.config_path);
+    }
+
     getActivityLogger().log({
       project_id: projectId,
       action: 'project_delete',
       details: {}
     });
+  }
+
+  /**
+   * The current live snapshot of this project's hot-reloadable policy.yaml settings (T198).
+   * Only meaningful while the project is running (hot-reload watching starts in `startProject`
+   * and stops in `stopProject`/`deleteProject`) — returns `{}` for a project that was never
+   * started or whose watch has since stopped.
+   * @param {string} projectId
+   * @returns {object}
+   */
+  getEffectiveConfig(projectId) {
+    const project = this.getProject(projectId);
+    if (!project || !project.config_path) return {};
+    return getHotReloadedConfig(project.config_path);
   }
 
   /**
@@ -532,9 +638,37 @@ export class ProjectManager {
   }
 
   /**
+   * Back up the control-plane database to a timestamped file (T197).
+   * @param {string} [backupDir] - defaults to `.ai/backups` alongside this instance's DB
+   * @returns {{path: string, size: number, timestamp: string}}
+   */
+  backupDatabase(backupDir = path.join(path.dirname(this.dbPath), 'backups')) {
+    return backupDatabaseTimestamped(this.db, backupDir, 'control-plane');
+  }
+
+  /**
+   * Restore the control-plane database from a backup file (T197). Closes and reopens this
+   * instance's DB handle around the file swap — required because SQLite corrupts if its file is
+   * replaced while a handle (and its WAL) is open. In-memory process tracking (`this.processes`)
+   * is intentionally left untouched; call `reconcileAfterCrash()` afterward if the restored data
+   * disagrees with what's actually running.
+   * @param {string} backupPath
+   * @returns {{path: string, restoredFrom: string}}
+   */
+  restoreDatabase(backupPath) {
+    this.db.close();
+    const result = restoreDatabase(backupPath, this.dbPath);
+    this.db = new Database(this.dbPath);
+    this.db.pragma('journal_mode = WAL');
+    return result;
+  }
+
+  /**
    * Close database connection
    */
   close() {
+    for (const p of this.watchedConfigPaths) unwatchPolicy(p);
+    this.watchedConfigPaths.clear();
     this.db.close();
   }
 }
