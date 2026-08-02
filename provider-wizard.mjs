@@ -9,7 +9,7 @@
  * Writes to policy.yaml with timestamped backup.
  * Detects concurrent modification via mtime comparison.
  */
-import { readFileSync, writeFileSync, existsSync, statSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, copyFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml } from './yaml-lite.mjs';
@@ -90,6 +90,7 @@ function readPolicyState(repoRoot) {
  */
 function writePolicyWithBackup(repoRoot, policy, expectedMtimeMs) {
   const policyPath = join(repoRoot, '.ai', 'policy.yaml');
+  mkdirSync(dirname(policyPath), { recursive: true });
 
   // Serialize back to YAML (simple key-value for providers section)
   // We use a simple approach: read the raw file and do surgical insertion

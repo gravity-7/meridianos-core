@@ -341,11 +341,11 @@ plan.md's canonical directory layout and the `deploy/kubernetes` structure T001 
 - [X] T186 [P] Implement GET /api/auth/oauth/{provider}/callback endpoint in dashboard/server.mjs
 - [X] T187 [P] Add OIDC configuration to policy.yaml schema
 - [X] T188 [P] Create comprehensive API documentation for all endpoints
-- [ ] T189 [P] Write migration guide for single-user to multi-tenant upgrade
-- [ ] T190 [P] Create troubleshooting guide for common multi-tenant issues
-- [ ] T191 [P] Add performance monitoring and metrics collection
+- [X] T189 [P] Write migration guide for single-user to multi-tenant upgrade
+- [X] T190 [P] Create troubleshooting guide for common multi-tenant issues
+- [X] T191 [P] Add performance monitoring and metrics collection
 - [X] T192 [P] Implement rate limiting for API endpoints
-- [ ] T193 [P] Add comprehensive error messages with actionable remediation steps
+- [X] T193 [P] Add comprehensive error messages with actionable remediation steps
 - [ ] T194 [P] Create user documentation for multi-tenant platform features
 - [ ] T195 [P] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable)
 - [ ] T196 [P] Optimize database queries with proper indexes
@@ -355,8 +355,8 @@ plan.md's canonical directory layout and the `deploy/kubernetes` structure T001 
 - [ ] T200 [P] Final integration testing across all user stories
 - [ ] T201 [P] Performance testing with 10+ concurrent projects
 - [ ] T202 [P] Security audit and penetration testing
-- [ ] T203 [P] Update README.md with multi-tenant platform documentation
-- [ ] T204 [P] Create changelog entry for multi-tenant platform release
+- [X] T203 [P] Update README.md with multi-tenant platform documentation
+- [X] T204 [P] Create changelog entry for multi-tenant platform release
 
 ---
 

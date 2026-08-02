@@ -787,8 +787,12 @@ async function main() {
   }
 
   const cli = await startCli(flags);
-  printBanner(cli);
 
+  // Register the signal handlers BEFORE printing the banner: the banner is this test's/operator's
+  // cue that the sidecar is ready to receive a SIGINT, so if the handler isn't attached yet, a
+  // signal arriving in that window falls through to Node's default (immediate, ungraceful)
+  // termination instead of this shutdown path — an observed CI flake (code:null, signal:'SIGINT'
+  // instead of a clean exit 0).
   let shuttingDown = false;
   const shutdown = () => {
     if (shuttingDown) return;
@@ -797,6 +801,8 @@ async function main() {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  printBanner(cli);
 }
 
 // Only run the CLI when this file is the direct process entry point (mirrors scheduler.mjs's own

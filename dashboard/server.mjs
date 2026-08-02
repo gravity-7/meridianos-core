@@ -41,6 +41,7 @@ import { SOC2Report } from '../compliance/reports/soc2.mjs';
 import { GDPRReport } from '../compliance/reports/gdpr.mjs';
 import { CostAllocationReport } from '../compliance/reports/cost-allocation.mjs';
 import { ModelUsageReport } from '../compliance/reports/model-usage.mjs';
+import { metricsMiddleware, startMetricsCollection, createMetricsEndpoint } from './metrics.mjs';
 
 // Import ProjectManager for multi-tenant project management
 let _projectManager = null;
