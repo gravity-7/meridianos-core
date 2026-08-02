@@ -8,8 +8,12 @@ providers:
     name: anthropic
     displayName: Anthropic
     wire: anthropic
-    baseUrl: "https://api.anthropic.com"
-    keyEnv: ANTHROPIC_API_KEY
+    # No baseUrl/keyEnv here — native anthropic has neither (see providers.mjs BUILTIN_PROVIDERS:
+    # "null = inject nothing; use the CLI's own login", "no BYO key for the native harness"). This
+    # layer only overrides fields it actually sets (deepMergeProviders), so omitting them here lets
+    # the code-level `null` defaults win rather than silently turning anthropic into a BYO-key HTTP
+    # provider — a prior version of this file set both explicitly, which broke providerKeyPresent()
+    # or any provider using the native (keyEnv: null) contract.
     auth:
       mode: env
       headerName: x-api-key
@@ -64,6 +68,15 @@ providers:
     wire: openai
     baseUrl: "http://localhost:11434/v1"
     keyEnv: null
+    # Ollama runs whatever single local model the operator has pulled — same "one route for every
+    # tier" pattern openrouter uses above. Override per-deployment via policy.yaml if a different
+    # local model is pulled (see tests/ollama-e2e.test.mjs OLLAMA_E2E_MODEL for the test override).
+    models:
+      simple: "gemma4:e4b"
+      medium: "gemma4:e4b"
+      medium_high: "gemma4:e4b"
+      complex: "gemma4:e4b"
+      critical: "gemma4:e4b"
     auth:
       mode: env
     features:

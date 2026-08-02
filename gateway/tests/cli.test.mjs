@@ -63,7 +63,7 @@ test('AC1: the CLI subprocess boots, prints a 127.0.0.1:<port> URL, and terminat
     const url = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`timed out waiting for the full banner; stdout so far: ${out}`)), 10_000);
       const check = () => {
-        const m = /meridian-gateway listening at (http:\/\/127\.0\.0\.1:\d+)/.exec(out);
+        const m = /Listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(out);
         if (m && /\nledger: /.test(out)) { clearTimeout(timer); resolve(m[1]); }
       };
       child.stdout.on('data', check);
@@ -193,11 +193,18 @@ before(async () => {
 });
 
 after(async () => {
-  await cli.close();
-  cli.ledger.close(); // release the on-disk SQLite handle BEFORE rmSync, or Windows EBUSYs on unlink
-  await new Promise((resolve) => stub.close(resolve));
+  // `cli` is only assigned once `before()` fully succeeds — if it threw partway through (e.g. a
+  // malformed provider registry), `cli` stays undefined here. Without this guard, the unclosed
+  // `stub` HTTP server below is never reached and keeps this file's isolated test process alive
+  // indefinitely (an open listener holds the event loop open) — a `before()` failure should
+  // report as a clean, fast test failure, not an indefinite hang.
+  if (cli) {
+    await cli.close();
+    cli.ledger.close(); // release the on-disk SQLite handle BEFORE rmSync, or Windows EBUSYs on unlink
+  }
+  if (stub) await new Promise((resolve) => stub.close(resolve));
   delete process.env.TEST_CLI_DEEPSEEK_KEY;
-  rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
+  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
 });
 
 test('startCli wires --policy through loadPolicy and registers one default run with a minted token', () => {

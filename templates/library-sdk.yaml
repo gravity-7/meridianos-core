@@ -1,0 +1,28 @@
+gateway:
+  disabled: false
+agents:
+  builder:
+    model: claude-sonnet-4
+    provider: anthropic
+  reviewer:
+    model: claude-sonnet-4
+    provider: anthropic
+taskCategories:
+  types:
+    tier: high
+    desc: TypeScript interfaces and types
+  core:
+    tier: medium
+    desc: Core SDK functionality
+  error_handling:
+    tier: medium
+    desc: Custom errors and retries
+  testing:
+    tier: medium
+    desc: Comprehensive test suite
+  docs:
+    tier: low
+    desc: TypeDoc generation
+  packaging:
+    tier: medium
+    desc: ESM/CJS build configuration

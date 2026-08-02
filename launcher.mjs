@@ -245,6 +245,19 @@ export function spawnAndWait(cmd, args, { config, cwd = config.repoRoot, timeout
  * Returns a Promise<{outcome, note, reason, tokens, usage, branch}>.
  */
 export async function launchAgent({ agent, model, task, session, provider, harness, tier, _spawn = spawnAndWait, config }) {
+  // Tier enforcement (US5 - T099): Check license before spawning agent
+  const tierCheck = await checkLicenseTier(config);
+  if (!tierCheck.allowed) {
+    return { 
+      outcome: 'failed', 
+      reason: 'tier_limit', 
+      note: `License tier (${tierCheck.tier}) does not allow this operation: ${tierCheck.reason}`,
+      tokens: null, 
+      usage: null, 
+      branch: null 
+    };
+  }
+
   const wt = createWorktree({ taskId: task.id, session, config });
   if (!wt.ok) return { outcome: 'failed', reason: 'spawn_error', note: `worktree setup failed: ${wt.error}`, tokens: null, usage: null, branch: wt.branch ?? null };
   try {
@@ -332,4 +345,96 @@ function buildMcpJson(servers) {
       }])
     ),
   };
+}
+
+/**
+ * Check license tier before spawning agent (US5 - T099)
+ * @param {Object} config - AiosConfig
+ * @returns {Object} Tier check result
+ */
+async function checkLicenseTier(config) {
+  try {
+    // Try to get license status from billing API
+    const response = await fetch('http://localhost:4317/api/billing/license', {
+      headers: {
+        'Authorization': `Bearer ${process.env.AIOS_DASH_TOKEN || 'local'}`
+      }
+    });
+
+    if (!response.ok) {
+      // No license or billing not configured - allow free tier limits
+      return { allowed: true, tier: 'free', reason: null };
+    }
+
+    const data = await response.json();
+
+    if (!data.success || !data.license) {
+      // No active license - allow free tier limits
+      return { allowed: true, tier: 'free', reason: null };
+    }
+
+    const license = data.license;
+    const usage = data.usage || {};
+
+    // Check tier limits
+    const limits = getTierLimits(license.tier);
+
+    // Check agent count limit
+    if (limits.max_agents > 0) {
+      // Count current active agents (simplified check)
+      const activeAgents = usage.projects_count || 0; // Approximate
+      if (activeAgents >= limits.max_agents) {
+        return {
+          allowed: false,
+          tier: license.tier,
+          reason: `Agent limit reached (${limits.max_agents}). Upgrade to ${license.tier === 'pro' ? 'Enterprise' : 'Pro'} tier.`
+        };
+      }
+    }
+
+    // Check feature access
+    if (license.tier === 'free') {
+      return {
+        allowed: true,
+        tier: 'free',
+        reason: 'Free tier - limited features'
+      };
+    }
+
+    return { allowed: true, tier: license.tier, reason: null };
+  } catch (error) {
+    // Billing check failed - allow operation (fail open)
+    console.warn('License tier check failed:', error.message);
+    return { allowed: true, tier: 'free', reason: 'License check failed, allowing operation' };
+  }
+}
+
+/**
+ * Get tier limits
+ * @param {string} tier - License tier
+ * @returns {Object} Tier limits
+ */
+function getTierLimits(tier) {
+  const limits = {
+    free: {
+      max_projects: 1,
+      max_agents: 3,
+      max_seats: 1,
+      max_monthly_spend: 100
+    },
+    pro: {
+      max_projects: 10,
+      max_agents: 50,
+      max_seats: 10,
+      max_monthly_spend: 1000
+    },
+    enterprise: {
+      max_projects: -1, // Unlimited
+      max_agents: -1, // Unlimited
+      max_seats: -1, // Unlimited
+      max_monthly_spend: -1 // Unlimited
+    }
+  };
+
+  return limits[tier] || limits.free;
 }

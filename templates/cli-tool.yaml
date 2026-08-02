@@ -1,0 +1,25 @@
+gateway:
+  disabled: false
+agents:
+  builder:
+    model: claude-sonnet-4
+    provider: anthropic
+  reviewer:
+    model: claude-sonnet-4
+    provider: anthropic
+taskCategories:
+  cli_commands:
+    tier: medium
+    desc: Commander/Yargs command setup
+  file_system:
+    tier: medium
+    desc: File parsing and manipulation
+  api_client:
+    tier: medium
+    desc: External API interactions
+  testing:
+    tier: medium
+    desc: Unit and integration tests
+  packaging:
+    tier: medium
+    desc: npm publishing and distribution

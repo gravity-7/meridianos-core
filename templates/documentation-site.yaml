@@ -1,0 +1,25 @@
+gateway:
+  disabled: false
+agents:
+  writer:
+    model: claude-sonnet-4
+    provider: anthropic
+  reviewer:
+    model: claude-sonnet-4
+    provider: anthropic
+taskCategories:
+  content:
+    tier: low
+    desc: Markdown content writing
+  mdx_components:
+    tier: medium
+    desc: Interactive MDX React components
+  navigation:
+    tier: low
+    desc: Sidebar and TOC structure
+  seo:
+    tier: low
+    desc: Meta tags and sitemaps
+  search:
+    tier: medium
+    desc: Algolia or local search integration

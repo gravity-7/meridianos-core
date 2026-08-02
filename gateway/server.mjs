@@ -355,7 +355,7 @@ function createSseUsageTracker(adapter, wire) {
  * up front so the client starts receiving bytes immediately, mirroring the buffered path's header
  * handling (drop content-length/transfer-encoding; keep the upstream content-type).
  */
-function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestId, provider, model, wire, source, verdict, start, now, costFn, adapter }) {
+function handleStreamingResponse(upstreamRes, res, { onTokenEvent, ctx, requestId, provider, model, wire, source, ideName, billingType, verdict, start, now, costFn, adapter }) {
   const responseHeaders = { ...upstreamRes.headers };
   delete responseHeaders['content-length'];
   delete responseHeaders['transfer-encoding'];
@@ -443,6 +443,8 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, source
       source,
       ideName: ideName ?? null,
       billingType,
+      userId: ctx.userId ?? null,
+      projectId: ctx.projectId ?? null,
     },
     { defaultTenant: ctx.tenant },
   );
@@ -468,6 +470,7 @@ function emitEvent({ onTokenEvent, ctx, requestId, provider, model, wire, source
  */
 export function startGateway({
   port = 0,
+  host = process.env.GATEWAY_HOST || '127.0.0.1',
   registry,
   runs,
   onTokenEvent = () => {},
@@ -501,6 +504,11 @@ export function startGateway({
   };
 
   const server = http.createServer(async (req, res) => {
+    // Cheap liveness/readiness probe (no DB/provider I/O) — K8s httpGet target.
+    if (req.method === 'GET' && req.url === '/healthz') {
+      return sendJson(res, 200, { ok: true, ts: Date.now() });
+    }
+
     // Management endpoints (intercepted before proxy path)
     if (req.method === 'GET' && req.url === '/api/wire-adapters') {
       const adaps = await getAdapters();
@@ -559,11 +567,11 @@ export function startGateway({
   });
 
   return new Promise((resolve) => {
-    server.listen(port, '127.0.0.1', () => {
+    server.listen(port, host, () => {
       const addr = server.address();
       resolve({
         server,
-        url: `http://127.0.0.1:${addr.port}`,
+        url: `http://${host}:${addr.port}`,
         close: () => new Promise((res2) => server.close(() => res2())),
       });
     });
@@ -762,6 +770,8 @@ async function handleRequest(req, res, { registry, runs, onTokenEvent, resolveKe
       model: ctx.model,
       wire: route.wire,
       source,
+      ideName,
+      billingType,
       verdict,
       start,
       now,

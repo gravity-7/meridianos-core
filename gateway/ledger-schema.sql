@@ -32,12 +32,36 @@ CREATE TABLE IF NOT EXISTS token_events (
   cost_usd           REAL,
   enforcement_decision TEXT NOT NULL,
   cap_window         TEXT,
-  raw                TEXT NOT NULL
+  raw                TEXT NOT NULL,
+  user_id            TEXT,
+  project_id         TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_token_events_ts ON token_events(ts);
 CREATE INDEX IF NOT EXISTS idx_token_events_tenant_agent_ts ON token_events(tenant, agent, ts);
 CREATE INDEX IF NOT EXISTS idx_token_events_provider ON token_events(provider);
+CREATE INDEX IF NOT EXISTS idx_token_events_user_id ON token_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_token_events_project_id ON token_events(project_id);
+
+-- audit_log — append-only audit trail for compliance and security.
+-- Records all user actions, configuration changes, and critical operations.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id                 TEXT PRIMARY KEY,
+  ts                 TEXT NOT NULL,
+  user_id            TEXT NOT NULL,
+  project_id         TEXT,
+  action             TEXT NOT NULL,
+  resource_type      TEXT,
+  resource_id        TEXT,
+  details            TEXT,
+  ip_address         TEXT,
+  user_agent         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_project_id ON audit_log(project_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
 
 -- request_logs — append-only request/response logging for debugging provider calls.
 -- Auth headers are redacted BEFORE storage. Rows are never updated, only inserted

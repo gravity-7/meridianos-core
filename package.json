@@ -14,7 +14,8 @@
     "meridianos": "./init.mjs"
   },
   "dependencies": {
-    "better-sqlite3": "12.11.1"
+    "better-sqlite3": "12.11.1",
+    "stripe": "^22.4.0"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"

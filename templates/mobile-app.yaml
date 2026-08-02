@@ -1,0 +1,31 @@
+gateway:
+  disabled: false
+agents:
+  builder:
+    model: claude-sonnet-4
+    provider: anthropic
+  reviewer:
+    model: claude-sonnet-4
+    provider: anthropic
+  designer:
+    model: claude-sonnet-4
+    provider: anthropic
+taskCategories:
+  mobile_ui:
+    tier: medium
+    desc: React Native UI components
+  navigation:
+    tier: medium
+    desc: React Navigation setup
+  state:
+    tier: medium
+    desc: Redux/Zustand state management
+  native_modules:
+    tier: high
+    desc: iOS/Android native bridges
+  api_integration:
+    tier: medium
+    desc: REST/GraphQL API integration
+  app_store:
+    tier: high
+    desc: App Store / Play Store deployment

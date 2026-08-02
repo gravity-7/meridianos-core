@@ -191,6 +191,32 @@ export async function executeRun({ store, config, policy = loadPolicy(undefined,
           }
         }
         const finalTask = store.state.getTask(d.task.id);
+        
+        // T122: Auto-assign PR reviewer on PR creation
+        if (finalTask && finalTask.pr && finalTask.pr !== d.task.pr) {
+          const projectId = process.env.MERIDIANOS_PROJECT_ID;
+          if (projectId) {
+            try {
+              const { getReviewerAssigner } = await import('./control-plane.mjs');
+              const assigner = getReviewerAssigner();
+              const repo = policy?.github?.repo ?? 'org/repo';
+              const prUrl = finalTask.pr.startsWith('http') ? finalTask.pr : `https://github.com/${repo}/pull/${finalTask.pr}`;
+              
+              // Assign 1 reviewer by default
+              const result = await assigner.assign(projectId, prUrl, 1);
+              if (result && result.reviewers && result.reviewers.length > 0) {
+                const usernames = result.reviewers.map(r => r.username);
+                spawnSync('gh', ['pr', 'edit', finalTask.pr, '--add-reviewer', usernames.join(',')], {
+                  timeout: 30_000, stdio: 'pipe', windowsHide: true, encoding: 'utf8'
+                });
+                try { store.events.info('runner', 'pr-reviewers-assigned', { task: finalTask.id, pr: finalTask.pr, reviewers: usernames }); } catch { /* best-effort */ }
+              }
+            } catch (err) {
+              console.warn(`[aios] PR reviewer assignment failed for ${finalTask.id}: ${err.message}`);
+            }
+          }
+        }
+
         if (finalTask && finalTask.pr && (finalTask.id.startsWith('ADO-') || finalTask.adoId)) {
           const adoCfg = policy?.integrations?.azure_devops;
           if (adoCfg?.enabled && adoCfg.write_back_pr !== false) {

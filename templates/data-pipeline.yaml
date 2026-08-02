@@ -1,0 +1,25 @@
+gateway:
+  disabled: false
+agents:
+  builder:
+    model: claude-sonnet-4
+    provider: anthropic
+  reviewer:
+    model: claude-sonnet-4
+    provider: anthropic
+taskCategories:
+  extraction:
+    tier: medium
+    desc: Data fetching from sources
+  transformation:
+    tier: high
+    desc: Pandas/Spark data processing
+  loading:
+    tier: medium
+    desc: Data warehouse insertion
+  orchestration:
+    tier: medium
+    desc: Airflow/Prefect DAG setup
+  monitoring:
+    tier: medium
+    desc: Data quality checks and alerting

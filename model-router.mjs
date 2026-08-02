@@ -100,6 +100,28 @@ const TAG_TO_CATEGORY = {
 // task.complexity (1–5) → base tier. risk_tags can push it higher.
 const COMPLEXITY_TO_TIER = { 1: 'simple', 2: 'medium', 3: 'medium', 4: 'medium_high', 5: 'complex' };
 
+/**
+ * Check license for provider access (US5 - T100).
+ *
+ * `routeModel` (below) is a synchronous, hot-path function called from scheduler.mjs/runner.mjs
+ * on every routing decision — it cannot `await` a live HTTP call without making every one of its
+ * callers async too. A prior version of this function called `fetch(...)` here without awaiting
+ * it: the dangling promise almost always resolved (or rejected, since nothing serves that
+ * endpoint in most run modes) AFTER the synchronous return already happened, surfacing as
+ * unhandled promise rejections downstream (observed failing tests/model-router.test.mjs,
+ * tests/router.test.mjs, tests/scheduler.test.mjs, tests/runner.test.mjs,
+ * tests/harness-adapters.test.mjs — none of which call this directly, they just call
+ * `routeModel`). Every code path in that version returned `allowed: true` regardless of the
+ * fetch's outcome anyway (fail-open by construction), so this synchronous stub is
+ * behavior-identical to what was actually shipping — just without the dangling network call.
+ * A real synchronous tier gate would need the license status cached/pushed in, not fetched here.
+ * @param {Object} policy - Policy object (unused until real enforcement lands)
+ * @returns {Object} License check result
+ */
+function checkLicenseProviderAccess(policy) {
+  return { allowed: true, tier: 'free', reason: null };
+}
+
 // ─── Provider/harness selection (1.4) ──────────────────────────────────────
 // Per-agent default model lineup and default harness now live on the injected DomainPlugin
 // (`domain.defaultModels`, `domain.agentHarness`) — this module has no baked-in tenant identity
@@ -276,6 +298,20 @@ export function complexityTier(task, domain) {
 export function routeModel(agent, task, policy, budgetState = 'ok', domain) {
   const tier = complexityTier(task, domain);
   const category = task.task_type || inferCategory(task, domain) || null;
+
+  // Tier enforcement (US5 - T100): Check license for provider access
+  const licenseCheck = checkLicenseProviderAccess(policy);
+  if (!licenseCheck.allowed) {
+    return {
+      provider: null,
+      model: null,
+      harness: null,
+      tier,
+      baseTier: tier,
+      category,
+      reason: `License tier (${licenseCheck.tier}) does not allow this provider: ${licenseCheck.reason}`
+    };
+  }
 
   // Only route when model_routing is explicitly configured in policy
   const policyRouting = policy?.model_routing;

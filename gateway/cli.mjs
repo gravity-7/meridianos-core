@@ -498,8 +498,279 @@ async function handlePricingShow(flags) {
   }
 }
 
+// ─── Subcommand: project ───────────────────────────────────────────────────
+
+async function handleProjectCommand(args, flags) {
+  const subArgs = parseSubcommandArgs(args, 'project');
+  const action = subArgs[0];
+
+  if (action === 'list') {
+    return handleProjectList(flags);
+  }
+  if (action === 'create') {
+    return handleProjectCreate(subArgs, flags);
+  }
+  if (action === 'start') {
+    return handleProjectStart(subArgs, flags);
+  }
+  if (action === 'stop') {
+    return handleProjectStop(subArgs, flags);
+  }
+  if (action === 'restart') {
+    return handleProjectRestart(subArgs, flags);
+  }
+  if (action === 'delete') {
+    return handleProjectDelete(subArgs, flags);
+  }
+  if (action === 'health') {
+    return handleProjectHealth(subArgs, flags);
+  }
+
+  process.stderr.write('Usage: node gateway/cli.mjs project <list|create|start|stop|restart|delete|health> [options]\n');
+  process.stderr.write('  project list                    List all projects\n');
+  process.stderr.write('  project create <name>           Create a new project\n');
+  process.stderr.write('  project start <id|name>         Start a project\n');
+  process.stderr.write('  project stop <id|name>          Stop a project\n');
+  process.stderr.write('  project restart <id|name>       Restart a project\n');
+  process.stderr.write('  project delete <id|name>        Delete a project\n');
+  process.stderr.write('  project health <id|name>        Check project health\n');
+  process.exit(1);
+}
+
+async function handleProjectList(flags) {
+  try {
+    const { ProjectManager } = await import('../control-plane.mjs');
+    const projectManager = new ProjectManager();
+    const projects = projectManager.listProjects();
+
+    if (projects.length === 0) {
+      process.stdout.write('No projects found.\n');
+      return;
+    }
+
+    process.stdout.write('Projects:\n');
+    for (const project of projects) {
+      const statusIcon = project.status === 'running' ? '▶' : 
+                        project.status === 'stopped' ? '⏸' : 
+                        project.status === 'error' ? '⚠' : '•';
+      const healthIcon = project.health_status === 'healthy' ? '💚' : 
+                        project.health_status === 'degraded' ? '💛' : 
+                        project.health_status === 'down' ? '❤' : '⚪';
+      
+      process.stdout.write(`  ${statusIcon} ${project.name.padEnd(20)} ${project.id.slice(0, 8)}...  ${healthIcon} ${project.health_status.padEnd(10)} Port: ${project.port}\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleProjectCreate(subArgs, flags) {
+  const projectName = subArgs[1] ?? flags.name;
+  const template = flags.template ?? '';
+
+  if (!projectName) {
+    process.stderr.write('Usage: node gateway/cli.mjs project create <name> [--template <template>]\n');
+    process.exit(1);
+  }
+
+  try {
+    const { ProjectManager } = await import('../control-plane.mjs');
+    const projectManager = new ProjectManager();
+    
+    const project = projectManager.createProject({
+      name: projectName,
+      template: template || null,
+      config_path: `${process.cwd()}/.ai/projects/${projectName}/policy.yaml`,
+      state_path: `${process.cwd()}/.ai/projects/${projectName}/state`,
+      created_by: 'cli'
+    });
+
+    process.stdout.write(`Project created: ${project.name} (ID: ${project.id})\n`);
+    process.stdout.write(`  Port: ${project.port}\n`);
+    process.stdout.write(`  Template: ${project.template || 'Blank'}\n`);
+    process.stdout.write(`  Config: ${project.config_path}\n`);
+    process.stdout.write(`  State: ${project.state_path}\n`);
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleProjectStart(subArgs, flags) {
+  const projectIdentifier = subArgs[1] ?? flags.id ?? flags.name;
+
+  if (!projectIdentifier) {
+    process.stderr.write('Usage: node gateway/cli.mjs project start <id|name>\n');
+    process.exit(1);
+  }
+
+  try {
+    const { ProjectManager } = await import('../control-plane.mjs');
+    const projectManager = new ProjectManager();
+    
+    const project = findProject(projectManager, projectIdentifier);
+    if (!project) {
+      process.stderr.write(`Project not found: ${projectIdentifier}\n`);
+      process.exit(1);
+    }
+
+    const updated = await projectManager.startProject(project.id);
+    process.stdout.write(`Project started: ${updated.name}\n`);
+    process.stdout.write(`  Status: ${updated.status}\n`);
+    process.stdout.write(`  Dashboard: http://localhost:${updated.port}\n`);
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleProjectStop(subArgs, flags) {
+  const projectIdentifier = subArgs[1] ?? flags.id ?? flags.name;
+
+  if (!projectIdentifier) {
+    process.stderr.write('Usage: node gateway/cli.mjs project stop <id|name>\n');
+    process.exit(1);
+  }
+
+  try {
+    const { ProjectManager } = await import('../control-plane.mjs');
+    const projectManager = new ProjectManager();
+    
+    const project = findProject(projectManager, projectIdentifier);
+    if (!project) {
+      process.stderr.write(`Project not found: ${projectIdentifier}\n`);
+      process.exit(1);
+    }
+
+    const updated = await projectManager.stopProject(project.id);
+    process.stdout.write(`Project stopped: ${updated.name}\n`);
+    process.stdout.write(`  Status: ${updated.status}\n`);
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleProjectRestart(subArgs, flags) {
+  const projectIdentifier = subArgs[1] ?? flags.id ?? flags.name;
+
+  if (!projectIdentifier) {
+    process.stderr.write('Usage: node gateway/cli.mjs project restart <id|name>\n');
+    process.exit(1);
+  }
+
+  try {
+    const { ProjectManager } = await import('../control-plane.mjs');
+    const projectManager = new ProjectManager();
+    
+    const project = findProject(projectManager, projectIdentifier);
+    if (!project) {
+      process.stderr.write(`Project not found: ${projectIdentifier}\n`);
+      process.exit(1);
+    }
+
+    const updated = await projectManager.restartProject(project.id);
+    process.stdout.write(`Project restarted: ${updated.name}\n`);
+    process.stdout.write(`  Status: ${updated.status}\n`);
+    process.stdout.write(`  Dashboard: http://localhost:${updated.port}\n`);
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleProjectDelete(subArgs, flags) {
+  const projectIdentifier = subArgs[1] ?? flags.id ?? flags.name;
+
+  if (!projectIdentifier) {
+    process.stderr.write('Usage: node gateway/cli.mjs project delete <id|name>\n');
+    process.exit(1);
+  }
+
+  try {
+    const { ProjectManager } = await import('../control-plane.mjs');
+    const projectManager = new ProjectManager();
+    
+    const project = findProject(projectManager, projectIdentifier);
+    if (!project) {
+      process.stderr.write(`Project not found: ${projectIdentifier}\n`);
+      process.exit(1);
+    }
+
+    if (project.status === 'running') {
+      process.stderr.write(`Cannot delete running project. Stop it first.\n`);
+      process.exit(1);
+    }
+
+    await projectManager.deleteProject(project.id);
+    process.stdout.write(`Project deleted: ${project.name}\n`);
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleProjectHealth(subArgs, flags) {
+  const projectIdentifier = subArgs[1] ?? flags.id ?? flags.name;
+
+  if (!projectIdentifier) {
+    process.stderr.write('Usage: node gateway/cli.mjs project health <id|name>\n');
+    process.exit(1);
+  }
+
+  try {
+    const { ProjectManager } = await import('../control-plane.mjs');
+    const projectManager = new ProjectManager();
+    
+    const project = findProject(projectManager, projectIdentifier);
+    if (!project) {
+      process.stderr.write(`Project not found: ${projectIdentifier}\n`);
+      process.exit(1);
+    }
+
+    const health = await projectManager.getProjectHealth(project.id);
+    
+    process.stdout.write(`Project Health: ${project.name}\n`);
+    process.stdout.write(`  Status: ${health.status}\n`);
+    process.stdout.write(`  HTTP Healthy: ${health.http_healthy ? 'Yes' : 'No'}\n`);
+    process.stdout.write(`  Process Running: ${health.process_running ? 'Yes' : 'No'}\n`);
+    process.stdout.write(`  CPU: ${health.metrics.cpu.toFixed(2)}s\n`);
+    process.stdout.write(`  Memory: ${health.metrics.memory.toFixed(2)} MB\n`);
+    process.stdout.write(`  Last Check: ${health.last_check}\n`);
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+function findProject(projectManager, identifier) {
+  // Try by ID first
+  let project = projectManager.getProject(identifier);
+  if (project) return project;
+
+  // Try by name
+  const projects = projectManager.listProjects();
+  return projects.find(p => p.name === identifier) || null;
+}
+
 async function main() {
-  const flags = parseArgs(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  const flags = parseArgs(args);
+
+  // Handle subcommands
+  if (args[0] === 'provider') {
+    return handleProviderCommand(args, flags);
+  }
+  if (args[0] === 'models') {
+    return handleModelsCommand(args, flags);
+  }
+  if (args[0] === 'pricing') {
+    return handlePricingCommand(args, flags);
+  }
+  if (args[0] === 'project') {
+    return handleProjectCommand(args, flags);
+  }
 
   // Handle --init before assembly
   if (flags.init) {

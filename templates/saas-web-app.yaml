@@ -1,0 +1,34 @@
+gateway:
+  disabled: false
+agents:
+  builder:
+    model: claude-sonnet-4
+    provider: anthropic
+  reviewer:
+    model: claude-sonnet-4
+    provider: anthropic
+  designer:
+    model: claude-sonnet-4
+    provider: anthropic
+taskCategories:
+  frontend:
+    tier: medium
+    desc: React/Vue frontend development
+  backend:
+    tier: medium
+    desc: Node.js/Python API development
+  database:
+    tier: high
+    desc: Schema design and migrations
+  auth:
+    tier: high
+    desc: Authentication and security
+  payments:
+    tier: high
+    desc: Stripe billing integration
+  infrastructure:
+    tier: high
+    desc: Cloud deployment and CI/CD
+  design:
+    tier: medium
+    desc: UI/UX design and styling

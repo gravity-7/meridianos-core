@@ -9,10 +9,13 @@
  * localhost — this is a single-operator local tool, not a public service.
  */
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createServer as createHttpsServer } from 'node:https';
+import { readFileSync, existsSync } from 'node:fs';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { join, dirname } from 'node:path';
+import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import url from 'node:url';
 import { execFile, spawn } from 'node:child_process';
 import { buildStatus } from '../status.mjs';
 import { openDb } from '../db.mjs';
@@ -29,12 +32,54 @@ import { getLastAggregatedHour, getLastAggregatedDay } from '../aggregation.mjs'
 import { readRuns } from '../runlog.mjs';
 import { getProviderHealth } from '../provider-health.mjs';
 import { detectInstalledIdes, generateProxyConfig, testIdeConnectivity, KNOWN_IDES } from '../ide-proxy.mjs';
+import { generateToken, verifyToken, refreshToken as jwtRefreshToken } from '../auth/jwt.mjs';
+import { getUserStore, verifyPassword, hashPassword } from '../auth/user-store.mjs';
+import { getAPITokenManager } from '../auth/api-tokens.mjs';
+import { ProjectManager, getProjectManager as getGlobalProjectManager, getTemplateLoader } from '../control-plane.mjs';
+import { getOAuthProvider } from '../auth/oauth-provider.mjs';
+import { SOC2Report } from '../compliance/reports/soc2.mjs';
+import { GDPRReport } from '../compliance/reports/gdpr.mjs';
+import { CostAllocationReport } from '../compliance/reports/cost-allocation.mjs';
+import { ModelUsageReport } from '../compliance/reports/model-usage.mjs';
+
+// Import ProjectManager for multi-tenant project management
+let _projectManager = null;
+function getProjectManager() {
+  if (!_projectManager) {
+    _projectManager = getGlobalProjectManager();
+  }
+  return _projectManager;
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.html');
 const ALLOWED = new Set(LEVER_PATHS);
 const ACTION_PATHS = new Set(['/api/run', '/api/task', '/api/verify', '/api/escalation']);
 const STATUS_TTL_MS = 2000; // dedupe bursty polls; buildStatus rescans transcripts, so don't do it per-request
+
+// Rate limiting state
+const rateLimits = new Map();
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const MAX_REQUESTS_PER_WINDOW = 100;
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  if (!rateLimits.has(ip)) {
+    rateLimits.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW });
+    return true;
+  }
+  const state = rateLimits.get(ip);
+  if (now > state.resetAt) {
+    state.count = 1;
+    state.resetAt = now + RATE_LIMIT_WINDOW;
+    return true;
+  }
+  if (state.count >= MAX_REQUESTS_PER_WINDOW) {
+    return false;
+  }
+  state.count++;
+  return true;
+}
 
 // Per-boot auth token (postmortem security P1). The dashboard binds to 127.0.0.1, but that alone
 // lets ANY local process — or a malicious web page doing a cross-origin POST — flip levers or trigger
@@ -168,6 +213,13 @@ export function createDashboardServer(config) {
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
+      const clientIp = req.socket.remoteAddress || 'unknown';
+
+      // Apply rate limiting to all API requests
+      if (url.pathname.startsWith('/api/') && !checkRateLimit(clientIp)) {
+        return send(res, 429, JSON.stringify({ ok: false, error: 'Too many requests. Please try again later.' }));
+      }
+
       // Cheap liveness probe: touches NO DB, filesystem, git, or transcript scan, so it answers
       // instantly whenever the event loop is free — and, crucially, times out when the loop is
       // BLOCKED (e.g. a synchronous git/gh spawnSync in a tick). That makes it a true wedge signal
@@ -877,6 +929,203 @@ export function createDashboardServer(config) {
         } catch { /* best-effort */ }
         return send(res, 200, JSON.stringify({ ok: true, run, ledgerCost }));
       }
+
+      // ── Authentication API (Multi-Tenant Platform) ─────────────────
+      if (req.method === 'POST' && url.pathname === '/api/auth/login') {
+        return handleLogin(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/auth/me') {
+        return handleGetCurrentUser(req, res);
+      }
+      if (req.method === 'PUT' && url.pathname === '/api/auth/me') {
+        return handleUpdateCurrentUser(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/auth/me/password') {
+        return handleChangePassword(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/auth/tokens') {
+        return handleCreateApiToken(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/auth/tokens') {
+        return handleListApiTokens(req, res);
+      }
+      if (req.method === 'DELETE' && url.pathname.match(/^\/api\/auth\/tokens\/[^/]+$/)) {
+        const tokenId = url.pathname.split('/').pop();
+        return handleRevokeApiToken(req, res, tokenId);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
+        return handleLogout(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/auth/refresh') {
+        return handleRefreshJWT(req, res);
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/auth\/oauth\/[^/]+\/authorize$/)) {
+        const provider = url.pathname.split('/')[4];
+        return handleOAuthAuthorize(req, res, provider);
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/auth\/oauth\/[^/]+\/callback$/)) {
+        const provider = url.pathname.split('/')[4];
+        return handleOAuthCallback(req, res, provider);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/auth/users') {
+        return handleCreateUser(req, res);
+      }
+
+      // ── Project Management API (Multi-Tenant Platform) ────────────────
+      if (req.method === 'GET' && url.pathname === '/api/projects/templates') {
+        if (!requireAuth(req, res)) return;
+        return handleListTemplates(req, res);
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/templates\/[^/]+$/)) {
+        if (!requireAuth(req, res)) return;
+        const templateId = url.pathname.split('/').pop();
+        return handleGetTemplate(req, res, templateId);
+      }
+
+      // ── Compliance Reporting API (US7) ─────────────────────────────
+      if (req.method === 'POST' && url.pathname === '/api/compliance/reports/soc2') {
+        if (!requireAuth(req, res)) return;
+        return handleGenerateSOC2Report(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/compliance/reports/gdpr') {
+        if (!requireAuth(req, res)) return;
+        return handleGenerateGDPRReport(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/compliance/reports/cost-allocation') {
+        if (!requireAuth(req, res)) return;
+        return handleGenerateCostAllocationReport(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/compliance/reports/model-usage') {
+        if (!requireAuth(req, res)) return;
+        return handleGenerateModelUsageReport(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/compliance/reports') {
+        if (!requireAuth(req, res)) return;
+        return handleListComplianceReports(req, res);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/projects') {
+        if (!requireAuth(req, res)) return;
+        return handleListProjects(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/projects') {
+        if (!requireAuth(req, res)) return;
+        return handleCreateProject(req, res);
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+$/)) {
+        if (!requireAuth(req, res)) return;
+        const projectId = url.pathname.split('/').pop();
+        return handleGetProject(req, res, projectId);
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/start$/)) {
+        if (!requireAuth(req, res)) return;
+        const projectId = url.pathname.split('/')[3];
+        return handleStartProject(req, res, projectId);
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/stop$/)) {
+        if (!requireAuth(req, res)) return;
+        const projectId = url.pathname.split('/')[3];
+        return handleStopProject(req, res, projectId);
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/restart$/)) {
+        if (!requireAuth(req, res)) return;
+        const projectId = url.pathname.split('/')[3];
+        return handleRestartProject(req, res, projectId);
+      }
+      if (req.method === 'DELETE' && url.pathname.match(/^\/api\/projects\/[^/]+$/)) {
+        if (!requireAuth(req, res)) return;
+        const projectId = url.pathname.split('/').pop();
+        return handleDeleteProject(req, res, projectId);
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/health$/)) {
+        if (!requireAuth(req, res)) return;
+        const projectId = url.pathname.split('/')[3];
+        return handleGetProjectHealth(req, res, projectId);
+      }
+
+      // ── Billing API (Multi-Tenant Platform - US5) ─────────────────────
+      if (req.method === 'GET' && url.pathname === '/api/billing/license') {
+        if (!requireAuth(req, res)) return;
+        return handleGetLicense(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/billing/license/validate') {
+        if (!requireAuth(req, res)) return;
+        return handleValidateLicense(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/billing/license/refresh') {
+        if (!requireAuth(req, res)) return;
+        return handleRefreshLicense(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/billing/checkout') {
+        if (!requireAuth(req, res)) return;
+        return handleCreateCheckout(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/billing/portal') {
+        if (!requireAuth(req, res)) return;
+        return handleGetPortal(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/billing/subscription') {
+        if (!requireAuth(req, res)) return;
+        return handleGetSubscription(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/billing/webhook/stripe') {
+        return handleStripeWebhook(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/billing/check-feature') {
+        if (!requireAuth(req, res)) return;
+        return handleCheckFeature(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/billing/limits') {
+        if (!requireAuth(req, res)) return;
+        return handleGetLimits(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/billing/pricing') {
+        if (!requireAuth(req, res)) return;
+        return handleGetPricing(req, res);
+      }
+
+      // Team Collaboration API (US3). These handlers self-check requireAuth internally, so no
+      // wrapping gate here (matches the reviews handlers just below, same pattern).
+      if (req.method === 'POST' && url.pathname === '/api/auth/invitations') {
+        return handleCreateInvitation(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/auth/invitations') {
+        return handleListInvitations(req, res);
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/auth\/invitations\/[^/]+\/accept$/)) {
+        return handleAcceptInvitation(req, res);
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/auth\/invitations\/[^/]+\/reject$/)) {
+        return handleRejectInvitation(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/activity/feed') {
+        return handleGetActivityFeed(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/activity/stats') {
+        return handleGetActivityStats(req, res);
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/tasks\/[^/]+\/comments$/)) {
+        return handleAddTaskComment(req, res);
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/tasks\/[^/]+\/comments$/)) {
+        return handleGetTaskComments(req, res);
+      }
+      if (req.method === 'PUT' && url.pathname.match(/^\/api\/tasks\/[^/]+\/comments\/[^/]+$/)) {
+        return handleUpdateTaskComment(req, res);
+      }
+      if (req.method === 'DELETE' && url.pathname.match(/^\/api\/tasks\/[^/]+\/comments\/[^/]+$/)) {
+        return handleDeleteTaskComment(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/reviews/assign') {
+        return handleAssignReviewers(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/reviews/assignments') {
+        return handleGetReviewAssignments(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/reviews/stats') {
+        return handleGetReviewStats(req, res);
+      }
+
       return send(res, 404, JSON.stringify({ ok: false, error: 'not found' }));
     } catch (e) {
       return send(res, 400, JSON.stringify({ ok: false, error: String((e && e.message) || e) }));
@@ -884,12 +1133,1084 @@ export function createDashboardServer(config) {
   });
 }
 
+/**
+ * Authentication middleware for protected endpoints
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ * @returns {boolean} True if authenticated, false otherwise
+ */
+function requireAuth(req, res) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    send(res, 401, JSON.stringify({
+      ok: false,
+      error: 'Missing authorization header',
+      remediation: 'Include an Authorization header with your JWT token or API key. Format: "Bearer <token>" or "ApiKey <key>"'
+    }));
+    return false;
+  }
+
+  const [scheme, token] = authHeader.split(' ');
+  if (!scheme || !token) {
+    send(res, 401, JSON.stringify({
+      ok: false,
+      error: 'Invalid authorization header format',
+      remediation: 'Authorization header must be in format "Bearer <token>" or "ApiKey <key>". Ensure no extra spaces or characters.'
+    }));
+    return false;
+  }
+
+  if (scheme.toLowerCase() === 'bearer') {
+    const payload = verifyToken(token);
+    if (!payload) {
+      send(res, 401, JSON.stringify({
+        ok: false,
+        error: 'Invalid or expired token',
+        remediation: 'Your JWT token may be expired or invalid. Please refresh your token using POST /api/auth/refresh or log in again.'
+      }));
+      return false;
+    }
+    req.user = payload;
+    return true;
+  } else if (scheme.toLowerCase() === 'apikey') {
+    const tokenManager = getAPITokenManager();
+    const tokenData = tokenManager.validateToken(token);
+    if (!tokenData) {
+      send(res, 401, JSON.stringify({
+        ok: false,
+        error: 'Invalid API key',
+        remediation: 'Your API key may be expired or revoked. Generate a new API key using POST /api/auth/tokens or contact support.'
+      }));
+      return false;
+    }
+    req.user = { sub: tokenData.user_id, email: tokenData.email };
+    req.apiToken = tokenData;
+    return true;
+  } else {
+    send(res, 401, JSON.stringify({
+      ok: false,
+      error: 'Invalid authorization scheme',
+      remediation: 'Supported schemes are "Bearer" for JWT tokens and "ApiKey" for API keys. Ensure you use the correct scheme.'
+    }));
+    return false;
+  }
+}
+
+/**
+ * Billing API Handlers (Multi-Tenant Platform - US5)
+ */
+
+// Lazy load licensing modules
+let _licenseValidator = null;
+let _licenseRefresh = null;
+let _stripeWebhook = null;
+
+function getLicenseValidator() {
+  if (!_licenseValidator) {
+    const { LicenseValidator } = import('../licensing/license-validate.mjs');
+    const db = openDb(undefined, config);
+    _licenseValidator = new LicenseValidator(db);
+  }
+  return _licenseValidator;
+}
+
+function getLicenseRefresh() {
+  if (!_licenseRefresh) {
+    const { LicenseRefresh } = import('../licensing/license-refresh.mjs');
+    const db = openDb(undefined, config);
+    _licenseRefresh = new LicenseRefresh(db);
+  }
+  return _licenseRefresh;
+}
+
+function getStripeWebhook() {
+  if (!_stripeWebhook) {
+    const { StripeWebhook } = import('../licensing/stripe-webhook.mjs');
+    const db = openDb(undefined, config);
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    _stripeWebhook = new StripeWebhook(db, webhookSecret);
+  }
+  return _stripeWebhook;
+}
+
+/**
+ * GET /api/billing/license - Get current license status
+ */
+async function handleGetLicense(req, res) {
+  try {
+    const validator = getLicenseValidator();
+    const result = validator.getLicenseStatus();
+
+    if (result.success) {
+      send(res, 200, JSON.stringify(result));
+    } else {
+      send(res, 404, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/billing/license/validate - Validate a license key
+ */
+async function handleValidateLicense(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { license_key } = body;
+
+    if (!license_key) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'license_key is required' }));
+    }
+
+    const validator = getLicenseValidator();
+    const result = validator.validate(license_key);
+
+    if (result.success) {
+      send(res, 200, JSON.stringify(result));
+    } else {
+      send(res, 400, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/billing/license/refresh - Force refresh license
+ */
+async function handleRefreshLicense(req, res) {
+  try {
+    const refresh = getLicenseRefresh();
+    const result = await refresh.trigger();
+
+    if (result.success) {
+      send(res, 200, JSON.stringify(result));
+    } else {
+      send(res, 500, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/billing/checkout - Create Stripe checkout session
+ */
+async function handleCreateCheckout(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { tier, seats, success_url, cancel_url } = body;
+
+    if (!tier) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'tier is required' }));
+    }
+
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return send(res, 500, JSON.stringify({ success: false, error: 'Stripe not configured' }));
+    }
+
+    // Import Stripe SDK
+    const stripe = (await import('stripe')).default(process.env.STRIPE_SECRET_KEY);
+
+    // Get pricing for tier
+    const pricing = getTierPricing(tier);
+    const priceId = pricing.priceId;
+
+    // Create checkout session
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [{
+        price: priceId,
+        quantity: seats || 1,
+      }],
+      metadata: {
+        tier,
+        seats: String(seats || 1),
+      },
+      success_url: success_url || `${req.headers.origin}/billing/success`,
+      cancel_url: cancel_url || `${req.headers.origin}/billing/cancel`,
+    });
+
+    send(res, 200, JSON.stringify({
+      success: true,
+      checkout_url: session.url,
+      session_id: session.id,
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/billing/portal - Get customer portal URL
+ */
+async function handleGetPortal(req, res) {
+  try {
+    const reqUrl = new URL(req.url, 'http://localhost');
+    const return_url = reqUrl.searchParams.get('return_url') || req.headers.origin || 'http://localhost:4317';
+
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return send(res, 500, JSON.stringify({ success: false, error: 'Stripe not configured' }));
+    }
+
+    // Get current license to find customer ID
+    const validator = getLicenseValidator();
+    const licenseStatus = validator.getLicenseStatus();
+
+    if (!licenseStatus.success || !licenseStatus.license.customer_id) {
+      return send(res, 404, JSON.stringify({ success: false, error: 'No active subscription found' }));
+    }
+
+    // Import Stripe SDK
+    const stripe = (await import('stripe')).default(process.env.STRIPE_SECRET_KEY);
+
+    // Create portal session
+    const session = await stripe.billingPortal.sessions.create({
+      customer: licenseStatus.license.customer_id,
+      return_url,
+    });
+
+    send(res, 200, JSON.stringify({
+      success: true,
+      portal_url: session.url,
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/billing/subscription - Get subscription details
+ */
+async function handleGetSubscription(req, res) {
+  try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return send(res, 500, JSON.stringify({ success: false, error: 'Stripe not configured' }));
+    }
+
+    // Get current license
+    const validator = getLicenseValidator();
+    const licenseStatus = validator.getLicenseStatus();
+
+    if (!licenseStatus.success || !licenseStatus.license.subscription_id) {
+      return send(res, 404, JSON.stringify({ success: false, error: 'No active subscription found' }));
+    }
+
+    // Import Stripe SDK
+    const stripe = (await import('stripe')).default(process.env.STRIPE_SECRET_KEY);
+
+    // Get subscription from Stripe
+    const subscription = await stripe.subscriptions.retrieve(licenseStatus.license.subscription_id);
+
+    send(res, 200, JSON.stringify({
+      success: true,
+      subscription: {
+        id: subscription.id,
+        status: subscription.status,
+        tier: licenseStatus.license.tier,
+        seats: subscription.items.data[0]?.quantity || 1,
+        current_period_start: subscription.current_period_start,
+        current_period_end: subscription.current_period_end,
+        cancel_at_period_end: subscription.cancel_at_period_end,
+      },
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/billing/webhook/stripe - Handle Stripe webhook
+ */
+async function handleStripeWebhook(req, res) {
+  try {
+    const signature = req.headers['stripe-signature'];
+    const payload = await readBody(req);
+
+    if (!signature) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'Missing stripe-signature header' }));
+    }
+
+    const webhook = getStripeWebhook();
+
+    // Verify signature
+    if (!webhook.verifySignature(payload, signature)) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'Invalid signature' }));
+    }
+
+    // Parse event
+    const event = JSON.parse(payload);
+
+    // Handle event
+    const result = webhook.handle(event);
+
+    if (result.success) {
+      send(res, 200, JSON.stringify({ received: true }));
+    } else {
+      send(res, 500, JSON.stringify({ received: true, error: result.error }));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/billing/check-feature - Check if feature is available
+ */
+async function handleCheckFeature(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { feature } = body;
+
+    if (!feature) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'feature is required' }));
+    }
+
+    const validator = getLicenseValidator();
+    const result = validator.checkFeature(feature);
+
+    if (result.success) {
+      send(res, 200, JSON.stringify(result));
+    } else {
+      send(res, 404, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/billing/limits - Get tier limits
+ */
+async function handleGetLimits(req, res) {
+  try {
+    const validator = getLicenseValidator();
+    const result = validator.getLimits();
+
+    if (result.success) {
+      send(res, 200, JSON.stringify(result));
+    } else {
+      send(res, 404, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/billing/pricing - Get available pricing plans
+ */
+async function handleGetPricing(req, res) {
+  try {
+    const plans = [
+      {
+        id: 'free',
+        name: 'Free',
+        tier: 'free',
+        price_monthly: 0,
+        price_yearly: 0,
+        features: [
+          '1 project',
+          '3 agents',
+          '1 user seat',
+          '$100 monthly spend limit',
+          'Local dashboard only',
+        ],
+        limits: {
+          max_projects: 1,
+          max_agents: 3,
+          max_seats: 1,
+          max_monthly_spend: 100,
+        },
+      },
+      {
+        id: 'pro',
+        name: 'Pro',
+        tier: 'pro',
+        price_monthly: 29,
+        price_yearly: 290,
+        features: [
+          '10 projects',
+          '50 agents',
+          '10 user seats',
+          '$1,000 monthly spend limit',
+          'Remote dashboard',
+          'Team collaboration',
+          'Project templates',
+          'API access',
+        ],
+        limits: {
+          max_projects: 10,
+          max_agents: 50,
+          max_seats: 10,
+          max_monthly_spend: 1000,
+        },
+      },
+      {
+        id: 'enterprise',
+        name: 'Enterprise',
+        tier: 'enterprise',
+        price_monthly: 99,
+        price_yearly: 990,
+        features: [
+          'Unlimited projects',
+          'Unlimited agents',
+          'Unlimited user seats',
+          'Unlimited spend',
+          'All Pro features',
+          'Priority support',
+          'Custom integrations',
+          'SSO',
+          'Audit logs',
+          'Compliance reports',
+          'SLA guarantee',
+        ],
+        limits: {
+          max_projects: -1,
+          max_agents: -1,
+          max_seats: -1,
+          max_monthly_spend: -1,
+        },
+      },
+    ];
+
+    send(res, 200, JSON.stringify({
+      success: true,
+      plans,
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * Get Stripe price ID for a tier
+ * @param {string} tier - License tier
+ * @returns {Object} Pricing information
+ */
+function getTierPricing(tier) {
+  const pricing = {
+    free: {
+      priceId: null, // Free tier has no price
+    },
+    pro: {
+      priceId: process.env.STRIPE_PRO_PRICE_ID || 'price_pro_monthly',
+    },
+    enterprise: {
+      priceId: process.env.STRIPE_ENTERPRISE_PRICE_ID || 'price_enterprise_monthly',
+    },
+  };
+
+  return pricing[tier] || pricing.free;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.AIOS_DASHBOARD_PORT) || 4317;
+  const host = process.env.AIOS_DASHBOARD_HOST || '127.0.0.1';
+  const useHttps = process.env.AIOS_DASHBOARD_HTTPS === 'true';
   // Diagnostic-only default plugin — see budget.mjs's identical comment.
   const DIAG_DOMAIN = { agents: ['a', 'b'], prompts: { implRules: [], reviewCriteria: [] }, guardrailCheck: null, boardTitle: 'AIOS', riskToAction: {}, knownRiskTags: [] };
   const { config } = createAios({ domain: DIAG_DOMAIN });
-  createDashboardServer(config).listen(port, '127.0.0.1', () => {
-    console.log(`AIOS dashboard → http://localhost:${port}`);
-  });
+  
+  const server = createDashboardServer(config);
+  
+  if (useHttps) {
+    try {
+      const certs = loadOrGenerateCerts();
+      const httpsServer = createHttpsServer(certs, server);
+      httpsServer.listen(port, host, () => {
+        console.log(`MeridianOS Dashboard → https://localhost:${port} (HTTPS)`);
+        console.log(`⚠️  Using self-signed certificate. Your browser will show a security warning.`);
+      });
+    } catch (error) {
+      console.error(`Failed to start HTTPS server: ${error.message}`);
+      console.log(`Falling back to HTTP on localhost only...`);
+      server.listen(port, host, () => {
+        console.log(`MeridianOS Dashboard → http://localhost:${port}`);
+      });
+    }
+  } else {
+    server.listen(port, host, () => {
+      console.log(`MeridianOS Dashboard → http://localhost:${port}`);
+    });
+  }
 }
+
+/**
+ * Generate self-signed TLS certificate for HTTPS support
+ * @param {string} certPath - Path to save certificate
+ * @param {string} keyPath - Path to save private key
+ * @returns {Object} Certificate and key paths
+ */
+function generateSelfSignedCert(certPath, keyPath) {
+  const { execSync } = require('node:child_process');
+  
+  try {
+    // Generate private key
+    execSync(`openssl genrsa -out "${keyPath}" 2048`, { stdio: 'ignore' });
+    
+    // Generate self-signed certificate
+    execSync(
+      `openssl req -new -x509 -key "${keyPath}" -out "${certPath}" -days 365 -subj "/CN=localhost"`,
+
+      {
+        stdio: 'ignore',
+      }
+    );
+
+    return { certPath, keyPath };
+  } catch (err) {
+    return { certPath: null, keyPath: null };
+  }
+}
+
+/**
+ * Team Collaboration API (US3) - Invitation Management
+ */
+
+// Lazy load team collaboration modules
+let _invitationManager = null;
+let _activityLogger = null;
+let _taskCommentManager = null;
+let _reviewerAssigner = null;
+
+function getInvitationManager() {
+  if (!_invitationManager) {
+    const { InvitationManager } = import('../auth/user-store.mjs');
+    const db = openDb(undefined, config);
+    _invitationManager = new InvitationManager(db);
+  }
+  return _invitationManager;
+}
+
+function getActivityLogger() {
+  if (!_activityLogger) {
+    const { ActivityLogger } = import('../compliance/audit-log.mjs');
+    const db = openDb(undefined, config);
+    _activityLogger = new ActivityLogger(db);
+  }
+  return _activityLogger;
+}
+
+function getTaskCommentManager() {
+  if (!_taskCommentManager) {
+    const { TaskComment } = import('../project/task-comments.mjs');
+    const db = openDb(undefined, config);
+    _taskCommentManager = new TaskComment(db);
+  }
+  return _taskCommentManager;
+}
+
+function getReviewerAssigner() {
+  if (!_reviewerAssigner) {
+    const { getReviewerAssigner } = import('../control-plane.mjs');
+    _reviewerAssigner = getReviewerAssigner();
+  }
+  return _reviewerAssigner;
+}
+
+/**
+ * POST /api/auth/invitations - Create team invitation
+ */
+async function handleCreateInvitation(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+    
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { email, role = 'member', message } = body;
+
+    if (!email) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'email is required' }));
+    }
+
+    const invitationManager = getInvitationManager();
+    const result = await invitationManager.create({
+      email,
+      role,
+      message,
+      project_id: req.user.sub, // Current user's project
+      created_by: req.user.sub,
+    });
+
+    if (result.success) {
+      // Log the invitation creation
+      const activityLogger = getActivityLogger();
+      await activityLogger.log({
+        user_id: req.user.sub,
+        action: 'invitation_created',
+        resource_type: 'invitation',
+        resource_id: result.invitation.id,
+        details: {
+          email: result.invitation.email,
+          role: result.invitation.role,
+          project_id: req.user.sub,
+        },
+        metadata: { message },
+      });
+
+      send(res, 201, JSON.stringify(result));
+    } else {
+      send(res, 400, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/auth/invitations - List invitations for current project
+ */
+async function handleListInvitations(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const invitationManager = getInvitationManager();
+    const invitations = invitationManager.list(req.user.sub);
+
+    // Log the access
+    const activityLogger = getActivityLogger();
+    await activityLogger.log({
+      user_id: req.user.sub,
+      action: 'invitations_listed',
+      resource_type: 'invitation',
+      details: { project_id: req.user.sub, count: invitations.length },
+    });
+
+    send(res, 200, JSON.stringify({ success: true, invitations }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/auth/invitations/:id/accept - Accept invitation
+ */
+async function handleAcceptInvitation(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const invitationId = req.pathname.split('/')[3];
+    const invitationManager = getInvitationManager();
+    
+    const result = await invitationManager.accept(invitationId, req.user.sub);
+
+    if (result.success) {
+      // Log the acceptance
+      const activityLogger = getActivityLogger();
+      await activityLogger.log({
+        user_id: req.user.sub,
+        action: 'invitation_accepted',
+        resource_type: 'invitation',
+        resource_id: invitationId,
+        details: {
+          email: result.user.email,
+          role: result.role,
+          project_id: req.user.sub,
+        },
+      });
+
+      send(res, 200, JSON.stringify(result));
+    } else {
+      send(res, 400, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/auth/invitations/:id/reject - Reject invitation
+ */
+async function handleRejectInvitation(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const invitationId = req.pathname.split('/')[3];
+    const invitationManager = getInvitationManager();
+    
+    const result = await invitationManager.reject(invitationId, req.user.sub);
+
+    if (result.success) {
+      // Log the rejection
+      const activityLogger = getActivityLogger();
+      await activityLogger.log({
+        user_id: req.user.sub,
+        action: 'invitation_rejected',
+        resource_type: 'invitation',
+        resource_id: invitationId,
+        details: { project_id: req.user.sub },
+      });
+
+      send(res, 200, JSON.stringify(result));
+    } else {
+      send(res, 400, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/activity/feed - Get activity feed for current project
+ */
+async function handleGetActivityFeed(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const activityLogger = getActivityLogger();
+    const limit = parseInt(req.url.searchParams.get('limit') || '50', 10);
+    const offset = parseInt(req.url.searchParams.get('offset') || '0', 10);
+    
+    const feed = await activityLogger.getProjectFeed(req.user.sub, limit, offset);
+
+    send(res, 200, JSON.stringify({ success: true, feed }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/activity/stats - Get activity statistics for current project
+ */
+async function handleGetActivityStats(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const activityLogger = getActivityLogger();
+    const stats = await activityLogger.getProjectStats(req.user.sub);
+
+    send(res, 200, JSON.stringify({ success: true, stats }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/tasks/:id/comments - Add comment to task
+ */
+async function handleAddTaskComment(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const taskId = req.pathname.split('/')[2];
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { content } = body;
+
+    if (!content) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'content is required' }));
+    }
+
+    const taskCommentManager = getTaskCommentManager();
+    const result = await taskCommentManager.create({
+      task_id: taskId,
+      user_id: req.user.sub,
+      content,
+    });
+
+    if (result.success) {
+      // Log the comment creation
+      const activityLogger = getActivityLogger();
+      await activityLogger.log({
+        user_id: req.user.sub,
+        action: 'task_commented',
+        resource_type: 'task',
+        resource_id: taskId,
+        details: {
+          comment_id: result.comment.id,
+          project_id: req.user.sub,
+        },
+        metadata: { content: content.substring(0, 100) + '...' },
+      });
+
+      send(res, 201, JSON.stringify(result));
+    } else {
+      send(res, 400, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/tasks/:id/comments - Get comments for task
+ */
+async function handleGetTaskComments(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const taskId = req.pathname.split('/')[2];
+    const taskCommentManager = getTaskCommentManager();
+    const comments = taskCommentManager.list(taskId);
+
+    send(res, 200, JSON.stringify({ success: true, comments }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * PUT /api/tasks/:id/comments/:commentId - Update task comment
+ */
+async function handleUpdateTaskComment(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const taskId = req.pathname.split('/')[2];
+    const commentId = req.pathname.split('/')[4];
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { content } = body;
+
+    if (!content) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'content is required' }));
+    }
+
+    const taskCommentManager = getTaskCommentManager();
+    const result = await taskCommentManager.update(commentId, content);
+
+    if (result.success) {
+      // Log the comment update
+      const activityLogger = getActivityLogger();
+      await activityLogger.log({
+        user_id: req.user.sub,
+        action: 'task_comment_updated',
+        resource_type: 'task_comment',
+        resource_id: commentId,
+        details: {
+          task_id: taskId,
+          project_id: req.user.sub,
+        },
+        metadata: { content: content.substring(0, 100) + '...' },
+      });
+
+      send(res, 200, JSON.stringify(result));
+    } else {
+      send(res, 400, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * DELETE /api/tasks/:id/comments/:commentId - Delete task comment
+ */
+async function handleDeleteTaskComment(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const taskId = req.pathname.split('/')[2];
+    const commentId = req.pathname.split('/')[4];
+    const taskCommentManager = getTaskCommentManager();
+    
+    const result = await taskCommentManager.delete(commentId);
+
+    if (result.success) {
+      // Log the comment deletion
+      const activityLogger = getActivityLogger();
+      await activityLogger.log({
+        user_id: req.user.sub,
+        action: 'task_comment_deleted',
+        resource_type: 'task_comment',
+        resource_id: commentId,
+        details: {
+          task_id: taskId,
+          project_id: req.user.sub,
+        },
+      });
+
+      send(res, 200, JSON.stringify(result));
+    } else {
+      send(res, 400, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/reviews/assign - Assign reviewers to PR (round-robin)
+ */
+async function handleAssignReviewers(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { pr_url, reviewer_count = 2 } = body;
+
+    if (!pr_url) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'pr_url is required' }));
+    }
+
+    const reviewerAssigner = getReviewerAssigner();
+    const result = await reviewerAssigner.assign(req.user.sub, pr_url, reviewer_count);
+
+    if (result.success) {
+      // Log the assignment
+      const activityLogger = getActivityLogger();
+      await activityLogger.log({
+        user_id: req.user.sub,
+        action: 'reviewers_assigned',
+        resource_type: 'pr_review_assignment',
+        resource_id: result.assignment_id,
+        details: {
+          pr_url: result.pr_url,
+          reviewers: result.reviewers.map(r => r.username),
+          reviewer_count: result.reviewer_count,
+          project_id: req.user.sub,
+        },
+      });
+
+      send(res, 201, JSON.stringify(result));
+    } else {
+      send(res, 400, JSON.stringify(result));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/reviews/assignments - Get recent review assignments
+ */
+async function handleGetReviewAssignments(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const reviewerAssigner = getReviewerAssigner();
+    const limit = parseInt(req.url.searchParams.get('limit') || '10', 10);
+    const assignments = reviewerAssigner.getRecentAssignments(req.user.sub, limit);
+
+    send(res, 200, JSON.stringify({ success: true, assignments }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/reviews/stats - Get review assignment statistics
+ */
+async function handleGetReviewStats(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const reviewerAssigner = getReviewerAssigner();
+    const stats = reviewerAssigner.getAssignmentStats(req.user.sub);
+
+    send(res, 200, JSON.stringify({ success: true, stats }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * OAuth Authentication API (T185-T186)
+ */
+async function handleOAuthAuthorize(req, res, provider) {
+  try {
+    const oauthProvider = getOAuthProvider(config);
+    const state = oauthProvider.constructor.generateState();
+    
+    // Store state in session for callback verification
+    req.session = req.session || {};
+    req.session.oauthState = state;
+    req.session.oauthProvider = provider;
+    
+    const authUrl = oauthProvider.getAuthorizeUrl(state);
+    return send(res, 200, JSON.stringify({ 
+      success: true, 
+      authUrl,
+      state,
+      provider
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+async function handleOAuthCallback(req, res, provider) {
+  try {
+    const oauthProvider = getOAuthProvider(config);
+    
+    // Verify state
+    const state = req.query.state;
+    if (!state || state !== req.session?.oauthState) {
+      return send(res, 400, JSON.stringify({ 
+        success: false, 
+        error: 'Invalid or missing state parameter' 
+      }));
+    }
+    
+    // Exchange code for tokens
+    const { code } = req.query;
+    if (!code) {
+      return send(res, 400, JSON.stringify({ 
+        success: false, 
+        error: 'Missing authorization code' 
+      }));
+    }
+    
+    const tokens = await oauthProvider.exchangeCodeForTokens(code);
+    const idToken = tokens.id_token;
+    
+    // Verify ID token
+    const decoded = await oauthProvider.verifyIdToken(idToken);
+    
+    // Fetch user info
+    const userInfo = await oauthProvider.getUserInfo(tokens.access_token);
+    
+    // Create or update user in database
+    const userStore = getUserStore();
+    let user = await userStore.getUserByEmail(userInfo.email);
+    
+    if (!user) {
+      // Create new user
+      user = await userStore.createUser({
+        email: userInfo.email,
+        name: userInfo.name,
+        password: null, // OAuth user has no password
+        role: 'viewer', // Default role for OAuth users
+        provider: provider, // Track OAuth provider
+        providerId: userInfo.id
+      });
+    } else {
+      // Update existing user with OAuth info
+      await userStore.updateUser(user.id, {
+        name: userInfo.name,
+        provider: provider,
+        providerId: userInfo.id
+      });
+    }
+    
+    // Generate JWT token
+    const jwtToken = generateToken({
+      sub: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      provider: provider
+    });
+    
+    // Clear session
+    delete req.session.oauthState;
+    delete req.session.oauthProvider;
+    
+    return send(res, 200, JSON.stringify({ 
+      success: true, 
+      token: jwtToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role
+      }
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * Authentication API (Multi-Tenant Platform)
+ */

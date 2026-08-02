@@ -58,3 +58,31 @@ The system will continue to read `tenant.yaml` as a fallback with a deprecation 
 3. `policy.yaml`'s `agents` field (NEW — Phase 0)
 4. `.ai/tenant.yaml` (DEPRECATED — fallback)
 5. Error — a DomainPlugin is required
+
+## Multi-Tenant Platform
+
+The Multi-Tenant Platform (v0.3.9 -> v0.4.0) introduces significant architectural changes:
+
+### 1. Control Plane DB
+
+A new SQLite database `.ai/control-plane.db` now tracks projects and users. You must run `node scripts/init-control-plane.mjs` once to initialize it.
+
+### 2. Project Isolation
+
+All agents and workspaces now run in isolated directories under their respective project roots. Legacy single-user configurations will be migrated to a default "default-project" if no project is specified.
+
+### 3. Authentication
+
+The dashboard now requires authentication. The first boot will output an admin temporary token to the console which you must use to set up your first admin account.
+
+### 4. Billing/Licensing
+
+If you deploy multiple agents beyond the Free Tier limits, ensure you have configured your valid `MERIDIANOS_LICENSE_KEY` environment variable.
+
+### 5. Rate Limits
+
+Adjust rate limits for public endpoints (optional)
+
+### 6. Logging
+
+Set up logging destinations

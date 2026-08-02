@@ -1,0 +1,10 @@
+gateway:
+  disabled: false
+agents:
+  builder:
+    model: claude-sonnet-4
+    provider: anthropic
+taskCategories:
+  general:
+    tier: medium
+    desc: General development tasks
