@@ -1098,6 +1098,27 @@ export function createDashboardServer(config) {
       if (req.method === 'POST' && url.pathname.match(/^\/api\/auth\/invitations\/[^/]+\/reject$/)) {
         return handleRejectInvitation(req, res);
       }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/members$/)) {
+        return handleListProjectMembers(req, res);
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/members$/)) {
+        return handleAddProjectMember(req, res);
+      }
+      if (req.method === 'PUT' && url.pathname.match(/^\/api\/projects\/[^/]+\/members\/[^/]+$/)) {
+        return handleUpdateProjectMember(req, res);
+      }
+      if (req.method === 'DELETE' && url.pathname.match(/^\/api\/projects\/[^/]+\/members\/[^/]+$/)) {
+        return handleRemoveProjectMember(req, res);
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/activity$/)) {
+        return handleGetProjectActivity(req, res);
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/tasks\/[^/]+\/comments$/)) {
+        return handleAddTaskComment(req, res);
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/tasks\/[^/]+\/comments$/)) {
+        return handleGetTaskComments(req, res);
+      }
       if (req.method === 'GET' && url.pathname === '/api/activity/feed') {
         return handleGetActivityFeed(req, res);
       }
@@ -1124,6 +1145,28 @@ export function createDashboardServer(config) {
       }
       if (req.method === 'GET' && url.pathname === '/api/reviews/stats') {
         return handleGetReviewStats(req, res);
+      }
+
+      // ── Compliance Reporting API (US7) ─────────────────────────────
+      if (req.method === 'POST' && url.pathname === '/api/compliance/reports/soc2') {
+        if (!requireAuth(req, res)) return;
+        return handleGenerateSOC2Report(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/compliance/reports/gdpr') {
+        if (!requireAuth(req, res)) return;
+        return handleGenerateGDPRReport(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/compliance/reports/cost-allocation') {
+        if (!requireAuth(req, res)) return;
+        return handleGenerateCostAllocationReport(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/compliance/reports/model-usage') {
+        if (!requireAuth(req, res)) return;
+        return handleGenerateModelUsageReport(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/compliance/reports') {
+        if (!requireAuth(req, res)) return;
+        return handleListComplianceReports(req, res);
       }
 
       return send(res, 404, JSON.stringify({ ok: false, error: 'not found' }));
@@ -2077,6 +2120,241 @@ async function handleAssignReviewers(req, res) {
 async function handleGetReviewAssignments(req, res) {
   try {
     if (!requireAuth(req, res)) return;
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/projects/{id}/members - List project members
+ */
+async function handleListProjectMembers(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const projectId = req.pathname.split('/')[3];
+    const userStore = getUserStore();
+
+    // Get all users for this project
+    const stmt = userStore.db.prepare(`
+      SELECT u.id, u.email, u.full_name, u.role, pu.created_at
+      FROM users u
+      INNER JOIN project_users pu ON u.id = pu.user_id
+      WHERE pu.project_id = ?
+    `);
+
+    const members = stmt.all(projectId);
+
+    send(res, 200, JSON.stringify({
+      success: true,
+      project_id: projectId,
+      members: members.map(m => ({
+        id: m.id,
+        email: m.email,
+        full_name: m.full_name,
+        role: m.role,
+        joined_at: m.created_at
+      }))
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/projects/{id}/members - Add member to project
+ */
+async function handleAddProjectMember(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const projectId = req.pathname.split('/')[3];
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { email, role = 'viewer' } = body;
+
+    if (!email) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'email is required' }));
+    }
+
+    const userStore = getUserStore();
+    const invitationManager = getInvitationManager();
+
+    // Check if user exists
+    const existingUser = userStore.getUserByEmail(email);
+    if (existingUser) {
+      // User exists, add to project
+      const stmt = userStore.db.prepare(`
+        INSERT OR IGNORE INTO project_users (id, project_id, user_id, role, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+
+      const id = crypto.randomUUID();
+      const now = Math.floor(Date.now() / 1000);
+      stmt.run(id, projectId, existingUser.id, role, now, now);
+
+      send(res, 200, JSON.stringify({
+        success: true,
+        message: 'User added to project',
+        user: {
+          id: existingUser.id,
+          email: existingUser.email,
+          role: role
+        }
+      }));
+    } else {
+      // User doesn't exist, create invitation
+      const invitation = invitationManager.create(email, projectId, role);
+
+      send(res, 201, JSON.stringify({
+        success: true,
+        message: 'Invitation sent to user',
+        invitation: {
+          id: invitation.id,
+          email: invitation.email,
+          role: invitation.role,
+          expires_at: invitation.expires_at
+        }
+      }));
+    }
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * PUT /api/projects/{id}/members/{user_id} - Update member role
+ */
+async function handleUpdateProjectMember(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const projectId = req.pathname.split('/')[3];
+    const userId = req.pathname.split('/')[5];
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { role } = body;
+
+    if (!role) {
+      return send(res, 400, JSON.stringify({ success: false, error: 'role is required' }));
+    }
+
+    const userStore = getUserStore();
+    const validRoles = ['admin', 'operator', 'viewer'];
+
+    if (!validRoles.includes(role)) {
+      return send(res, 400, JSON.stringify({
+        success: false,
+        error: `Invalid role: ${role}. Must be one of: ${validRoles.join(', ')}`
+      }));
+    }
+
+    // Update user role in project
+    const stmt = userStore.db.prepare(`
+      UPDATE project_users SET role = ?, updated_at = ? WHERE project_id = ? AND user_id = ?
+    `);
+
+    const now = Math.floor(Date.now() / 1000);
+    const result = stmt.run(role, now, projectId, userId);
+
+    if (result.changes === 0) {
+      return send(res, 404, JSON.stringify({
+        success: false,
+        error: 'Member not found in project'
+      }));
+    }
+
+    send(res, 200, JSON.stringify({
+      success: true,
+      message: 'Member role updated',
+      user_id: userId,
+      role: role
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * DELETE /api/projects/{id}/members/{user_id} - Remove member from project
+ */
+async function handleRemoveProjectMember(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const projectId = req.pathname.split('/')[3];
+    const userId = req.pathname.split('/')[5];
+
+    const userStore = getUserStore();
+
+    // Remove user from project
+    const stmt = userStore.db.prepare(`
+      DELETE FROM project_users WHERE project_id = ? AND user_id = ?
+    `);
+
+    const result = stmt.run(projectId, userId);
+
+    if (result.changes === 0) {
+      return send(res, 404, JSON.stringify({
+        success: false,
+        error: 'Member not found in project'
+      }));
+    }
+
+    send(res, 200, JSON.stringify({
+      success: true,
+      message: 'Member removed from project',
+      user_id: userId
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/projects/{id}/activity - Get project activity feed
+ */
+async function handleGetProjectActivity(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const projectId = req.pathname.split('/')[3];
+    const activityLogger = getActivityLogger();
+    const limit = parseInt(req.url.searchParams.get('limit') || '50', 10);
+    const offset = parseInt(req.url.searchParams.get('offset') || '0', 10);
+
+    const feed = await activityLogger.getProjectFeed(projectId, limit, offset);
+
+    send(res, 200, JSON.stringify({
+      success: true,
+      project_id: projectId,
+      feed
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/projects/{id}/tasks/{task_id}/comments - Get task comments
+ */
+async function handleGetTaskComments(req, res) {
+  try {
+    if (!requireAuth(req, res)) return;
+
+    const projectId = req.pathname.split('/')[3];
+    const taskId = req.pathname.split('/')[5];
+    const taskCommentManager = getTaskCommentManager();
+    const comments = taskCommentManager.list(taskId);
+
+    send(res, 200, JSON.stringify({
+      success: true,
+      project_id: projectId,
+      task_id: taskId,
+      comments
+    }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
 
     const reviewerAssigner = getReviewerAssigner();
     const limit = parseInt(req.url.searchParams.get('limit') || '10', 10);

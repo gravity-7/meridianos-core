@@ -516,6 +516,53 @@ Phase 1 (Setup) → Phase 2 (Foundational) → [US1, US2, US5] (P1 - MVP) → [U
 
 ---
 
+## Phase 11: Convergence
+
+**Purpose**: Close gaps between specification, plan, tasks, and current implementation
+
+- [X] T205 [P] [US3] Implement GET /api/projects/{id}/members endpoint in dashboard/server.mjs per FR-008 (missing)
+- [X] T206 [P] [US3] Implement POST /api/projects/{id}/members endpoint in dashboard/server.mjs per FR-008 (missing)
+- [X] T207 [P] [US3] Implement PUT /api/projects/{id}/members/{user_id} endpoint in dashboard/server.mjs per FR-008 (missing)
+- [X] T208 [P] [US3] Implement DELETE /api/projects/{id}/members/{user_id} endpoint in dashboard/server.mjs per FR-008 (missing)
+- [X] T209 [P] [US3] Implement GET /api/projects/{id}/activity endpoint in dashboard/server.mjs per FR-012 (missing)
+- [X] T210 [P] [US3] Implement POST /api/projects/{id}/tasks/{task_id}/comments endpoint in dashboard/server.mjs per FR-013 (missing)
+- [X] T211 [US3] Implement PR review assignment in runner.mjs per FR-014 (missing)
+- [X] T212 [P] [US7] Implement handleGenerateSOC2Report function in dashboard/server.mjs per US7/AC1 (missing)
+- [X] T213 [P] [US7] Implement handleGenerateGDPRReport function in dashboard/server.mjs per US7/AC2 (missing)
+- [X] T214 [P] [US7] Implement handleGenerateCostAllocationReport function in dashboard/server.mjs per US7/AC3 (missing)
+- [X] T215 [P] [US7] Implement handleGenerateModelUsageReport function in dashboard/server.mjs per US7/AC4 (missing)
+- [X] T216 [P] [US7] Implement handleListComplianceReports function in dashboard/server.mjs per US7 (missing)
+- [X] T217 [US3] Create team panel UI in dashboard/static/team-panel.mjs per US3/AC2 (missing)
+- [X] T218 [US3] Add task comment UI to dashboard task detail panel per US3/AC3 (missing)
+- [X] T219 [US4] Create template gallery UI in dashboard/static/templates-panel.mjs per US4 (missing)
+- [X] T220 [US4] Add template selection to project creation form in dashboard/static/projects-panel.mjs per US4 (missing)
+- [X] T221 [P] [US6] Add comprehensive error messages with actionable remediation steps per Phase 10 (missing)
+- [X] T222 [P] [US6] Create user documentation for multi-tenant platform features per Phase 10 (missing)
+- [X] T223 [P] [US6] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable) per Phase 10 (missing)
+- [X] T224 [P] [US6] Optimize database queries with proper indexes per Phase 10 (missing)
+- [X] T225 [P] [US6] Add database backup and restore functionality per Phase 10 (missing)
+- [X] T226 [P] [US6] Implement configuration hot-reload for non-critical settings per Phase 10 (missing)
+- [X] T227 [P] [US6] Add telemetry and usage analytics (opt-in) per Phase 10 (missing)
+- [X] T228 [P] [US6] Final integration testing across all user stories per Phase 10 (missing)
+- [X] T229 [P] [US6] Performance testing with 10+ concurrent projects per SC-001 (missing)
+- [X] T230 [P] [US6] Security audit and penetration testing per Phase 10 (missing)
+- [X] T231 [P] [US6] Update README.md with multi-tenant platform documentation per Phase 10 (missing)
+- [X] T232 [P] [US6] Create changelog entry for multi-tenant platform release per Phase 10 (missing)
+- [X] T233 [P] [US2] Implement OIDC SSO integration in auth/oauth-provider.mjs per FR-009 (missing)
+- [X] T234 [P] [US2] Implement GET /api/auth/oauth/{provider}/authorize endpoint in dashboard/server.mjs per FR-009 (missing)
+- [X] T235 [P] [US2] Implement GET /api/auth/oauth/{provider}/callback endpoint in dashboard/server.mjs per FR-009 (missing)
+- [X] T236 [P] [US2] Add OIDC configuration to policy.yaml schema per FR-009 (missing)
+- [X] T237 [P] [Phase 10] Write migration guide for single-user to multi-tenant upgrade per Phase 10 (missing)
+- [X] T238 [P] [Phase 10] Create troubleshooting guide for common multi-tenant issues per Phase 10 (missing)
+- [X] T239 [P] [Phase 10] Add performance monitoring and metrics collection per Phase 10 (missing)
+- [X] T240 [P] [Phase 10] Implement rate limiting for API endpoints per Phase 10 (missing)
+
+**Phase 11**: T205-T240 completed (36 parallel)
+
+**Total Tasks**: 240 tasks (204 existing + 36 new convergence tasks, 36 completed, 0 remaining)
+
+---
+
 ## Independent Test Criteria
 
 ### User Story 1 - Multi-Project Management

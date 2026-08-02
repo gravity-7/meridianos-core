@@ -203,24 +203,6 @@ function escapeHtml(text) {
  * Initialize projects panel event handlers
  */
 export function initProjectsPanel() {
-  // Load templates into select dropdown
-  const templateSelect = document.getElementById('project-template');
-  if (templateSelect) {
-    fetch('/api/projects/templates', {
-      headers: {
-        'Authorization': `Bearer ${getAuthToken()}`
-      }
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (data.success && data.templates) {
-        templateSelect.innerHTML = '<option value="">Blank Project</option>' + 
-          data.templates.map(t => `<option value="${t.id}">${t.name} (${t.agentCount} Agents)</option>`).join('');
-      }
-    })
-    .catch(err => console.error('Failed to load templates', err));
-  }
-
   // Create project button
   document.getElementById('create-project-btn')?.addEventListener('click', () => {
     document.getElementById('create-project-modal').classList.remove('hidden');
