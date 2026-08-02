@@ -1,0 +1,24 @@
+MeridianOS ({{ .Chart.AppVersion }}) has been installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+{{- if .Values.ingress.enabled }}
+
+Dashboard UI: http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}
+{{- if not .Values.dashboard.enabled }}
+  (served by the daemon — the standalone dashboard Deployment is disabled, see
+  deploy/kubernetes/README.md "Known limitations" #3 before turning it on)
+{{- end }}
+{{- else }}
+
+No Ingress was created (ingress.enabled=false). Reach the dashboard with:
+  kubectl port-forward svc/{{ include "meridianos.componentName" (dict "context" . "component" "daemon") }} 4317:{{ .Values.daemon.service.port }}
+{{- end }}
+
+{{- if and .Values.gateway.autoscaling.enabled .Values.gateway.persistence.enabled }}
+
+⚠️  WARNING: gateway.autoscaling.enabled AND gateway.persistence.enabled are both true. Multiple
+    gateway replicas will share one PVC-backed SQLite ledger, which is NOT safe for concurrent
+    writers. See deploy/kubernetes/README.md "Known limitations" #2.
+{{- end }}
+
+Run `helm test {{ .Release.Name }}` to verify every enabled component answers on /healthz.
+See deploy/kubernetes/README.md for the full configuration reference and known limitations.

@@ -1,0 +1,48 @@
+{{/*
+Fronts whichever component actually serves the dashboard UI: the standalone dashboard Deployment
+when enabled, otherwise the daemon (which embeds the same dashboard/server.mjs routes on the same
+port — see daemon-entry.mjs → scheduler.mjs). See values.yaml "dashboard" for why the standalone
+dashboard defaults to disabled.
+*/}}
+{{- if .Values.ingress.enabled }}
+{{- if not (or .Values.dashboard.enabled .Values.daemon.enabled) }}
+{{- fail "ingress.enabled requires dashboard.enabled or daemon.enabled (nothing serves the UI otherwise)" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "meridianos.fullname" . }}-dashboard
+  labels:
+    {{- include "meridianos.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: Prefix
+            backend:
+              service:
+                {{- if .Values.dashboard.enabled }}
+                name: {{ include "meridianos.componentName" (dict "context" . "component" "dashboard") }}
+                port:
+                  number: {{ .Values.dashboard.service.port }}
+                {{- else }}
+                name: {{ include "meridianos.componentName" (dict "context" . "component" "daemon") }}
+                port:
+                  number: {{ .Values.daemon.service.port }}
+                {{- end }}
+{{- end }}

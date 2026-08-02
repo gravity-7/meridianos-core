@@ -1,0 +1,237 @@
+# Default values for the meridianos Helm chart.
+# One image (the repo root Dockerfile), three deployment shapes — mirrors the "N services from
+# ONE image" pattern already established by docker-compose.yml at the repo root:
+#   gateway   → gateway/cli.mjs      (metering sidecar, horizontally scalable — see "gateway" below)
+#   daemon    → dashboard/server.mjs (the multi-project control plane: ProjectManager, auth,
+#               licensing, compliance, AND the dashboard UI/API all live in this one process —
+#               singleton, see "daemon" below)
+#   dashboard → dashboard/server.mjs (an OPTIONAL second, independently-scaled copy of the exact
+#               same process as "daemon" — disabled by default; see "dashboard" below for why)
+
+image:
+  repository: ghcr.io/gravity-7/meridianos-core
+  # Defaults to .Chart.AppVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Tenant label threaded through to the gateway (--tenant flag) and ledger entries. Purely a
+# metering/audit label — does not select which provider keys are used (those are BYO-key env
+# vars, see `secrets.providerKeys` below).
+tenant: default
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+
+# The repo root Dockerfile does not create/switch to a non-root user (see Dockerfile), so
+# runAsNonRoot defaults to false here to match the image as shipped today. Override once the
+# image gains a dedicated USER, or supply your own hardened image via `image.repository`.
+podSecurityContext:
+  fsGroup: 1000
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ---------------------------------------------------------------------------------------------
+# gateway — the metering sidecar (gateway/cli.mjs). Horizontally scalable via HPA, but each
+# replica writes to its own SQLite ledger (better-sqlite3 is single-writer, WAL mode does not
+# make a shared network volume safe for concurrent multi-pod writers). Two supported modes:
+#   persistence.enabled=false (default): --ledger is omitted, so gateway/index.mjs falls back to
+#     its on-disk default (.ai/gateway/ledger.db) on the pod's own ephemeral writable layer —
+#     safe to scale to N replicas, but per-pod ledger data is lost on pod restart/reschedule. Fine
+#     when ledger rows are periodically exported/aggregated elsewhere.
+#   persistence.enabled=true: a shared PVC is mounted — only safe with replicaCount/maxReplicas
+#     pinned to 1, or your own out-of-band ledger aggregation. The chart does NOT enforce this;
+#     see deploy/kubernetes/README.md "Known limitations" before enabling both persistence and
+#     autoscaling together.
+# ---------------------------------------------------------------------------------------------
+gateway:
+  enabled: true
+  replicaCount: 2
+  port: 8787
+
+  # Extra CLI flags appended after the chart's own --port/--tenant/--ledger. See gateway/cli.mjs.
+  extraArgs: []
+
+  service:
+    type: ClusterIP
+    port: 8787
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+  persistence:
+    enabled: false
+    storageClassName: ""
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
+
+  # Extra env vars: [{name: FOO, value: bar}] or [{name: FOO, valueFrom: {...}}]
+  env: []
+
+# ---------------------------------------------------------------------------------------------
+# daemon — the multi-project control plane: `node dashboard/server.mjs` run standalone, which
+# lazily instantiates ProjectManager (control-plane.mjs) on first API call and also serves the
+# auth/licensing/compliance routes. ProjectManager supervises child tenant processes locally on
+# the pod it runs on, and control-plane.db / the JWT secret are plain files under .ai/ — so this
+# MUST run as a single instance. replicaCount is intentionally NOT autoscaled; it exists as a
+# StatefulSet only for stable network identity + a dedicated PVC.
+# ---------------------------------------------------------------------------------------------
+daemon:
+  enabled: true
+  replicaCount: 1
+  port: 4317
+
+  service:
+    type: ClusterIP
+    port: 4317
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  persistence:
+    enabled: true
+    storageClassName: ""
+    size: 5Gi
+    accessModes:
+      - ReadWriteOnce
+
+  env: []
+
+# ---------------------------------------------------------------------------------------------
+# dashboard — remote UI + REST API, run as `node dashboard/server.mjs` standalone (a SEPARATE
+# process from the daemon's embedded copy — see daemon-entry.mjs → scheduler.mjs, which also
+# serves the same routes on the daemon pod). Both read/write the same .ai/control-plane.db and
+# .ai/auth/jwt-secret, so a standalone dashboard replica is only correct with its PVC pointed at
+# the SAME volume as the daemon's — which needs a ReadWriteMany-capable StorageClass (NFS/EFS/
+# Filestore); plain ReadWriteOnce PVCs cannot be shared across the daemon and dashboard pods.
+#
+# Disabled by default for that reason: out of the box, `ingress.yaml` routes straight to the
+# daemon's own Service (which already serves the full dashboard UI + API on its port). Only flip
+# this on if you have RWX storage AND have pointed dashboard.persistence at the daemon's PVC name
+# (or accept dashboard.replicaCount: 1 with its own separate — and therefore DIVERGENT — state).
+# See deploy/kubernetes/README.md "Known limitations" before enabling.
+# ---------------------------------------------------------------------------------------------
+dashboard:
+  enabled: false
+  replicaCount: 1
+  port: 4317
+
+  # HTTPS is normally terminated at the Ingress (see `ingress.tls`); only enable this to have the
+  # pod itself speak HTTPS (self-signed cert, generated on boot — see dashboard/server.mjs).
+  https:
+    enabled: false
+
+  service:
+    type: ClusterIP
+    port: 4317
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+  persistence:
+    # Renders its OWN PersistentVolumeClaim (independent from the daemon's) unless you disable
+    # this and mount the daemon's PVC by name instead. An independent PVC means an independent
+    # (diverging) control-plane.db — only safe if you understand that trade-off; see the header
+    # comment above.
+    enabled: true
+    storageClassName: ""
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
+
+  env: []
+
+# ---------------------------------------------------------------------------------------------
+# Ingress — fronts whichever component serves the dashboard UI (the standalone `dashboard`
+# Deployment when enabled, otherwise `daemon` directly — see templates/ingress.yaml). The gateway
+# is never exposed via Ingress; it's cluster-internal only. TLS termination happens at the
+# Ingress by default; the backing pod itself serves plain HTTP.
+# ---------------------------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  host: meridianos.example.com
+  path: /
+  tls:
+    enabled: true
+    # Existing Secret name (kubernetes.io/tls) with the certificate. Leave empty and add a
+    # cert-manager annotation above (e.g. cert-manager.io/cluster-issuer) to have one issued
+    # automatically instead.
+    secretName: meridianos-tls
+
+# ---------------------------------------------------------------------------------------------
+# Secrets — names only. NEVER put real key values in a committed values.yaml; supply them with
+# `--set secrets.xxx=...`, `--set-file`, or (preferred) pre-create your own Secret and point
+# `secrets.existingSecret` at it.
+# ---------------------------------------------------------------------------------------------
+secrets:
+  # When true, the chart renders templates/secret.yaml from the values below. When false, set
+  # existingSecret to a Secret you manage out-of-band (same key names — see secret.yaml).
+  create: true
+  existingSecret: ""
+
+  # Contents of .ai/auth/jwt-secret (see scripts/generate-jwt-secret.mjs — a 64-byte hex string).
+  # Required for the daemon/dashboard auth endpoints to work.
+  jwtSecret: ""
+
+  stripeSecretKey: ""
+  stripeWebhookSecret: ""
+
+  # BYO-key provider env vars forwarded to the gateway/daemon, e.g.:
+  #   providerKeys:
+  #     DEEPSEEK_KEY: "sk-..."
+  #     ANTHROPIC_API_KEY: "sk-ant-..."
+  # Keys are NAMEs your policy.yaml route table references (see providers.mjs `keyEnv`) — never
+  # committed here.
+  providerKeys: {}
+
+# ---------------------------------------------------------------------------------------------
+# policy.yaml — mounted read-only into every component at /app/policy.yaml via a ConfigMap.
+# Override with: helm install ... --set-file policy.yamlContent=./policy.yaml
+# ---------------------------------------------------------------------------------------------
+policy:
+  yamlContent: |
+    version: 1
+    agents: []

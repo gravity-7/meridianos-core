@@ -1,0 +1,143 @@
+{{/*
+daemon — the multi-tenant control plane: `node dashboard/server.mjs` run standalone, which is
+the process that owns ProjectManager (control-plane.mjs), auth/user-store.mjs, licensing/, and
+compliance/ — i.e. everything this spec added. NOT daemon-entry.mjs/scheduler.mjs, which is the
+older single-tenant autonomous-loop entrypoint and a separate concern. See values.yaml "daemon"
+for why this is a StatefulSet pinned to 1 replica.
+*/}}
+{{- if .Values.daemon.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "meridianos.componentName" (dict "context" . "component" "daemon") }}
+  labels:
+    {{- include "meridianos.componentLabels" (dict "context" . "component" "daemon") | nindent 4 }}
+spec:
+  serviceName: {{ include "meridianos.componentName" (dict "context" . "component" "daemon") }}
+  replicas: {{ .Values.daemon.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "meridianos.componentSelectorLabels" (dict "context" . "component" "daemon") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meridianos.componentLabels" (dict "context" . "component" "daemon") | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "meridianos.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: daemon
+          image: {{ include "meridianos.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          # The PVC is empty on first mount — control-plane.mjs's `new Database(dbPath)` and
+          # auth/jwt.mjs both expect their directories to already exist (see README "Known
+          # limitations"), so create them before handing off to the real process.
+          command: ["sh", "-c"]
+          args:
+            - |
+              mkdir -p /app/.ai/auth /app/.ai/gateway
+              exec node dashboard/server.mjs
+          env:
+            - name: AIOS_DASHBOARD_PORT
+              value: {{ .Values.daemon.port | quote }}
+            - name: AIOS_DASHBOARD_HOST
+              value: "0.0.0.0"
+            - name: AIOS_DASHBOARD_HTTPS
+              value: "false"
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridianos.secretName" . }}
+                  key: STRIPE_SECRET_KEY
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridianos.secretName" . }}
+                  key: STRIPE_WEBHOOK_SECRET
+            {{- range .Values.daemon.env }}
+            - name: {{ .name }}
+              {{- if .value }}
+              value: {{ .value | quote }}
+              {{- else if .valueFrom }}
+              valueFrom:
+                {{- toYaml .valueFrom | nindent 16 }}
+              {{- end }}
+            {{- end }}
+            {{- range $key, $_ := .Values.secrets.providerKeys }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridianos.secretName" $ }}
+                  key: {{ $key }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.daemon.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.daemon.resources | nindent 12 }}
+          volumeMounts:
+            - name: policy
+              mountPath: /app/policy.yaml
+              subPath: policy.yaml
+              readOnly: true
+            {{- if .Values.daemon.persistence.enabled }}
+            - name: state
+              mountPath: /app/.ai
+            - name: jwt-secret
+              mountPath: /app/.ai/auth/jwt-secret
+              subPath: jwt-secret
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: policy
+          configMap:
+            name: {{ include "meridianos.fullname" . }}-config
+        {{- if .Values.daemon.persistence.enabled }}
+        - name: jwt-secret
+          secret:
+            secretName: {{ include "meridianos.secretName" . }}
+            items:
+              - key: jwt-secret
+                path: jwt-secret
+        {{- end }}
+  {{- if .Values.daemon.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+        labels:
+          {{- include "meridianos.componentLabels" (dict "context" . "component" "daemon") | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.daemon.persistence.accessModes | nindent 10 }}
+        {{- if .Values.daemon.persistence.storageClassName }}
+        storageClassName: {{ .Values.daemon.persistence.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.daemon.persistence.size }}
+  {{- end }}
+{{- end }}

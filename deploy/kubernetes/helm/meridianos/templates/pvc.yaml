@@ -1,0 +1,42 @@
+{{/*
+Standalone PVC for the gateway's SQLite ledger. Only rendered when gateway.persistence.enabled is
+true — see values.yaml for the single-writer caveat this implies for replicaCount > 1. The daemon
+and dashboard use PVCs declared inline (daemon via StatefulSet volumeClaimTemplates, dashboard
+via its own claim below) rather than here, since they're each singleton/ReadWriteOnce mounts tied
+1:1 to their owning workload.
+*/}}
+{{- if and .Values.gateway.enabled .Values.gateway.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "meridianos.componentName" (dict "context" . "component" "gateway") }}-ledger
+  labels:
+    {{- include "meridianos.componentLabels" (dict "context" . "component" "gateway") | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.gateway.persistence.accessModes | nindent 4 }}
+  {{- if .Values.gateway.persistence.storageClassName }}
+  storageClassName: {{ .Values.gateway.persistence.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.gateway.persistence.size }}
+{{- end }}
+---
+{{- if and .Values.dashboard.enabled .Values.dashboard.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "meridianos.componentName" (dict "context" . "component" "dashboard") }}-state
+  labels:
+    {{- include "meridianos.componentLabels" (dict "context" . "component" "dashboard") | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.dashboard.persistence.accessModes | nindent 4 }}
+  {{- if .Values.dashboard.persistence.storageClassName }}
+  storageClassName: {{ .Values.dashboard.persistence.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.dashboard.persistence.size }}
+{{- end }}

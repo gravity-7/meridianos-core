@@ -1,0 +1,44 @@
+{{/*
+`helm test` hook — hits /healthz on every enabled component's Service and fails the pod (thus
+the test) on any non-200. Deleted automatically before the next `helm test` run via the
+hook-succeeded/hook-failed delete policies.
+*/}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "meridianos.fullname" . }}-test-connection
+  labels:
+    {{- include "meridianos.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  restartPolicy: Never
+  containers:
+    - name: test-connection
+      image: {{ include "meridianos.image" . }}
+      # Uses Node's built-in fetch (no wget/curl dependency on the node:24-slim base — same
+      # zero-dependency-philosophy reasoning as the rest of this repo).
+      command: ["node", "-e"]
+      args:
+        - |
+          const targets = [
+            {{- if .Values.gateway.enabled }}
+            ['gateway', 'http://{{ include "meridianos.componentName" (dict "context" . "component" "gateway") }}:{{ .Values.gateway.service.port }}/healthz'],
+            {{- end }}
+            {{- if .Values.daemon.enabled }}
+            ['daemon', 'http://{{ include "meridianos.componentName" (dict "context" . "component" "daemon") }}:{{ .Values.daemon.service.port }}/healthz'],
+            {{- end }}
+            {{- if .Values.dashboard.enabled }}
+            ['dashboard', 'http://{{ include "meridianos.componentName" (dict "context" . "component" "dashboard") }}:{{ .Values.dashboard.service.port }}/healthz'],
+            {{- end }}
+          ];
+          (async () => {
+            for (const [name, url] of targets) {
+              console.log(`Checking ${name} (${url})...`);
+              const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+              if (!res.ok) { console.error(`${name}: HTTP ${res.status}`); process.exit(1); }
+              console.log(`${name}: ${res.status} ${JSON.stringify(await res.json())}`);
+            }
+            console.log('All enabled components responded.');
+          })().catch((err) => { console.error(err); process.exit(1); });

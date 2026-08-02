@@ -1,0 +1,22 @@
+{{- if and .Values.dashboard.enabled .Values.dashboard.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "meridianos.componentName" (dict "context" . "component" "dashboard") }}
+  labels:
+    {{- include "meridianos.componentLabels" (dict "context" . "component" "dashboard") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "meridianos.componentName" (dict "context" . "component" "dashboard") }}
+  minReplicas: {{ .Values.dashboard.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.dashboard.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.dashboard.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

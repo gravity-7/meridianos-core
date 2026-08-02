@@ -1,0 +1,127 @@
+{{/*
+dashboard — an independently-scalable copy of `node dashboard/server.mjs` (same binary as the
+daemon). Disabled by default — see values.yaml "dashboard" for why a second, independently-scaled
+copy of a SQLite-backed control plane needs a ReadWriteMany volume to be correct, and what happens
+if you enable it without one (a separate, diverging control-plane.db from the daemon's).
+*/}}
+{{- if .Values.dashboard.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "meridianos.componentName" (dict "context" . "component" "dashboard") }}
+  labels:
+    {{- include "meridianos.componentLabels" (dict "context" . "component" "dashboard") | nindent 4 }}
+spec:
+  {{- if not .Values.dashboard.autoscaling.enabled }}
+  replicas: {{ .Values.dashboard.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "meridianos.componentSelectorLabels" (dict "context" . "component" "dashboard") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meridianos.componentLabels" (dict "context" . "component" "dashboard") | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "meridianos.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: dashboard
+          image: {{ include "meridianos.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              mkdir -p /app/.ai/auth /app/.ai/gateway
+              exec node dashboard/server.mjs
+          env:
+            - name: AIOS_DASHBOARD_PORT
+              value: {{ .Values.dashboard.port | quote }}
+            - name: AIOS_DASHBOARD_HOST
+              value: "0.0.0.0"
+            - name: AIOS_DASHBOARD_HTTPS
+              value: {{ .Values.dashboard.https.enabled | quote }}
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridianos.secretName" . }}
+                  key: STRIPE_SECRET_KEY
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridianos.secretName" . }}
+                  key: STRIPE_WEBHOOK_SECRET
+            {{- range .Values.dashboard.env }}
+            - name: {{ .name }}
+              {{- if .value }}
+              value: {{ .value | quote }}
+              {{- else if .valueFrom }}
+              valueFrom:
+                {{- toYaml .valueFrom | nindent 16 }}
+              {{- end }}
+            {{- end }}
+            {{- range $key, $_ := .Values.secrets.providerKeys }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridianos.secretName" $ }}
+                  key: {{ $key }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.dashboard.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          volumeMounts:
+            - name: policy
+              mountPath: /app/policy.yaml
+              subPath: policy.yaml
+              readOnly: true
+            {{- if .Values.dashboard.persistence.enabled }}
+            - name: state
+              mountPath: /app/.ai
+            - name: jwt-secret
+              mountPath: /app/.ai/auth/jwt-secret
+              subPath: jwt-secret
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: policy
+          configMap:
+            name: {{ include "meridianos.fullname" . }}-config
+        {{- if .Values.dashboard.persistence.enabled }}
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ include "meridianos.componentName" (dict "context" . "component" "dashboard") }}-state
+        - name: jwt-secret
+          secret:
+            secretName: {{ include "meridianos.secretName" . }}
+            items:
+              - key: jwt-secret
+                path: jwt-secret
+        {{- end }}
+{{- end }}

@@ -1,0 +1,30 @@
+apiVersion: v2
+name: meridianos
+description: >-
+  MeridianOS — provider/harness-agnostic autonomous agent-orchestration platform.
+  Deploys the gateway (metering sidecar), daemon (multi-project control plane), and
+  dashboard (remote UI + auth) as independently scalable Kubernetes workloads.
+type: application
+
+# Chart version (SemVer) — bump on any template/values change.
+version: 0.1.0
+
+# App version tracks the meridianos-core npm package version this chart was authored against.
+# See package.json "version". Bump when re-validating against a new core release.
+appVersion: "0.3.9"
+
+kubeVersion: ">=1.24.0-0"
+
+keywords:
+  - agent-orchestration
+  - ai-gateway
+  - meridianos
+  - multi-tenant
+
+home: https://github.com/gravity-7/meridianos-core
+sources:
+  - https://github.com/gravity-7/meridianos-core
+
+maintainers:
+  - name: gravity-7
+    url: https://github.com/gravity-7

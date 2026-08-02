@@ -1,0 +1,107 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "meridianos.componentName" (dict "context" . "component" "gateway") }}
+  labels:
+    {{- include "meridianos.componentLabels" (dict "context" . "component" "gateway") | nindent 4 }}
+spec:
+  {{- if not .Values.gateway.autoscaling.enabled }}
+  replicas: {{ .Values.gateway.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "meridianos.componentSelectorLabels" (dict "context" . "component" "gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meridianos.componentLabels" (dict "context" . "component" "gateway") | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "meridianos.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: gateway
+          image: {{ include "meridianos.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          command: ["node", "gateway/cli.mjs"]
+          args:
+            - "--port"
+            - {{ .Values.gateway.port | quote }}
+            - "--tenant"
+            - {{ .Values.tenant | quote }}
+            - "--policy"
+            - "/app/policy.yaml"
+            {{- if .Values.gateway.persistence.enabled }}
+            - "--ledger"
+            - "/data/ledger.db"
+            {{- end }}
+            {{- range .Values.gateway.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: GATEWAY_HOST
+              value: "0.0.0.0"
+            {{- range .Values.gateway.env }}
+            - name: {{ .name }}
+              {{- if .value }}
+              value: {{ .value | quote }}
+              {{- else if .valueFrom }}
+              valueFrom:
+                {{- toYaml .valueFrom | nindent 16 }}
+              {{- end }}
+            {{- end }}
+            {{- range $key, $_ := .Values.secrets.providerKeys }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridianos.secretName" $ }}
+                  key: {{ $key }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: policy
+              mountPath: /app/policy.yaml
+              subPath: policy.yaml
+              readOnly: true
+            {{- if .Values.gateway.persistence.enabled }}
+            - name: ledger
+              mountPath: /data
+            {{- end }}
+      volumes:
+        - name: policy
+          configMap:
+            name: {{ include "meridianos.fullname" . }}-config
+        {{- if .Values.gateway.persistence.enabled }}
+        - name: ledger
+          persistentVolumeClaim:
+            claimName: {{ include "meridianos.componentName" (dict "context" . "component" "gateway") }}-ledger
+        {{- end }}
+{{- end }}
