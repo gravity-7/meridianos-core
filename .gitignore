@@ -6,14 +6,11 @@ node_modules/
 .mos-worktrees/
 
 # Orchestrator runtime state that is machine-local, not durable memory (DBs, logs, secrets).
-# The DURABLE orchestrator memory (.ai/memory, .ai/contracts, .ai/cards, OWNERSHIP.md) IS committed.
-.ai/state/*.db
-.ai/state/*.db-shm
-.ai/state/*.db-wal
-.ai/gateway/
-.ai/logs/
-.ai/secrets/
-.ai/worktrees/
+# The DURABLE orchestrator memory (.ai/memory, .ai/contracts, .ai/cards, OWNERSHIP.md) IS committed
+# via the negations at the bottom of this file — this blanket rule replaced a set of scoped-subpath
+# rules that missed .ai/auth/ and root-level .ai/*.db files (an actual secret + DB leak incident,
+# see git history remediation).
+.ai/
 .playwright-mcp/
 
 # Transient PR review artifacts — auto-generated per-PR (prompts, outputs, diffs, context)
@@ -49,3 +46,8 @@ scratch/
 !.ai/OWNERSHIP.md
 # Sensitive planning and research — local-only, never commit
 docs/MASTER-PLAN-CLOSE-GAPS.md
+
+# Root-level scratch/debug artifacts — not source, previously leaked into a commit by accident
+/debug-activity.db
+/debug-activity.mjs
+/test-output.txt
