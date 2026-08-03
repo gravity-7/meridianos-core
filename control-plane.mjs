@@ -152,8 +152,9 @@ export class ProjectManager {
     this.dbPath = dbPath;
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
-    this.processes = new Map(); // project_id -> { pid, process, startTime, restartCount }
+    this.processes = new Map(); // project_id -> { pid, process, startTime, restartCount, intentionalStop }
     this.restartHistory = new Map(); // project_id -> [timestamp, ...]
+    this.restartTimeouts = new Map(); // project_id -> pending crash-auto-restart setTimeout handle
     this.watchedConfigPaths = new Set(); // config_path values with an active hot-reload watch
     this.ensureSchema();
     this.reconcileAfterCrash();
@@ -305,7 +306,8 @@ export class ProjectManager {
       pid: process.pid,
       process,
       startTime: Date.now(),
-      restartCount: 0
+      restartCount: 0,
+      intentionalStop: false
     });
 
     // Setup process monitoring
@@ -343,8 +345,20 @@ export class ProjectManager {
       throw new Error('Project is not running');
     }
 
+    // Cancel any crash auto-restart already scheduled by monitorProcess, so a stop that lands
+    // during the 5s backoff window doesn't let the pending restart fire anyway.
+    const pendingRestart = this.restartTimeouts.get(projectId);
+    if (pendingRestart) {
+      clearTimeout(pendingRestart);
+      this.restartTimeouts.delete(projectId);
+    }
+
     const procInfo = this.processes.get(projectId);
     if (procInfo) {
+      // Mark this as an intentional stop BEFORE killing, so monitorProcess's 'exit' listener
+      // (still attached to this same process object) knows to skip its auto-restart logic.
+      procInfo.intentionalStop = true;
+
       // Send SIGTERM for graceful shutdown
       procInfo.process.kill('SIGTERM');
 
@@ -417,6 +431,15 @@ export class ProjectManager {
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(projectId);
 
     // Clear process tracking
+    const pendingRestart = this.restartTimeouts.get(projectId);
+    if (pendingRestart) {
+      clearTimeout(pendingRestart);
+      this.restartTimeouts.delete(projectId);
+    }
+    const procInfo = this.processes.get(projectId);
+    if (procInfo) {
+      procInfo.intentionalStop = true;
+    }
     this.processes.delete(projectId);
     this.restartHistory.delete(projectId);
 
@@ -556,6 +579,14 @@ export class ProjectManager {
     process.on('exit', (code, signal) => {
       console.log(`Project ${projectId} exited with code ${code}, signal ${signal}`);
 
+      // A deliberate stopProject()/deleteProject() call kills this same process object, which
+      // also fires this listener. Skip auto-restart when the exit was intentional.
+      const procInfo = this.processes.get(projectId);
+      if (procInfo && procInfo.intentionalStop) {
+        console.log(`Project ${projectId} exit was an intentional stop; skipping auto-restart.`);
+        return;
+      }
+
       // Check restart rate limit (max 3 per hour)
       const now = Date.now();
       const hourAgo = now - (60 * 60 * 1000);
@@ -572,13 +603,15 @@ export class ProjectManager {
       console.log(`Auto-restarting project ${projectId}...`);
       this.restartHistory.set(projectId, [...recentRestarts, now]);
 
-      setTimeout(async () => {
+      const timeoutHandle = setTimeout(async () => {
+        this.restartTimeouts.delete(projectId);
         try {
           await this.startProject(projectId);
         } catch (error) {
           console.error(`Failed to auto-restart project ${projectId}:`, error);
         }
       }, 5000); // Wait 5 seconds before restart
+      this.restartTimeouts.set(projectId, timeoutHandle);
     });
   }
 

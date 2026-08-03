@@ -155,7 +155,7 @@ export class LicenseValidator {
 
     // Update cache
     this.#cache.set(licenseKey, {
-      license_id,
+      license_id: licenseId,
       tier: validation.tier,
       features,
       customer_id: validation.customer_id,
@@ -166,7 +166,7 @@ export class LicenseValidator {
 
     return {
       success: true,
-      license_id,
+      license_id: licenseId,
       tier: validation.tier,
       features,
       customer_id: validation.customer_id,
@@ -190,7 +190,7 @@ export class LicenseValidator {
     if (!license) {
       return {
         success: false,
-        error: 'No active license found'
+        error: 'No license found'
       };
     }
 
@@ -218,7 +218,7 @@ export class LicenseValidator {
     if (!license) {
       return {
         success: false,
-        error: 'No active license found'
+        error: 'No license found'
       };
     }
 

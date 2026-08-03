@@ -110,17 +110,15 @@ describe('Final Cross-Story Integration (T200)', () => {
     assert.equal(decoded.role, 'admin');
   });
 
-  it('US3: an activity log records and attributes a team action to a project', async () => {
+  it('US3: an activity log records and attributes a team action to a project', () => {
     // Exercises ActivityLogger directly, on its own isolated DB — control-plane.mjs's
     // ProjectManager also logs project lifecycle actions via the SHARED default
     // getActivityLogger() singleton (repo `.ai/control-plane.db`), which this suite
     // deliberately avoids touching from a test.
     const logger = new ActivityLogger(':memory:');
     logger.log({ user_id: testUserId, project_id: project.id, action: 'task_comment_add', details: { comment: 'looks good' } });
-    // ActivityLogger.log() is currently fire-and-forget internally (flagged separately) —
-    // give its microtask a turn before querying.
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
+    // log() is synchronous — the row must be queryable immediately, same tick.
     const feed = logger.query({ project_id: project.id });
     assert.equal(feed.length, 1);
     assert.equal(feed[0].action, 'task_comment_add');
