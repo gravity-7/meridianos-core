@@ -67,8 +67,8 @@ describe('License Validation Integration Tests', () => {
 
       const licenseKey = LicenseKey.generate(payload);
 
-      // Check format: mer-XXXX-XXXX-XXXX-XXXX (4 groups of 4 chars)
-      assert.match(licenseKey, /^mer-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+      // Check format: mer-<base64url payload>.<base64url signature>
+      assert.match(licenseKey, /^mer-[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     });
 
     it('should encode payload correctly', () => {
@@ -151,7 +151,19 @@ describe('License Validation Integration Tests', () => {
       };
 
       const licenseKey = LicenseKey.generate(payload);
-      const tamperedKey = licenseKey.replace('mer-', 'mer-X');
+      // Flip a character in the middle of the signature segment so the payload
+      // JSON still parses but the RSA signature no longer verifies. (A char
+      // near either end of a base64url string can land on an unused padding
+      // bit and decode to the same byte, so the tamper must be mid-string.)
+      const dotIndex = licenseKey.indexOf('.');
+      const payloadPart = licenseKey.slice(0, dotIndex);
+      const signaturePart = licenseKey.slice(dotIndex + 1);
+      const tamperIndex = Math.floor(signaturePart.length / 2);
+      const originalChar = signaturePart[tamperIndex];
+      const flippedChar = originalChar === 'A' ? 'B' : 'A';
+      const tamperedSignature =
+        signaturePart.slice(0, tamperIndex) + flippedChar + signaturePart.slice(tamperIndex + 1);
+      const tamperedKey = payloadPart + '.' + tamperedSignature;
 
       const result = LicenseKey.validate(tamperedKey);
 

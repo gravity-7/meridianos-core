@@ -5,9 +5,42 @@
  * trailing comments, and every other line byte-for-byte — and refuses to touch a path that
  * doesn't already exist (so it can never silently reshape the file). Zero-dependency; reuses
  * the same comment/colon scanners as the reader so writer and reader agree on the subset.
+ *
+ * Concurrency (T195/Phase 10 edge case: "concurrent config changes"): `writePolicy` does a
+ * read-modify-write over a plain file, which is a classic lost-update race if two OS processes
+ * (e.g. two concurrent dashboard requests, or a project's own daemon writing alongside the
+ * dashboard) call it on the same policy.yaml at the same time — both read the same original
+ * text, and whichever writes last silently discards the other's update. `writePolicy` now
+ * guards the read-modify-write with a short-lived exclusive lock file (`<path>.lock`, created
+ * with `wx` so a concurrent acquirer sees EEXIST and retries) so concurrent writers serialize
+ * instead of clobbering each other.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { stripComment, colonIndex } from './yaml-lite.mjs';
+
+/** Synchronously acquire an exclusive lock file, retrying until `timeoutMs` elapses. Uses
+ *  `Atomics.wait` for the retry backoff so the wait is a real (if short) sleep rather than a
+ *  hot spin loop — safe here because `writePolicy` is already a synchronous, fast operation. */
+function acquireLock(lockPath, { timeoutMs = 2000, retryMs = 10 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      closeSync(openSync(lockPath, 'wx'));
+      return;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      if (Date.now() >= deadline) {
+        throw new Error(`writePolicy: timed out waiting for lock ${lockPath} (another writer may have crashed while holding it)`);
+      }
+      Atomics.wait(sleepBuf, 0, 0, retryMs);
+    }
+  }
+}
+
+function releaseLock(lockPath) {
+  try { unlinkSync(lockPath); } catch { /* best-effort — lock is advisory */ }
+}
 
 /** The exact scalar paths the founder's dashboard is allowed to write. The server whitelists
  *  against this (defence in depth over setPolicyValue's own path check), and the round-trip
@@ -93,8 +126,14 @@ export function setPolicyValue(text, path, value) {
  *  omitted. */
 export function writePolicy(updates, { path = undefined, config } = {}) {
   path = path ?? config.policyPath;
-  let text = readFileSync(path, 'utf8');
-  for (const [p, v] of Object.entries(updates)) text = setPolicyValue(text, p, v);
-  writeFileSync(path, text);
-  return text;
+  const lockPath = `${path}.lock`;
+  acquireLock(lockPath);
+  try {
+    let text = readFileSync(path, 'utf8');
+    for (const [p, v] of Object.entries(updates)) text = setPolicyValue(text, p, v);
+    writeFileSync(path, text);
+    return text;
+  } finally {
+    releaseLock(lockPath);
+  }
 }

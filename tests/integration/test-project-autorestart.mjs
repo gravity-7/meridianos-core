@@ -3,7 +3,7 @@
  * Tests that projects restart automatically within 10 seconds
  */
 
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, mock } from 'node:test';
 import assert from 'node:assert';
 import { ProjectManager } from '../../control-plane.mjs';
 import Database from 'better-sqlite3';
@@ -195,5 +195,57 @@ describe('Project Auto-Restart Integration Tests', () => {
 
     const updated = projectManager.getProject(project.id);
     assert.strictEqual(updated.status, 'restarting');
+  });
+
+  it('should NOT auto-restart a project that was intentionally stopped', async () => {
+    // monitorProcess() attaches a permanent 'exit' listener during startProject() that
+    // unconditionally schedules an auto-restart. stopProject() kills that same process object,
+    // which also fires that listener — so without disarming it, a deliberate stop used to get
+    // auto-restarted 5s later anyway. This asserts stopProject() disarms it.
+    const project = projectManager.createProject({
+      name: 'intentional-stop-project',
+      template: 'blank',
+      config_path: path.join(TEST_STATE_DIR, 'intentional-stop-project', 'policy.yaml'),
+      state_path: path.join(TEST_STATE_DIR, 'intentional-stop-project'),
+      created_by: testUserId
+    });
+
+    const { EventEmitter } = await import('node:events');
+    const originalSpawn = projectManager.spawnProcess;
+    let spawnCount = 0;
+    projectManager.spawnProcess = async () => {
+      spawnCount += 1;
+      const fake = new EventEmitter();
+      fake.pid = 999000 + spawnCount;
+      fake.stdout = new EventEmitter();
+      fake.stderr = new EventEmitter();
+      // Real child processes deliver 'exit' asynchronously after kill(); setImmediate (not
+      // mocked below, since only 'setTimeout' is faked) reproduces that ordering.
+      fake.kill = (signal) => {
+        setImmediate(() => fake.emit('exit', null, signal));
+      };
+      return fake;
+    };
+
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      await projectManager.startProject(project.id);
+      assert.strictEqual(spawnCount, 1);
+
+      await projectManager.stopProject(project.id);
+      assert.strictEqual(projectManager.getProject(project.id).status, 'stopped');
+      assert.strictEqual(projectManager.restartTimeouts.has(project.id), false);
+
+      // Fast-forward past the 5s auto-restart backoff monitorProcess would otherwise have
+      // scheduled, then let any (wrongly) scheduled restart's microtasks settle.
+      mock.timers.tick(6000);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.strictEqual(spawnCount, 1, 'stopProject() must not let monitorProcess() auto-restart the project');
+      assert.strictEqual(projectManager.getProject(project.id).status, 'stopped');
+    } finally {
+      mock.timers.reset();
+      projectManager.spawnProcess = originalSpawn;
+    }
   });
 });
