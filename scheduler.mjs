@@ -40,6 +40,7 @@ import { pushEscalations } from './escalation-push.mjs';
 import { aggregatePendingWindows } from './aggregation.mjs';
 import { openLedger } from './gateway/ledger.mjs';
 import { evaluateAlerts } from './alerts.mjs';
+import { triggerEvent } from './api/webhooks.mjs';
 import { generateRecommendations } from './optimization.mjs';
 import { computeBudgetForecast, detectAnomalies as detectSpendAnomalies } from './analytics.mjs';
 import { selectModel } from './router.mjs';
@@ -549,6 +550,25 @@ export async function start({ domain } = {}) {
           });
           if (fired.length > 0) {
             logger.log('alerts', `${fired.length} alert(s) triggered: ${fired.map(f => f.ruleId).join(', ')}`);
+          }
+          // Phase 7 (US3, T052): forward budget_threshold alerts to registered webhooks
+          // (FR-011 budget.warning/budget.critical). `db` is the main state DB (webhooks table
+          // lives there), a different handle from `gwDb` (gateway ledger) alerts.mjs reads.
+          for (const f of fired) {
+            if (f.alert?.type !== 'budget_threshold') continue;
+            const eventType = f.alert.severity === 'critical' ? 'budget.critical' : 'budget.warning';
+            triggerEvent(db, eventType, {
+              monthly_limit: f.alert.budgetLimit,
+              current_spend: f.alert.spendToDate,
+              percentage: (f.alert.pctUsed ?? 0) / 100,
+            }, { logger }).catch((e3) => logger.error('webhooks', `${eventType} delivery failed`, e3));
+          }
+          // FR-011 cost.spike webhook — same anomaly detection this loop already runs for the
+          // 'anomaly' alert rule above, just re-shaped to the webhook contract's payload.
+          for (const a of (anoms || [])) {
+            triggerEvent(db, 'cost.spike', {
+              threshold: a.normalRange?.[1] ?? 0, actual: a.cost, period_minutes: 60, provider: a.provider,
+            }, { logger }).catch((e4) => logger.error('webhooks', 'cost.spike delivery failed', e4));
           }
         } catch (e2) {
           logger.error('alerts', `alert evaluation failed: ${e2.message}`, e2);

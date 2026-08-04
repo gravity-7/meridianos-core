@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MeridianOS Cloud Control Plane</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, Segoe UI, sans-serif; max-width: 900px; margin: 32px auto; padding: 0 20px; }
+  h1 { font-size: 1.5em; }
+  section { margin-bottom: 32px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #8883; }
+  .status-online { color: #1a7f37; }
+  .status-degraded { color: #9a6700; }
+  .status-offline { color: #cf222e; }
+  input, select { padding: 6px; margin: 4px 0; }
+  button { padding: 6px 14px; cursor: pointer; }
+  #login-form { max-width: 320px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <h1>MeridianOS Cloud Control Plane</h1>
+
+  <section id="login-section">
+    <form id="login-form">
+      <label>Email <input type="email" id="login-email" required></label><br>
+      <label>Password <input type="password" id="login-password" required></label><br>
+      <button type="submit">Log in</button>
+    </form>
+    <p id="login-error" style="color:#cf222e"></p>
+  </section>
+
+  <section id="app-section" class="hidden">
+    <section>
+      <h2>Connected Machines</h2>
+      <table id="machines-table">
+        <thead><tr><th>Name</th><th>OS</th><th>Version</th><th>Status</th><th>Last Seen</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Provider Health (aggregate)</h2>
+      <table id="health-table">
+        <thead><tr><th>Provider</th><th>Overall</th><th># Machines Reporting</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Push Configuration Change</h2>
+      <form id="policy-form">
+        <label>Policy path <input type="text" id="policy-path" placeholder="agent_budget.warn_pct" required></label><br>
+        <label>Value (JSON) <input type="text" id="policy-value" placeholder="90" required></label><br>
+        <button type="submit">Push to all machines</button>
+      </form>
+      <p id="policy-result"></p>
+    </section>
+  </section>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

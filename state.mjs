@@ -60,10 +60,10 @@ export function upsertTask(db, t, { now = nowIso() } = {}) {
     db.prepare(
       `INSERT INTO tasks(id,type,parent_id,sprint_id,title,acceptance_criteria,lane,status,owner,priority,complexity,risk_tags,task_type,
                          approved_at,snoozed_until,skipped_at,skip_reason,resources,
-                         depends_on,spec,contracts,pr,note,created_at,updated_at)
+                         depends_on,spec,contracts,pr,note,created_at,updated_at,source)
        VALUES (@id,@type,@parent_id,@sprint_id,@title,@acceptance_criteria,@lane,@status,@owner,@priority,@complexity,@risk_tags,@task_type,
                @approved_at,@snoozed_until,@skipped_at,@skip_reason,@resources,
-               @depends_on,@spec,@contracts,@pr,@note,@created_at,@updated_at)`,
+               @depends_on,@spec,@contracts,@pr,@note,@created_at,@updated_at,@source)`,
     ).run({
       id: t.id,
       type: t.type ?? 'feature',
@@ -90,6 +90,7 @@ export function upsertTask(db, t, { now = nowIso() } = {}) {
       note: t.note ?? null,
       created_at: t.created_at ?? now,
       updated_at: t.updated_at ?? now,
+      source: t.source ?? null,
     });
     audit(db, { ts: now, taskId: t.id, from: null, to: t.status ?? 'proposed', actor: 'seed', op: 'seed' });
   } else {
@@ -99,7 +100,7 @@ export function upsertTask(db, t, { now = nowIso() } = {}) {
               complexity=@complexity, risk_tags=@risk_tags, task_type=@task_type,
               approved_at=@approved_at, snoozed_until=@snoozed_until, skipped_at=@skipped_at, skip_reason=@skip_reason,
               resources=@resources, depends_on=@depends_on,
-              spec=@spec, contracts=@contracts, pr=@pr, note=@note, updated_at=@updated_at
+              spec=@spec, contracts=@contracts, pr=@pr, note=@note, updated_at=@updated_at, source=@source
        WHERE id=@id`,
     ).run({
       id: t.id,
@@ -126,6 +127,7 @@ export function upsertTask(db, t, { now = nowIso() } = {}) {
       pr: t.pr ?? existing.pr,
       note: t.note ?? existing.note,
       updated_at: t.updated_at ?? now,
+      source: t.source ?? existing.source ?? null,
     });
   }
   return getTask(db, t.id);

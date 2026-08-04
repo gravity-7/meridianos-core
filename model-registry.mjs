@@ -11,6 +11,7 @@
  *   - autoAssignTiers() → heuristic tier assignment
  */
 import { openLedger } from './gateway/ledger.mjs';
+import { triggerEvent } from './api/webhooks.mjs';
 
 // ─── Schema ─────────────────────────────────────────────────────────────────
 
@@ -195,11 +196,24 @@ export function markDeprecated(db, provider, activeModelIds) {
   if (activeModelIds.length === 0) return;
 
   const placeholders = activeModelIds.map(() => '?').join(',');
+  // FR-011 model.deprecated webhook: capture which rows are ABOUT to flip 0→1 before the UPDATE,
+  // since the UPDATE itself is a single bulk statement with no per-row RETURNING in node:sqlite.
+  const newlyDeprecated = db.prepare(`
+    SELECT model_id FROM model_registry
+    WHERE provider = ? AND model_id NOT IN (${placeholders}) AND deprecated = 0
+  `).all(provider, ...activeModelIds);
+
   db.prepare(`
     UPDATE model_registry
     SET deprecated = 1, updated_at = datetime('now')
     WHERE provider = ? AND model_id NOT IN (${placeholders}) AND deprecated = 0
   `).run(provider, ...activeModelIds);
+
+  for (const row of newlyDeprecated) {
+    triggerEvent(db, 'model.deprecated', {
+      provider, model: row.model_id, deprecation_date: new Date().toISOString().slice(0, 10), replacement: null,
+    }).catch(() => { /* best-effort notification — never let a webhook failure surface here */ });
+  }
 }
 
 /**

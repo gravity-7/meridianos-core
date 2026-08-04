@@ -41,7 +41,9 @@ import { SOC2Report } from '../compliance/reports/soc2.mjs';
 import { GDPRReport } from '../compliance/reports/gdpr.mjs';
 import { CostAllocationReport } from '../compliance/reports/cost-allocation.mjs';
 import { ModelUsageReport } from '../compliance/reports/model-usage.mjs';
-import { metricsMiddleware, startMetricsCollection, createMetricsEndpoint } from './metrics.mjs';
+import { metricsMiddleware, startMetricsCollection, createMetricsEndpoint, toPrometheusText } from './metrics.mjs';
+import { createRotatingLogger } from '../daemon-logger.mjs';
+import { handleApiV1 } from '../api/v1/router.mjs';
 
 // Import ProjectManager for multi-tenant project management
 let _projectManager = null;
@@ -178,8 +180,38 @@ function getTenant(config) {
 
 let _store = null;
 
+// Lazy shared db handle for the Phase 7 public REST API (api/v1/router.mjs) — separate
+// connection from `getStore()`'s (same underlying WAL-mode SQLite file, so both coexist safely),
+// since api_keys/webhooks/plugins aren't part of the ProjectStore facade.
+let _v1Db = null;
+function getV1Db(config) {
+  return (_v1Db ||= openDb(undefined, config));
+}
+
+let _v1Logger = null;
+function getV1Logger(config) {
+  if (_v1Logger) return _v1Logger;
+  try {
+    _v1Logger = createRotatingLogger({ config });
+  } catch {
+    _v1Logger = { log: (_t, m) => console.log(`[meridianos] ${m}`), error: (_t, m, e) => console.error(`[meridianos] ${m}`, e ?? '') };
+  }
+  return _v1Logger;
+}
+
+// Security hardening (code-review follow-up): safe to apply to EVERY response regardless of
+// content type — none of these restrict script execution, so they can't break the dashboard's
+// existing inline <script> (see index.html). `frame-ancestors 'none'` is the modern equivalent of
+// X-Frame-Options: DENY; both are sent since older browsers only honor the latter.
+const BASELINE_SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'no-referrer',
+  'content-security-policy': "frame-ancestors 'none'",
+};
+
 function send(res, code, body, type = 'application/json') {
-  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' });
+  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
   res.end(body);
 }
 
@@ -213,11 +245,20 @@ export function createDashboardServer(config) {
   const getStore = () => (_store ||= createProjectStore({ db: openDb(undefined, config), config }));
   return createServer(async (req, res) => {
     try {
+      // Metrics (code-review follow-up: "Add metrics export for monitoring") — registers a
+      // `res.on('finish', ...)` listener and returns immediately (its `next` is a no-op; this
+      // isn't an Express app, there's no middleware chain to continue), so every request's
+      // timing/status is recorded regardless of which route below actually answers it.
+      metricsMiddleware(req, res, () => {});
+
       const url = new URL(req.url, 'http://localhost');
       const clientIp = req.socket.remoteAddress || 'unknown';
 
-      // Apply rate limiting to all API requests
-      if (url.pathname.startsWith('/api/') && !checkRateLimit(clientIp)) {
+      // Apply rate limiting to all API requests. /api/v1/* is exempt from this IP-based limiter —
+      // it has its own, more precise per-API-key sliding window (api/v1/router.mjs, FR-009);
+      // stacking both on the same path would just make the public API's rate limit depend on how
+      // many OTHER local tools happen to share this machine's loopback address.
+      if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/v1/') && !checkRateLimit(clientIp)) {
         return send(res, 429, JSON.stringify({ ok: false, error: 'Too many requests. Please try again later.' }));
       }
 
@@ -228,6 +269,15 @@ export function createDashboardServer(config) {
       // (the failure mode that only a process-EXIT restart, not this, would otherwise miss).
       if (req.method === 'GET' && url.pathname === '/healthz') {
         return send(res, 200, JSON.stringify({ ok: true, ts: Date.now() }));
+      }
+      // Public REST API v1 (US3) — fully self-contained routing/auth/rate-limiting, so it must
+      // run BEFORE the dashboard's own per-boot-token `authorized()` gate below (Bearer mk-{key}
+      // is a completely separate credential from the dashboard's own token).
+      if (url.pathname.startsWith('/api/v1/')) {
+        const handled = await handleApiV1(req, res, url, {
+          config, db: getV1Db(config), readBody, authorized, logger: getV1Logger(config),
+        });
+        if (handled) return;
       }
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         const html = readFileSync(INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
@@ -241,6 +291,37 @@ export function createDashboardServer(config) {
         const t = Date.now();
         if (t - statusCache.t >= STATUS_TTL_MS) statusCache = { t, body: JSON.stringify(buildStatus({ config })) };
         return send(res, 200, statusCache.body);
+      }
+      // T094 — "Connected to cloud control plane" indicator. cloud/local-agent.mjs runs as a
+      // SEPARATE process and has no other channel back to this one, so it persists its status to
+      // a small file (cloud/local-agent.mjs's statusFilePath) that this route just reads.
+      if (req.method === 'GET' && url.pathname === '/api/cloud/status') {
+        try {
+          const { statusFilePath } = await import('../cloud/local-agent.mjs');
+          const raw = readFileSync(statusFilePath(config), 'utf8');
+          return send(res, 200, raw);
+        } catch {
+          return send(res, 200, JSON.stringify({ connected: false, lastReportAt: null, lastError: null }));
+        }
+      }
+      // Metrics export for monitoring (code-review follow-up). /api/metrics is the existing
+      // JSON shape (dashboard/metrics.mjs, already built but previously never wired to a route);
+      // /metrics is Prometheus text exposition format for scraping into an existing
+      // Prometheus/Grafana setup — GET-only, read-only, no token required (same precedent as
+      // /api/status).
+      if (url.pathname === '/api/metrics') {
+        return createMetricsEndpoint()(req, res);
+      }
+      if (req.method === 'GET' && url.pathname === '/metrics') {
+        let webhookDeliveries, apiKeysActive;
+        try {
+          const v1Db = getV1Db(config);
+          const rows = v1Db.prepare('SELECT status, COUNT(*) AS c FROM webhook_delivery_logs GROUP BY status').all();
+          webhookDeliveries = Object.fromEntries(rows.map((r) => [r.status, r.c]));
+          apiKeysActive = v1Db.prepare('SELECT COUNT(*) AS c FROM api_keys WHERE is_active = 1').get().c;
+        } catch { /* Phase 7 tables may not exist yet on a very old DB — metrics export must never 500 */ }
+        res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4', 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
+        return res.end(toPrometheusText({ webhookDeliveries, apiKeysActive }));
       }
       if (req.method === 'GET' && url.pathname === '/api/spec') {
         const path = url.searchParams.get('path');
@@ -694,6 +775,86 @@ export function createDashboardServer(config) {
         return send(res, 200, JSON.stringify({ ok: true, running: refreshing }));
       }
 
+      // ── Plugin Marketplace (US4, T059/T060) — dashboard-token-gated admin actions, distinct
+      // from the public REST API's own auth. GET is open (matches the rest of this file's
+      // read-vs-mutate pattern); every mutating route already passed the authorized() gate above.
+      if (req.method === 'GET' && url.pathname === '/api/plugins') {
+        const { seedBuiltinPlugins, registryPath } = await import('../plugin-registry.mjs');
+        const { pluginStatus } = await import('../plugin-loader.mjs');
+        const regPath = registryPath(config);
+        seedBuiltinPlugins(regPath);
+        const db = getV1Db(config);
+        return send(res, 200, JSON.stringify({ ok: true, plugins: pluginStatus(db, regPath) }));
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/install$/)) {
+        const pluginId = url.pathname.split('/')[3];
+        const { registryPath } = await import('../plugin-registry.mjs');
+        const { installPlugin } = await import('../plugin-loader.mjs');
+        try {
+          const row = installPlugin(getV1Db(config), registryPath(config), pluginId, { logger: getV1Logger(config), policy: loadPolicy(undefined, config) });
+          return send(res, 200, JSON.stringify({ ok: true, plugin: row }));
+        } catch (err) {
+          return send(res, 400, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/uninstall$/)) {
+        const pluginId = url.pathname.split('/')[3];
+        const { uninstallPlugin } = await import('../plugin-loader.mjs');
+        uninstallPlugin(getV1Db(config), pluginId, { logger: getV1Logger(config) });
+        return send(res, 200, JSON.stringify({ ok: true }));
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/(enable|disable)$/)) {
+        const parts = url.pathname.split('/');
+        const pluginId = parts[3];
+        const { enablePlugin, disablePlugin } = await import('../plugin-loader.mjs');
+        try {
+          (parts[4] === 'enable' ? enablePlugin : disablePlugin)(getV1Db(config), pluginId, { logger: getV1Logger(config) });
+          return send(res, 200, JSON.stringify({ ok: true }));
+        } catch (err) {
+          return send(res, 400, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/rate$/)) {
+        const pluginId = url.pathname.split('/')[3];
+        const { registryPath, ratePlugin } = await import('../plugin-registry.mjs');
+        const body = JSON.parse((await readBody(req)) || '{}');
+        try {
+          const entry = ratePlugin(registryPath(config), pluginId, Number(body.stars));
+          getV1Logger(config).log('plugin-loader', `plugin '${pluginId}' rated ${body.stars} stars`);
+          return send(res, 200, JSON.stringify({ ok: true, entry }));
+        } catch (err) {
+          return send(res, 400, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/api\/plugins\/[^/]+\/config$/)) {
+        const pluginId = url.pathname.split('/')[3];
+        const { getPluginConfig } = await import('../plugin-loader.mjs');
+        return send(res, 200, JSON.stringify({ ok: true, config: getPluginConfig(getV1Db(config), pluginId) }));
+      }
+      if (req.method === 'PUT' && url.pathname.match(/^\/api\/plugins\/[^/]+\/config$/)) {
+        const pluginId = url.pathname.split('/')[3];
+        const { setPluginConfig } = await import('../plugin-loader.mjs');
+        const body = JSON.parse((await readBody(req)) || '{}');
+        setPluginConfig(getV1Db(config), pluginId, body.values ?? {}, { sensitiveKeys: body.sensitiveKeys ?? [], logger: getV1Logger(config) });
+        return send(res, 200, JSON.stringify({ ok: true }));
+      }
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/test$/)) {
+        const pluginId = url.pathname.split('/')[3];
+        const { registryPath } = await import('../plugin-registry.mjs');
+        const { getPluginConfig, testPluginConnection } = await import('../plugin-loader.mjs');
+        try {
+          const { loadRegistry } = await import('../plugin-registry.mjs');
+          const entry = loadRegistry(registryPath(config)).find((e) => e.id === pluginId);
+          if (!entry) return send(res, 404, JSON.stringify({ ok: false, error: `Plugin '${pluginId}' not found` }));
+          const pluginModule = await import(pathToFileURL(join(config.repoRoot, entry.main)).href);
+          const testConfig = getPluginConfig(getV1Db(config), pluginId, { includeSensitive: true });
+          const result = await testPluginConnection(pluginModule, testConfig);
+          return send(res, 200, JSON.stringify({ ok: true, ...result }));
+        } catch (err) {
+          return send(res, 500, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+
       // ── IDE Detection ─────────────────────────────────────────────────
       if (req.method === 'GET' && url.pathname === '/api/ide/detect') {
         const customPaths = config?.policy?.ide_detection?.paths ?? [];
@@ -1118,7 +1279,7 @@ export function createDashboardServer(config) {
         return handleAddTaskComment(req, res);
       }
       if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/tasks\/[^/]+\/comments$/)) {
-        return handleGetTaskComments(req, res);
+        return handleGetProjectTaskComments(req, res);
       }
       if (req.method === 'GET' && url.pathname === '/api/activity/feed') {
         return handleGetActivityFeed(req, res);
@@ -2121,6 +2282,12 @@ async function handleAssignReviewers(req, res) {
 async function handleGetReviewAssignments(req, res) {
   try {
     if (!requireAuth(req, res)) return;
+
+    const reviewerAssigner = getReviewerAssigner();
+    const limit = parseInt(req.url.searchParams.get('limit') || '10', 10);
+    const assignments = reviewerAssigner.getRecentAssignments(req.user.sub, limit);
+
+    send(res, 200, JSON.stringify({ success: true, assignments }));
   } catch (error) {
     send(res, 500, JSON.stringify({ success: false, error: error.message }));
   }
@@ -2337,7 +2504,7 @@ async function handleGetProjectActivity(req, res) {
 /**
  * GET /api/projects/{id}/tasks/{task_id}/comments - Get task comments
  */
-async function handleGetTaskComments(req, res) {
+async function handleGetProjectTaskComments(req, res) {
   try {
     if (!requireAuth(req, res)) return;
 
@@ -2352,16 +2519,6 @@ async function handleGetTaskComments(req, res) {
       task_id: taskId,
       comments
     }));
-  } catch (error) {
-    send(res, 500, JSON.stringify({ success: false, error: error.message }));
-  }
-}
-
-    const reviewerAssigner = getReviewerAssigner();
-    const limit = parseInt(req.url.searchParams.get('limit') || '10', 10);
-    const assignments = reviewerAssigner.getRecentAssignments(req.user.sub, limit);
-
-    send(res, 200, JSON.stringify({ success: true, assignments }));
   } catch (error) {
     send(res, 500, JSON.stringify({ success: false, error: error.message }));
   }

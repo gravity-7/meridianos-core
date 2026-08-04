@@ -1,0 +1,204 @@
+openapi: 3.0.3
+info:
+  title: MeridianOS Public REST API
+  version: "1.0.0"
+  description: |
+    Public REST API for third-party integration with a local MeridianOS instance
+    (contracts/rest-api-v1.md). Authenticate with `Authorization: Bearer mk-{apiKey}`.
+servers:
+  - url: http://localhost:4317/api/v1
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "mk-{32 hex chars}"
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        message: { type: string }
+    Task:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        body: { type: string }
+        status: { type: string, enum: [todo, in-progress, done] }
+        priority: { type: string, enum: [low, medium, high, critical] }
+        source: { type: string, enum: [agent, ide, cli, api] }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+        tags: { type: array, items: { type: string } }
+    Webhook:
+      type: object
+      properties:
+        id: { type: string }
+        url: { type: string }
+        events: { type: array, items: { type: string } }
+        is_active: { type: boolean }
+        created_at: { type: integer }
+        last_delivery_at: { type: integer, nullable: true }
+        failure_count: { type: integer }
+paths:
+  /tasks:
+    get:
+      summary: List tasks
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: source
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks: { type: array, items: { $ref: '#/components/schemas/Task' } }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+    post:
+      summary: Create a task
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                body: { type: string }
+                priority: { type: string }
+                tags: { type: array, items: { type: string } }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+  /tasks/{id}:
+    get:
+      summary: Get a task
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } }
+        '404': { description: Not Found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    patch:
+      summary: Update a task
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+    delete:
+      summary: Delete a task (API-created tasks only)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '204': { description: No Content }
+  /costs:
+    get:
+      summary: Query costs
+      parameters:
+        - { name: start_time, in: query, schema: { type: integer } }
+        - { name: end_time, in: query, schema: { type: integer } }
+        - { name: provider, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+        - { name: agent, in: query, schema: { type: string } }
+        - { name: source, in: query, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+  /costs/summary:
+    get:
+      summary: Cost summary grouped by a dimension
+      parameters:
+        - { name: group_by, in: query, schema: { type: string, enum: [provider, model, agent, source, day] } }
+      responses:
+        '200': { description: OK }
+  /providers:
+    get:
+      summary: List providers
+      responses: { '200': { description: OK } }
+    post:
+      summary: Add a custom provider
+      responses: { '201': { description: Created } }
+  /providers/{id}:
+    get:
+      summary: Get a provider
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK }, '404': { description: Not Found } }
+    delete:
+      summary: Remove a provider
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: No Content } }
+  /providers/{id}/test:
+    post:
+      summary: Test a provider connection
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK } }
+  /models:
+    get:
+      summary: List discovered models
+      parameters: [{ name: provider, in: query, schema: { type: string } }]
+      responses: { '200': { description: OK } }
+  /models/refresh:
+    post:
+      summary: Trigger model discovery refresh
+      responses: { '200': { description: OK } }
+  /models/{id}/tier:
+    put:
+      summary: Update a model's pricing tier
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK } }
+  /config:
+    get:
+      summary: Get configuration
+      responses: { '200': { description: OK } }
+    put:
+      summary: Update configuration (budget.monthly_limit only)
+      responses: { '200': { description: OK } }
+  /webhooks:
+    get:
+      summary: List webhooks
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhooks: { type: array, items: { $ref: '#/components/schemas/Webhook' } }
+    post:
+      summary: Register a webhook
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url: { type: string }
+                events: { type: array, items: { type: string } }
+                secret: { type: string }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Webhook' } } } }
+  /webhooks/{id}:
+    delete:
+      summary: Delete a webhook
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: No Content } }

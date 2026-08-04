@@ -136,6 +136,105 @@ export class APITokenManager {
   }
 }
 
+// ─── Local REST API keys (Phase 7: api/v1) ──────────────────────────────────────────────────
+//
+// Distinct from APITokenManager above: that class authenticates the cloud multi-tenant SaaS
+// control plane against control-plane.db (better-sqlite3, user-scoped tokens). The functions
+// below back the LOCAL, single-machine public REST API (`Authorization: Bearer mk-{id}`) and
+// operate on the `api_keys` table in the main AIOS state DB (node:sqlite, schema.sql) via an
+// injected `db` handle — no ambient connection, consistent with the rest of this package.
+
+const VALID_SCOPES = new Set([
+  'tasks:read', 'tasks:write',
+  'costs:read',
+  'providers:read', 'providers:write',
+  'config:read', 'config:write',
+]);
+
+/** Generate a `mk-{32 hex chars}` key id — matches data-model.md's `^mk-[a-zA-Z0-9]{32}$`. */
+function generateKeyId() {
+  return `mk-${crypto.randomBytes(16).toString('hex')}`;
+}
+
+/**
+ * Create and persist a new local REST API key.
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{name: string, scopes: string[]|string}} opts  scopes as an array or comma-separated string
+ * @returns {{id: string, name: string, scopes: string, created_at: number, is_active: number}}
+ */
+export function generateApiKey(db, { name, scopes }) {
+  const scopeList = Array.isArray(scopes) ? scopes : String(scopes || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const invalid = scopeList.filter((s) => !VALID_SCOPES.has(s));
+  if (scopeList.length === 0 || invalid.length > 0) {
+    throw new Error(`Invalid scopes: ${invalid.length ? invalid.join(', ') : '(none provided)'}`);
+  }
+  const id = generateKeyId();
+  const createdAt = Math.floor(Date.now() / 1000);
+  db.prepare(
+    `INSERT INTO api_keys (id, name, scopes, created_at, is_active) VALUES (?, ?, ?, ?, 1)`,
+  ).run(id, name, scopeList.join(','), createdAt);
+  return { id, name, scopes: scopeList.join(','), created_at: createdAt, is_active: 1 };
+}
+
+/**
+ * Validate a bearer token (`mk-{...}`, with or without the `Bearer ` prefix already stripped)
+ * and, if valid, bump `last_used_at`. Returns the key row or `null`.
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} token
+ */
+export function validateApiKey(db, token) {
+  if (typeof token !== 'string' || !/^mk-[a-zA-Z0-9]{32}$/.test(token)) return null;
+  const row = db.prepare('SELECT * FROM api_keys WHERE id = ? AND is_active = 1').get(token);
+  if (!row) return null;
+  db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(Math.floor(Date.now() / 1000), token);
+  return row;
+}
+
+/** Does an api_keys row's scopes include `scope`? */
+export function hasScope(apiKeyRow, scope) {
+  if (!apiKeyRow?.scopes) return false;
+  return apiKeyRow.scopes.split(',').map((s) => s.trim()).includes(scope);
+}
+
+/** Revoke a local API key (is_active = 0). Returns true if a row was changed. */
+export function revokeApiKey(db, id) {
+  return db.prepare('UPDATE api_keys SET is_active = 0 WHERE id = ?').run(id).changes > 0;
+}
+
+/** List local API keys, most recently created first. */
+export function listApiKeys(db) {
+  return db.prepare('SELECT id, name, scopes, created_at, last_used_at, is_active FROM api_keys ORDER BY created_at DESC').all();
+}
+
+/**
+ * Rotate a local API key: mint a brand-new `mk-{...}` key with the SAME name/scopes, then revoke
+ * the old one — atomically (one transaction), so a reader never observes a moment with zero
+ * active keys for that credential. The returned object's `id` is the NEW key — every caller
+ * holding the old value must switch to it. This is a hard rotation, not a grace-period
+ * dual-validity one: the threat model here is "a leaked key must stop working immediately," not
+ * "eventually."
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} id  the CURRENT key id (`mk-{...}`) to rotate
+ * @returns {{id: string, name: string, scopes: string, created_at: number, is_active: number}}
+ * @throws {Error} if `id` doesn't exist or is already revoked
+ */
+export function rotateApiKey(db, id) {
+  const existing = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id);
+  if (!existing) throw new Error(`API key not found: ${id}`);
+  if (!existing.is_active) throw new Error(`API key is already revoked: ${id}`);
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const rotated = generateApiKey(db, { name: existing.name, scopes: existing.scopes });
+    db.prepare('UPDATE api_keys SET is_active = 0 WHERE id = ?').run(id);
+    db.exec('COMMIT');
+    return rotated;
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+    throw err;
+  }
+}
+
 // Singleton instance
 let apiTokenManagerInstance = null;
 

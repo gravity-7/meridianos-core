@@ -1,0 +1,61 @@
+/**
+ * {{PLUGIN_NAME}} — an IntakeSource plugin for MeridianOS.
+ *
+ * Implements the IntakeSource contract (see docs/plugin-development.md and
+ * contracts/intake-source-plugin.md in the meridianos-core repo): fetchTasks, createTask,
+ * updateTask, and handleWebhook are REQUIRED; testConnection is optional but recommended.
+ *
+ * `config` in every method below is whatever the user filled in for this plugin's
+ * `config_schema` (see plugin.json) — never read secrets from process.env directly.
+ */
+
+/**
+ * Fetch all tasks from the external system.
+ * @param {object} config
+ * @returns {Promise<Array<{externalId: string, title: string, body: string, status: 'todo'|'in-progress'|'done', priority: 'low'|'medium'|'high'|'critical', tags: string[], url: string, createdAt: number, updatedAt: number}>>}
+ */
+export async function fetchTasks(config) {
+  // TODO: call your external API and map its results into the shape above.
+  return [];
+}
+
+/**
+ * Create a new task in the external system.
+ * @param {{title: string, body?: string, priority?: string, tags?: string[]}} task
+ * @param {object} config
+ * @returns {Promise<{externalId: string, url: string}>}
+ */
+export async function createTask(task, config) {
+  throw new Error('createTask not implemented yet');
+}
+
+/**
+ * Update an existing task in the external system.
+ * @param {string} externalId
+ * @param {{title?: string, body?: string, status?: string, priority?: string, tags?: string[]}} updates
+ * @param {object} config
+ * @returns {Promise<{success: boolean}>}
+ */
+export async function updateTask(externalId, updates, config) {
+  throw new Error('updateTask not implemented yet');
+}
+
+/**
+ * Handle a webhook notification pushed by the external system.
+ * @param {object} payload
+ * @param {object} config
+ * @returns {Promise<{action: 'created'|'updated'|'deleted', externalId: string, task: object|null}>}
+ */
+export async function handleWebhook(payload, config) {
+  throw new Error('handleWebhook not implemented yet');
+}
+
+/**
+ * OPTIONAL — verify the plugin can reach the external system with the given config. The
+ * marketplace UI's "Test Connection" button calls this.
+ * @param {object} config
+ * @returns {Promise<{success: boolean, message: string, latency_ms?: number}>}
+ */
+export async function testConnection(config) {
+  return { success: true, message: 'testConnection not implemented — assuming OK' };
+}

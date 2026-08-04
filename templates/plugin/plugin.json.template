@@ -1,0 +1,21 @@
+{
+  "name": "{{PLUGIN_NAME}}",
+  "version": "1.0.0",
+  "type": "{{PLUGIN_TYPE}}",
+  "description": "TODO: describe what this plugin does",
+  "author": "{{AUTHOR}}",
+  "main": "index.mjs",
+  "config_schema": {
+    "example_field": {
+      "type": "string",
+      "required": true,
+      "description": "TODO: describe this configuration field"
+    },
+    "api_token": {
+      "type": "string",
+      "required": true,
+      "sensitive": true,
+      "description": "TODO: describe this credential"
+    }
+  }
+}
