@@ -70,10 +70,9 @@ export class LicenseKey {
       throw new Error(`Invalid tier: ${fullPayload.tier}. Must be one of: ${validTiers.join(', ')}`);
     }
 
-    // Validate expires_at is in the future
-    if (fullPayload.expires_at <= Math.floor(Date.now() / 1000)) {
-      throw new Error('expires_at must be in the future');
-    }
+    // Note: expiration is intentionally NOT validated here — generate() must be able to
+    // produce already-expired keys (e.g. for reissue/testing); validate() is the sole
+    // authority on whether a key is expired.
 
     // Encode payload to Base64URL
     const payloadString = JSON.stringify(fullPayload);
@@ -88,13 +87,12 @@ export class LicenseKey {
     // Encode signature to Base64URL
     const signatureBase64 = signature.toString('base64url');
 
-    // Combine payload and signature
-    const combined = payloadBase64 + '.' + signatureBase64;
-
-    // Format as mer-XXXX-XXXX-XXXX-XXXX (take first 16 chars of combined)
-    const formatted = this.formatLicenseKey(combined);
-
-    return formatted;
+    // The license key IS "mer-" + payload + "." + signature (both base64url).
+    // This must round-trip through validate()/decodePayload() exactly, so nothing here
+    // may be hashed, truncated, or otherwise lossy. Base64url's own alphabet includes
+    // "-", so "." (never produced by base64url) is used as the payload/signature
+    // separator instead of dashes.
+    return 'mer-' + payloadBase64 + '.' + signatureBase64;
   }
 
   /**
@@ -117,12 +115,16 @@ export class LicenseKey {
         return { valid: false, error: 'Invalid license key format' };
       }
 
-      // Remove prefix and format
-      const normalized = licenseKey.replace(/^mer-/, '').replace(/-/g, '');
+      // Remove prefix only — base64url itself uses "-", so dashes must NOT be
+      // stripped from the payload/signature, only the "mer-" prefix.
+      if (!licenseKey.startsWith('mer-')) {
+        return { valid: false, error: 'Invalid license key format' };
+      }
+      const normalized = licenseKey.slice(4);
 
-      // Split payload and signature
+      // Split payload and signature on "." (never produced by base64url)
       const parts = normalized.split('.');
-      if (parts.length !== 2) {
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
         return { valid: false, error: 'Invalid license key format' };
       }
 
@@ -187,10 +189,13 @@ export class LicenseKey {
    * @throws {Error} If license key is invalid
    */
   static decodePayload(licenseKey) {
-    const normalized = licenseKey.replace(/^mer-/, '').replace(/-/g, '');
+    if (typeof licenseKey !== 'string' || !licenseKey.startsWith('mer-')) {
+      throw new Error('Invalid license key format');
+    }
+    const normalized = licenseKey.slice(4);
     const parts = normalized.split('.');
 
-    if (parts.length !== 2) {
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
       throw new Error('Invalid license key format');
     }
 
@@ -266,14 +271,17 @@ export class LicenseKey {
   }
 
   /**
-   * Format license key as mer-XXXX-XXXX-XXXX-XXXX
-   * @param {string} combined - Combined payload.signature string
-   * @returns {string} Formatted license key
+   * Build a short, cosmetic mer-XXXX-XXXX-XXXX-XXXX label for display purposes
+   * (e.g. UI, receipts, support tickets). This is a one-way hash of the full
+   * license key and is NOT decodable — it must never be passed to validate()
+   * or decodePayload(), which require the full key returned by generate().
+   * @param {string} combined - Full license key (or payload.signature string)
+   * @returns {string} Cosmetic display label
    */
   static formatLicenseKey(combined) {
     // Use a hash of the combined string to ensure uniqueness
-    const hash = crypto.createHash('sha256').update(combined).digest('hex');
-    
+    const hash = crypto.createHash('sha256').update(combined).digest('hex').toUpperCase();
+
     // Take first 16 characters of the hash for the formatted key
     const clean = hash.slice(0, 16);
 

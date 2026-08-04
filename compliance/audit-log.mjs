@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,15 +70,13 @@ export class ActivityLogger {
    * Log an activity event
    */
   log({ user_id = null, project_id = null, action, details = {} }) {
-    import('node:crypto').then(crypto => {
-      const id = crypto.randomUUID();
-      const stmt = this.db.prepare(`
-        INSERT INTO activity_log (id, user_id, project_id, action, details, timestamp, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-      const now = Math.floor(Date.now() / 1000);
-      stmt.run(id, user_id, project_id, action, JSON.stringify(details), now, now);
-    });
+    const id = randomUUID();
+    const stmt = this.db.prepare(`
+      INSERT INTO activity_log (id, user_id, project_id, action, details, timestamp, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const now = Math.floor(Date.now() / 1000);
+    stmt.run(id, user_id, project_id, action, JSON.stringify(details), now, now);
   }
 
   /**
@@ -340,9 +339,6 @@ export class ActivityLogger {
   }
 }
 
-// Import crypto for UUID generation
-import crypto from 'node:crypto';
-
 // Singleton instance
 let activityLoggerInstance = null;
 
@@ -385,14 +381,12 @@ export class AuditLogger {
    * @param {Object} event - Event data
    */
   logCompliance({ user_id = null, action, category, details = {}, ip_address = null }) {
-    import('node:crypto').then(crypto => {
-      const id = crypto.randomUUID();
-      const stmt = this.db.prepare(`
-        INSERT INTO compliance_log (id, user_id, action, category, details, timestamp, ip_address)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-      stmt.run(id, user_id, action, category, JSON.stringify(details), Math.floor(Date.now() / 1000), ip_address);
-    });
+    const id = randomUUID();
+    const stmt = this.db.prepare(`
+      INSERT INTO compliance_log (id, user_id, action, category, details, timestamp, ip_address)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(id, user_id, action, category, JSON.stringify(details), Math.floor(Date.now() / 1000), ip_address);
   }
 
   /**

@@ -214,12 +214,28 @@ export async function exportMetrics(filename = METRICS_PATH) {
   }
 }
 
+// Handles for the two background intervals startMetricsCollection() creates, so a later call
+// (or stopMetricsCollection()) can clear the previous pair instead of stacking duplicates.
+let systemMetricsTimer = null;
+let exportMetricsTimer = null;
+
 /**
- * Start metrics collection interval
+ * Start metrics collection interval. Idempotent per-process: calling this again (e.g. a test
+ * that constructs the dashboard server more than once) clears the previous pair of intervals
+ * first, rather than leaking another set on every call.
+ *
+ * Both intervals are `.unref()`d — they must never be the reason a Node process can't exit.
+ * A long-running daemon keeps them firing for as long as the process is otherwise alive (unref
+ * only affects whether the timer alone counts as "work" keeping the event loop open); a test
+ * process that spins up a dashboard server and closes everything else can now actually exit,
+ * instead of hanging until an external timeout kills it (this was silently breaking `node --test`
+ * runs against any server built with createDashboardServer, including tests/server.test.mjs).
  */
 export function startMetricsCollection(intervalMs = 60000) {
+  stopMetricsCollection();
+
   // Collect system metrics every 5 seconds
-  setInterval(async () => {
+  systemMetricsTimer = setInterval(async () => {
     const cpuUsage = process.cpuUsage().user / 1000;
     const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024;
     const diskUsage = await getDiskUsage();
@@ -227,13 +243,21 @@ export function startMetricsCollection(intervalMs = 60000) {
 
     recordSystemMetrics(cpuUsage, memoryUsage, diskUsage, activeConnections);
   }, 5000);
+  systemMetricsTimer.unref();
 
   // Export metrics every intervalMs
-  setInterval(() => {
+  exportMetricsTimer = setInterval(() => {
     exportMetrics();
   }, intervalMs);
+  exportMetricsTimer.unref();
 
   console.log(`Metrics collection started (export interval: ${intervalMs}ms)`);
+}
+
+/** Stop both background intervals started by startMetricsCollection(), if running. */
+export function stopMetricsCollection() {
+  if (systemMetricsTimer) { clearInterval(systemMetricsTimer); systemMetricsTimer = null; }
+  if (exportMetricsTimer) { clearInterval(exportMetricsTimer); exportMetricsTimer = null; }
 }
 
 /**

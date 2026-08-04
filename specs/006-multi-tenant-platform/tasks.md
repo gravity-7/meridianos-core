@@ -76,14 +76,14 @@
 - [X] T029 [P] [US1] Implement ProjectManager.listProjects() in control-plane.mjs (query projects table, include health status)
 - [X] T030 [P] [US1] Implement ProjectManager.getProjectHealth() in control-plane.mjs (HTTP heartbeat, resource metrics)
 - [X] T031 [US1] Implement auto-restart logic in control-plane.mjs (monitor process, restart on crash, max 3/hour)
-- [X] T032 [US1] Implement GET /api/projects/ endpoint in dashboard/server.mjs (list projects with filters)
-- [X] T033 [US1] Implement POST /api/projects/ endpoint in dashboard/server.mjs (create project from template)
-- [X] T034 [US1] Implement GET /api/projects/{id} endpoint in dashboard/server.mjs (project details)
-- [X] T035 [US1] Implement POST /api/projects/{id}/start endpoint in dashboard/server.mjs
-- [X] T036 [US1] Implement POST /api/projects/{id}/stop endpoint in dashboard/server.mjs
-- [X] T037 [US1] Implement POST /api/projects/{id}/restart endpoint in dashboard/server.mjs
-- [X] T038 [US1] Implement DELETE /api/projects/{id} endpoint in dashboard/server.mjs
-- [X] T039 [US1] Implement GET /api/projects/{id}/health endpoint in dashboard/server.mjs
+- [X] T032 [US1] Implement GET /api/projects/ endpoint in dashboard/server.mjs (list projects with filters) (fixed 2026-08-03 — handler was referenced by the router but never defined, threw ReferenceError on every call; handleListProjects now implemented, also fixed ProjectManager never creating its own `projects` table schema (control-plane.mjs ensureSchema) so the route 500'd even once the handler existed; see tests/dashboard-project-api.test.mjs)
+- [X] T033 [US1] Implement POST /api/projects/ endpoint in dashboard/server.mjs (create project from template) (fixed 2026-08-03 — same ReferenceError; handleCreateProject now implemented)
+- [X] T034 [US1] Implement GET /api/projects/{id} endpoint in dashboard/server.mjs (project details) (fixed 2026-08-03 — same ReferenceError; handleGetProject now implemented)
+- [X] T035 [US1] Implement POST /api/projects/{id}/start endpoint in dashboard/server.mjs (fixed 2026-08-03 — same ReferenceError; handleStartProject now implemented)
+- [X] T036 [US1] Implement POST /api/projects/{id}/stop endpoint in dashboard/server.mjs (fixed 2026-08-03 — same ReferenceError; handleStopProject now implemented)
+- [X] T037 [US1] Implement POST /api/projects/{id}/restart endpoint in dashboard/server.mjs (fixed 2026-08-03 — same ReferenceError; handleRestartProject now implemented)
+- [X] T038 [US1] Implement DELETE /api/projects/{id} endpoint in dashboard/server.mjs (fixed 2026-08-03 — same ReferenceError; handleDeleteProject now implemented)
+- [X] T039 [US1] Implement GET /api/projects/{id}/health endpoint in dashboard/server.mjs (fixed 2026-08-03 — same ReferenceError; handleGetProjectHealth now implemented)
 - [X] T040 [US1] Create projects panel UI in dashboard/static/projects-panel.mjs (project cards, status indicators, action buttons)
 - [X] T041 [US1] Add project management CLI commands in gateway/cli.mjs (project list/create/start/stop/delete)
 
@@ -346,15 +346,15 @@ plan.md's canonical directory layout and the `deploy/kubernetes` structure T001 
 - [X] T191 [P] Add performance monitoring and metrics collection
 - [X] T192 [P] Implement rate limiting for API endpoints
 - [X] T193 [P] Add comprehensive error messages with actionable remediation steps
-- [ ] T194 [P] Create user documentation for multi-tenant platform features
-- [ ] T195 [P] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable)
-- [ ] T196 [P] Optimize database queries with proper indexes
-- [ ] T197 [P] Add database backup and restore functionality
-- [ ] T198 [P] Implement configuration hot-reload for non-critical settings
-- [ ] T199 [P] Add telemetry and usage analytics (opt-in)
-- [ ] T200 [P] Final integration testing across all user stories
-- [ ] T201 [P] Performance testing with 10+ concurrent projects
-- [ ] T202 [P] Security audit and penetration testing
+- [X] T194 [P] Create user documentation for multi-tenant platform features
+- [X] T195 [P] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable)
+- [X] T196 [P] Optimize database queries with proper indexes
+- [X] T197 [P] Add database backup and restore functionality
+- [X] T198 [P] Implement configuration hot-reload for non-critical settings
+- [X] T199 [P] Add telemetry and usage analytics (opt-in)
+- [X] T200 [P] Final integration testing across all user stories
+- [X] T201 [P] Performance testing with 10+ concurrent projects
+- [X] T202 [P] Security audit and penetration testing
 - [X] T203 [P] Update README.md with multi-tenant platform documentation
 - [X] T204 [P] Create changelog entry for multi-tenant platform release
 
@@ -439,8 +439,8 @@ Phase 1 (Setup) → Phase 2 (Foundational) → [US1, US2, US5] (P1 - MVP) → [U
 - [X] T132 [P] [US4] Implement TemplateLoader.load() in control-plane.mjs (load and validate YAML template) per FR-016 (missing)
 - [X] T133 [P] [US4] Implement TemplateLoader.apply() in control-plane.mjs (apply template to project) per US4/AC4 (missing)
 - [X] T134 [P] [US4] Implement TemplateLoader.list() in control-plane.mjs (list available templates) per FR-015 (missing)
-- [X] T135 [P] [US4] Implement GET /api/projects/templates endpoint in dashboard/server.mjs (list templates) per US4 (missing)
-- [X] T136 [P] [US4] Implement GET /api/projects/templates/{id} endpoint in dashboard/server.mjs (template details) per US4 (missing)
+- [X] T135 [P] [US4] Implement GET /api/projects/templates endpoint in dashboard/server.mjs (list templates) per US4 (fixed 2026-08-03 — handler was referenced but never defined, threw ReferenceError; handleListTemplates now implemented, see tests/dashboard-project-api.test.mjs)
+- [X] T136 [P] [US4] Implement GET /api/projects/templates/{id} endpoint in dashboard/server.mjs (template details) per US4 (fixed 2026-08-03 — same ReferenceError; handleGetTemplate now implemented)
 - [X] T137 [US4] Create template gallery UI in dashboard/static/templates-panel.mjs (template cards, "Use Template" button) per US4 (missing)
 - [X] T138 [US4] Add template selection to project creation form in dashboard/static/projects-panel.mjs per US4 (missing)
 - [X] T139 [P] [US6] Integration test for Helm chart installation in tests/integration/test-helm-install.mjs per US6 (done)
@@ -481,11 +481,11 @@ Phase 1 (Setup) → Phase 2 (Foundational) → [US1, US2, US5] (P1 - MVP) → [U
 - [X] T174 [P] [US7] Implement ModelUsageReport.generate() in compliance/reports/model-usage.mjs (model success rates, cost efficiency) per US7/AC4 (missing)
 - [X] T175 [P] [US7] Implement ModelUsageReport.exportCSV() in compliance/reports/model-usage.mjs per US7 (missing)
 - [X] T176 [P] [US7] Implement ModelUsageReport.exportPDF() in compliance/reports/model-usage.mjs per US7 (missing)
-- [X] T177 [P] [US7] Implement POST /api/compliance/reports/soc2 endpoint in dashboard/server.mjs per US7 (missing)
-- [X] T178 [P] [US7] Implement POST /api/compliance/reports/gdpr endpoint in dashboard/server.mjs per US7 (missing)
-- [X] T179 [P] [US7] Implement POST /api/compliance/reports/cost-allocation endpoint in dashboard/server.mjs per US7 (missing)
-- [X] T180 [P] [US7] Implement POST /api/compliance/reports/model-usage endpoint in dashboard/server.mjs per US7 (missing)
-- [X] T181 [P] [US7] Implement GET /api/compliance/reports endpoint in dashboard/server.mjs (list generated reports) per US7 (missing)
+- [X] T177 [P] [US7] Implement POST /api/compliance/reports/soc2 endpoint in dashboard/server.mjs per US7 (fixed 2026-08-03 — handler was referenced but never defined, threw ReferenceError; handleGenerateSOC2Report now implemented, persists to .ai/reports/)
+- [X] T178 [P] [US7] Implement POST /api/compliance/reports/gdpr endpoint in dashboard/server.mjs per US7 (fixed 2026-08-03 — same ReferenceError; handleGenerateGDPRReport now implemented)
+- [X] T179 [P] [US7] Implement POST /api/compliance/reports/cost-allocation endpoint in dashboard/server.mjs per US7 (fixed 2026-08-03 — same ReferenceError; handleGenerateCostAllocationReport now implemented)
+- [X] T180 [P] [US7] Implement POST /api/compliance/reports/model-usage endpoint in dashboard/server.mjs per US7 (fixed 2026-08-03 — same ReferenceError; handleGenerateModelUsageReport now implemented)
+- [X] T181 [P] [US7] Implement GET /api/compliance/reports endpoint in dashboard/server.mjs (list generated reports) per US7 (fixed 2026-08-03 — same ReferenceError; handleListComplianceReports now implemented, see tests/dashboard-project-api.test.mjs)
 - [X] T182 [US7] Create compliance reports UI in dashboard (report generation form, download links) per US7 (missing)
 - [X] T183 [US7] Add audit logging to all critical operations (user actions, config changes, provider additions) per FR-025 (missing)
 - [ ] T184 [P] Implement OIDC SSO integration in auth/oauth-provider.mjs (Azure AD, Google Workspace, GitHub OAuth) per FR-009 (missing)
@@ -493,20 +493,20 @@ Phase 1 (Setup) → Phase 2 (Foundational) → [US1, US2, US5] (P1 - MVP) → [U
 - [ ] T186 [P] Implement GET /api/auth/oauth/{provider}/callback endpoint in dashboard/server.mjs per FR-009 (missing)
 - [ ] T187 [P] Add OIDC configuration to policy.yaml schema per FR-009 (missing)
 - [ ] T188 [P] Create comprehensive API documentation for all endpoints per Phase 10 (missing)
-- [ ] T189 [P] Write migration guide for single-user to multi-tenant upgrade per Phase 10 (missing)
-- [ ] T190 [P] Create troubleshooting guide for common multi-tenant issues per Phase 10 (missing)
-- [ ] T191 [P] Add performance monitoring and metrics collection per Phase 10 (missing)
-- [ ] T192 [P] Implement rate limiting for API endpoints per Phase 10 (missing)
-- [ ] T193 [P] Add comprehensive error messages with actionable remediation steps per Phase 10 (missing)
-- [ ] T194 [P] Create user documentation for multi-tenant platform features per Phase 10 (missing)
-- [ ] T195 [P] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable) per Phase 10 (missing)
-- [ ] T196 [P] Optimize database queries with proper indexes per Phase 10 (missing)
-- [ ] T197 [P] Add database backup and restore functionality per Phase 10 (missing)
-- [ ] T198 [P] Implement configuration hot-reload for non-critical settings per Phase 10 (missing)
-- [ ] T199 [P] Add telemetry and usage analytics (opt-in) per Phase 10 (missing)
-- [ ] T200 [P] Final integration testing across all user stories per Phase 10 (missing)
-- [ ] T201 [P] Performance testing with 10+ concurrent projects per SC-001 (missing)
-- [ ] T202 [P] Security audit and penetration testing per Phase 10 (missing)
+- [X] T189 [P] Write migration guide for single-user to multi-tenant upgrade per Phase 10 (done)
+- [X] T190 [P] Create troubleshooting guide for common multi-tenant issues per Phase 10 (done)
+- [X] T191 [P] Add performance monitoring and metrics collection per Phase 10 (done — /api/metrics endpoint + startMetricsCollection)
+- [X] T192 [P] Implement rate limiting for API endpoints per Phase 10 (done — tiered limits + X-RateLimit-* headers)
+- [X] T193 [P] Add comprehensive error messages with actionable remediation steps per Phase 10 (done — dashboard/errors.mjs)
+- [X] T194 [P] Create user documentation for multi-tenant platform features per Phase 10 (done — docs/user-guide.md)
+- [X] T195 [P] Add integration tests for edge cases (control plane crash, concurrent config changes, license server unreachable) per Phase 10 (done — tests/integration/test-edge-cases.mjs)
+- [X] T196 [P] Optimize database queries with proper indexes per Phase 10 (done — schema/control-plane-schema.sql, schema/project-schema.sql)
+- [X] T197 [P] Add database backup and restore functionality per Phase 10 (done — db-backup.mjs, scripts/backup-db.mjs)
+- [X] T198 [P] Implement configuration hot-reload for non-critical settings per Phase 10 (done — config-hot-reload.mjs)
+- [X] T199 [P] Add telemetry and usage analytics (opt-in) per Phase 10 (done — telemetry.mjs)
+- [X] T200 [P] Final integration testing across all user stories per Phase 10 (done — tests/integration/test-final-integration.mjs)
+- [X] T201 [P] Performance testing with 10+ concurrent projects per SC-001 (done — tests/performance/test-concurrent-projects.perf.mjs)
+- [X] T202 [P] Security audit and penetration testing per Phase 10 (done — docs/security-audit.md, scripts/security-audit.mjs)
 - [ ] T203 [P] Update README.md with multi-tenant platform documentation per Phase 10 (missing)
 - [ ] T204 [P] Create changelog entry for multi-tenant platform release per Phase 10 (missing)
 
@@ -527,11 +527,11 @@ Phase 1 (Setup) → Phase 2 (Foundational) → [US1, US2, US5] (P1 - MVP) → [U
 - [X] T209 [P] [US3] Implement GET /api/projects/{id}/activity endpoint in dashboard/server.mjs per FR-012 (missing)
 - [X] T210 [P] [US3] Implement POST /api/projects/{id}/tasks/{task_id}/comments endpoint in dashboard/server.mjs per FR-013 (missing)
 - [X] T211 [US3] Implement PR review assignment in runner.mjs per FR-014 (missing)
-- [X] T212 [P] [US7] Implement handleGenerateSOC2Report function in dashboard/server.mjs per US7/AC1 (missing)
-- [X] T213 [P] [US7] Implement handleGenerateGDPRReport function in dashboard/server.mjs per US7/AC2 (missing)
-- [X] T214 [P] [US7] Implement handleGenerateCostAllocationReport function in dashboard/server.mjs per US7/AC3 (missing)
-- [X] T215 [P] [US7] Implement handleGenerateModelUsageReport function in dashboard/server.mjs per US7/AC4 (missing)
-- [X] T216 [P] [US7] Implement handleListComplianceReports function in dashboard/server.mjs per US7 (missing)
+- [X] T212 [P] [US7] Implement handleGenerateSOC2Report function in dashboard/server.mjs per US7/AC1 (fixed 2026-08-03 — genuinely undefined until now, not just falsely checked; see tests/dashboard-project-api.test.mjs)
+- [X] T213 [P] [US7] Implement handleGenerateGDPRReport function in dashboard/server.mjs per US7/AC2 (fixed 2026-08-03 — same, now implemented)
+- [X] T214 [P] [US7] Implement handleGenerateCostAllocationReport function in dashboard/server.mjs per US7/AC3 (fixed 2026-08-03 — same, now implemented)
+- [X] T215 [P] [US7] Implement handleGenerateModelUsageReport function in dashboard/server.mjs per US7/AC4 (fixed 2026-08-03 — same, now implemented)
+- [X] T216 [P] [US7] Implement handleListComplianceReports function in dashboard/server.mjs per US7 (fixed 2026-08-03 — same, now implemented)
 - [X] T217 [US3] Create team panel UI in dashboard/static/team-panel.mjs per US3/AC2 (missing)
 - [X] T218 [US3] Add task comment UI to dashboard task detail panel per US3/AC3 (missing)
 - [X] T219 [US4] Create template gallery UI in dashboard/static/templates-panel.mjs per US4 (missing)

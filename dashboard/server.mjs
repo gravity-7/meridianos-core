@@ -10,7 +10,7 @@
  */
 import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import path from 'node:path';
@@ -41,9 +41,10 @@ import { SOC2Report } from '../compliance/reports/soc2.mjs';
 import { GDPRReport } from '../compliance/reports/gdpr.mjs';
 import { CostAllocationReport } from '../compliance/reports/cost-allocation.mjs';
 import { ModelUsageReport } from '../compliance/reports/model-usage.mjs';
-import { metricsMiddleware, startMetricsCollection, createMetricsEndpoint, toPrometheusText } from './metrics.mjs';
+import { metricsMiddleware, startMetricsCollection, createMetricsEndpoint, toPrometheusText, getPerformanceReport, resetMetrics } from './metrics.mjs';
 import { createRotatingLogger } from '../daemon-logger.mjs';
 import { handleApiV1 } from '../api/v1/router.mjs';
+import { sendError, Errors } from './errors.mjs';
 
 // Import ProjectManager for multi-tenant project management
 let _projectManager = null;
@@ -60,28 +61,84 @@ const ALLOWED = new Set(LEVER_PATHS);
 const ACTION_PATHS = new Set(['/api/run', '/api/task', '/api/verify', '/api/escalation']);
 const STATUS_TTL_MS = 2000; // dedupe bursty polls; buildStatus rescans transcripts, so don't do it per-request
 
-// Rate limiting state
-const rateLimits = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 100;
+// ─── Rate Limiting (T192) ────────────────────────────────────────────────────
+//
+// Two tiers:
+//   AUTH  tier: 20 requests / minute  — login, token refresh, OAuth callbacks
+//   API   tier: 100 requests / minute — everything else under /api/
+//
+// Each tier is tracked per-IP using a sliding fixed-window counter.
+// Every API response carries X-RateLimit-* headers so clients can back off
+// gracefully without needing to parse error bodies.
 
-function checkRateLimit(ip) {
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+
+const RATE_TIERS = {
+  auth: { limit: 20, window: RATE_LIMIT_WINDOW_MS },
+  api:  { limit: 100, window: RATE_LIMIT_WINDOW_MS },
+};
+
+// Map<tier, Map<ip, { count, resetAt }>>
+const rateLimitStores = {
+  auth: new Map(),
+  api:  new Map(),
+};
+
+/**
+ * Determine the rate-limit tier for a given pathname.
+ * Auth-sensitive endpoints get the stricter "auth" tier.
+ */
+function rateTier(pathname) {
+  if (
+    pathname === '/api/auth/login' ||
+    pathname === '/api/auth/refresh' ||
+    pathname === '/api/auth/logout' ||
+    pathname.startsWith('/api/auth/oauth/')
+  ) return 'auth';
+  return 'api';
+}
+
+/**
+ * Check and increment the rate counter for `ip` on `tier`.
+ *
+ * Returns an object:
+ *   { allowed: boolean, limit, remaining, resetAt }
+ *
+ * `resetAt` is a Unix epoch second (for Retry-After / X-RateLimit-Reset).
+ */
+function checkRateLimit(ip, tier = 'api') {
+  const { limit, window } = RATE_TIERS[tier];
+  const store = rateLimitStores[tier];
   const now = Date.now();
-  if (!rateLimits.has(ip)) {
-    rateLimits.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW });
-    return true;
+
+  let state = store.get(ip);
+  if (!state || now > state.resetAt) {
+    state = { count: 0, resetAt: now + window };
+    store.set(ip, state);
   }
-  const state = rateLimits.get(ip);
-  if (now > state.resetAt) {
-    state.count = 1;
-    state.resetAt = now + RATE_LIMIT_WINDOW;
-    return true;
+
+  const remaining = Math.max(0, limit - state.count - 1);
+  const resetSec  = Math.ceil(state.resetAt / 1000);
+
+  if (state.count >= limit) {
+    return { allowed: false, limit, remaining: 0, resetAt: resetSec };
   }
-  if (state.count >= MAX_REQUESTS_PER_WINDOW) {
-    return false;
-  }
+
   state.count++;
-  return true;
+  return { allowed: true, limit, remaining, resetAt: resetSec };
+}
+
+/**
+ * Attach X-RateLimit-* headers to `res` without overwriting an already-started response.
+ */
+function attachRateLimitHeaders(res, rateInfo) {
+  if (res.headersSent) return;
+  res.setHeader('X-RateLimit-Limit',     String(rateInfo.limit));
+  res.setHeader('X-RateLimit-Remaining', String(rateInfo.remaining));
+  res.setHeader('X-RateLimit-Reset',     String(rateInfo.resetAt));
+  if (!rateInfo.allowed) {
+    res.setHeader('Retry-After', String(rateInfo.resetAt - Math.ceil(Date.now() / 1000)));
+  }
 }
 
 // Per-boot auth token (postmortem security P1). The dashboard binds to 127.0.0.1, but that alone
@@ -243,6 +300,9 @@ export function applyPolicyUpdates(updates, { path, config } = {}) {
 export function createDashboardServer(config) {
   // lazy: don't open the DB just by importing this module
   const getStore = () => (_store ||= createProjectStore({ db: openDb(undefined, config), config }));
+  // Start performance metrics collection for this server instance (T191)
+  startMetricsCollection(60_000); // export snapshot every 60 s
+
   return createServer(async (req, res) => {
     try {
       // Metrics (code-review follow-up: "Add metrics export for monitoring") — registers a
@@ -254,12 +314,18 @@ export function createDashboardServer(config) {
       const url = new URL(req.url, 'http://localhost');
       const clientIp = req.socket.remoteAddress || 'unknown';
 
-      // Apply rate limiting to all API requests. /api/v1/* is exempt from this IP-based limiter —
-      // it has its own, more precise per-API-key sliding window (api/v1/router.mjs, FR-009);
-      // stacking both on the same path would just make the public API's rate limit depend on how
-      // many OTHER local tools happen to share this machine's loopback address.
-      if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/v1/') && !checkRateLimit(clientIp)) {
-        return send(res, 429, JSON.stringify({ ok: false, error: 'Too many requests. Please try again later.' }));
+      // Apply tiered rate limiting (T192) to all API requests. /api/v1/* is exempt from this
+      // IP-based limiter — it has its own, more precise per-API-key sliding window
+      // (api/v1/router.mjs, FR-009); stacking both on the same path would just make the public
+      // API's rate limit depend on how many OTHER local tools happen to share this machine's
+      // loopback address.
+      if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/v1/')) {
+        const tier     = rateTier(url.pathname);
+        const rateInfo = checkRateLimit(clientIp, tier);
+        attachRateLimitHeaders(res, rateInfo);
+        if (!rateInfo.allowed) {
+          return sendError(res, Errors.RATE_LIMIT_EXCEEDED);
+        }
       }
 
       // Cheap liveness probe: touches NO DB, filesystem, git, or transcript scan, so it answers
@@ -1340,9 +1406,26 @@ export function createDashboardServer(config) {
         return handleListComplianceReports(req, res);
       }
 
-      return send(res, 404, JSON.stringify({ ok: false, error: 'not found' }));
+      // ── Performance metrics endpoint (T191) ────────────────────────────────
+      // GET  /api/metrics  — current performance report (admin only)
+      // POST /api/metrics  — reset metrics counters (admin only)
+      if (url.pathname === '/api/metrics') {
+        if (!requireAuth(req, res)) return;
+        if (req.method === 'GET') {
+          return send(res, 200, JSON.stringify(getPerformanceReport()));
+        }
+        if (req.method === 'POST') {
+          resetMetrics();
+          return send(res, 200, JSON.stringify({ ok: true, message: 'Metrics counters reset.' }));
+        }
+        return sendError(res, Errors.SERVER_METHOD_NOT_ALLOWED, { method: req.method });
+      }
+
+      return sendError(res, Errors.SERVER_NOT_FOUND);
     } catch (e) {
-      return send(res, 400, JSON.stringify({ ok: false, error: String((e && e.message) || e) }));
+      const merr = (e && e.code && e.httpStatus) ? e : null;
+      if (merr) return sendError(res, merr);
+      return sendError(res, Errors.SERVER_INTERNAL, {}, { detail: String((e && e.message) || e) });
     }
   });
 }
@@ -1356,32 +1439,23 @@ export function createDashboardServer(config) {
 function requireAuth(req, res) {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
-    send(res, 401, JSON.stringify({
-      ok: false,
-      error: 'Missing authorization header',
-      remediation: 'Include an Authorization header with your JWT token or API key. Format: "Bearer <token>" or "ApiKey <key>"'
-    }));
+    sendError(res, Errors.AUTH_MISSING_HEADER);
     return false;
   }
 
-  const [scheme, token] = authHeader.split(' ');
+  const parts = authHeader.split(' ');
+  const scheme = parts[0];
+  const token  = parts[1];
   if (!scheme || !token) {
-    send(res, 401, JSON.stringify({
-      ok: false,
-      error: 'Invalid authorization header format',
-      remediation: 'Authorization header must be in format "Bearer <token>" or "ApiKey <key>". Ensure no extra spaces or characters.'
-    }));
+    sendError(res, Errors.AUTH_INVALID_FORMAT);
     return false;
   }
 
   if (scheme.toLowerCase() === 'bearer') {
     const payload = verifyToken(token);
     if (!payload) {
-      send(res, 401, JSON.stringify({
-        ok: false,
-        error: 'Invalid or expired token',
-        remediation: 'Your JWT token may be expired or invalid. Please refresh your token using POST /api/auth/refresh or log in again.'
-      }));
+      // Distinguish expired vs. invalid where possible
+      sendError(res, Errors.AUTH_TOKEN_INVALID);
       return false;
     }
     req.user = payload;
@@ -1390,23 +1464,249 @@ function requireAuth(req, res) {
     const tokenManager = getAPITokenManager();
     const tokenData = tokenManager.validateToken(token);
     if (!tokenData) {
-      send(res, 401, JSON.stringify({
-        ok: false,
-        error: 'Invalid API key',
-        remediation: 'Your API key may be expired or revoked. Generate a new API key using POST /api/auth/tokens or contact support.'
-      }));
+      sendError(res, Errors.AUTH_TOKEN_INVALID);
       return false;
     }
     req.user = { sub: tokenData.user_id, email: tokenData.email };
     req.apiToken = tokenData;
     return true;
   } else {
-    send(res, 401, JSON.stringify({
-      ok: false,
-      error: 'Invalid authorization scheme',
-      remediation: 'Supported schemes are "Bearer" for JWT tokens and "ApiKey" for API keys. Ensure you use the correct scheme.'
-    }));
+    sendError(res, Errors.AUTH_INVALID_FORMAT);
     return false;
+  }
+}
+
+/**
+ * Project Templates API Handlers (Multi-Tenant Platform - US4)
+ */
+
+/**
+ * GET /api/projects/templates - List available project templates
+ */
+async function handleListTemplates(req, res) {
+  try {
+    const templates = getTemplateLoader().list();
+    send(res, 200, JSON.stringify({ success: true, templates }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * GET /api/projects/templates/{id} - Get a single template's contents
+ */
+async function handleGetTemplate(req, res, templateId) {
+  try {
+    const template = getTemplateLoader().load(templateId);
+    send(res, 200, JSON.stringify({ success: true, id: templateId, template }));
+  } catch (error) {
+    sendError(res, Errors.TEMPLATE_NOT_FOUND, { id: templateId });
+  }
+}
+
+/**
+ * Project Management API Handlers (Multi-Tenant Platform - US1)
+ */
+
+/** Map a ProjectManager error message onto the structured error catalog (falls back to a plain 400). */
+function sendProjectError(res, error, projectId) {
+  const msg = error?.message || String(error);
+  if (msg === 'Project not found') return sendError(res, Errors.PROJECT_NOT_FOUND, { id: projectId });
+  if (msg === 'Project is already running') return sendError(res, Errors.PROJECT_ALREADY_RUNNING, { id: projectId });
+  if (msg === 'Project is not running') return sendError(res, Errors.PROJECT_NOT_RUNNING, { id: projectId });
+  if (msg.startsWith('Cannot delete running project')) return sendError(res, Errors.PROJECT_DELETE_RUNNING, { id: projectId });
+  return send(res, 400, JSON.stringify({ success: false, error: msg }));
+}
+
+/**
+ * GET /api/projects - List projects (optional ?status= filter)
+ */
+async function handleListProjects(req, res) {
+  try {
+    const reqUrl = new URL(req.url, 'http://localhost');
+    const status = reqUrl.searchParams.get('status');
+    const projects = getProjectManager().listProjects(status ? { status } : {});
+    send(res, 200, JSON.stringify({ success: true, projects }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/projects - Create a new project (optionally from a template)
+ */
+async function handleCreateProject(req, res) {
+  try {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { name, template } = body;
+    if (!name || typeof name !== 'string') {
+      return send(res, 400, JSON.stringify({ success: false, error: 'name is required' }));
+    }
+    const statePath = body.state_path || path.join(HERE, '..', '.ai', 'projects', name);
+    const configPath = body.config_path || path.join(statePath, '.ai', 'policy.yaml');
+    const project = getProjectManager().createProject({
+      name,
+      template,
+      config_path: configPath,
+      state_path: statePath,
+      created_by: req.user?.sub ?? null,
+    });
+    send(res, 201, JSON.stringify({ success: true, project }));
+  } catch (error) {
+    sendProjectError(res, error);
+  }
+}
+
+/**
+ * GET /api/projects/{id} - Get a single project's details
+ */
+async function handleGetProject(req, res, projectId) {
+  try {
+    const project = getProjectManager().getProject(projectId);
+    if (!project) return sendError(res, Errors.PROJECT_NOT_FOUND, { id: projectId });
+    send(res, 200, JSON.stringify({ success: true, project }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
+  }
+}
+
+/**
+ * POST /api/projects/{id}/start - Start a project's process
+ */
+async function handleStartProject(req, res, projectId) {
+  try {
+    const project = await getProjectManager().startProject(projectId);
+    send(res, 200, JSON.stringify({ success: true, project }));
+  } catch (error) {
+    sendProjectError(res, error, projectId);
+  }
+}
+
+/**
+ * POST /api/projects/{id}/stop - Stop a project's process
+ */
+async function handleStopProject(req, res, projectId) {
+  try {
+    const project = await getProjectManager().stopProject(projectId);
+    send(res, 200, JSON.stringify({ success: true, project }));
+  } catch (error) {
+    sendProjectError(res, error, projectId);
+  }
+}
+
+/**
+ * POST /api/projects/{id}/restart - Restart a project's process
+ */
+async function handleRestartProject(req, res, projectId) {
+  try {
+    const project = await getProjectManager().restartProject(projectId);
+    send(res, 200, JSON.stringify({ success: true, project }));
+  } catch (error) {
+    sendProjectError(res, error, projectId);
+  }
+}
+
+/**
+ * DELETE /api/projects/{id} - Delete a (stopped) project
+ */
+async function handleDeleteProject(req, res, projectId) {
+  try {
+    await getProjectManager().deleteProject(projectId);
+    send(res, 200, JSON.stringify({ success: true, id: projectId }));
+  } catch (error) {
+    sendProjectError(res, error, projectId);
+  }
+}
+
+/**
+ * GET /api/projects/{id}/health - Get a project's live health status
+ */
+async function handleGetProjectHealth(req, res, projectId) {
+  try {
+    const health = await getProjectManager().getProjectHealth(projectId);
+    send(res, 200, JSON.stringify({ success: true, ...health }));
+  } catch (error) {
+    sendProjectError(res, error, projectId);
+  }
+}
+
+/**
+ * Compliance Reporting API Handlers (Multi-Tenant Platform - US7)
+ */
+
+const REPORTS_DIR = path.join(HERE, '..', '.ai', 'reports');
+
+/** Persist a generated report to REPORTS_DIR so it shows up in GET /api/compliance/reports. */
+function saveComplianceReport(type, format, content) {
+  if (!existsSync(REPORTS_DIR)) mkdirSync(REPORTS_DIR, { recursive: true });
+  const ext = format === 'csv' ? 'csv' : 'json';
+  const filename = `${type}-${Date.now()}.${ext}`;
+  writeFileSync(path.join(REPORTS_DIR, filename), content, 'utf8');
+  return filename;
+}
+
+/** Shared body for the four POST /api/compliance/reports/{type} handlers. */
+async function generateComplianceReport(req, res, type, ReportClass, extraOptions = () => ({})) {
+  try {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const { format = 'json', startDate, endDate } = body;
+    const report = new ReportClass();
+    const data = report.generate({ startDate, endDate, ...extraOptions(body) });
+
+    if (format === 'csv') {
+      const csv = report.exportCSV(data);
+      const filename = saveComplianceReport(type, 'csv', csv);
+      res.writeHead(200, {
+        'content-type': 'text/csv',
+        'content-disposition': `attachment; filename="${filename}"`,
+      });
+      res.end(csv);
+      return;
+    }
+
+    const filename = saveComplianceReport(type, 'json', JSON.stringify(data, null, 2));
+    send(res, 200, JSON.stringify({ success: true, filename, report: data }));
+  } catch (error) {
+    sendError(res, Errors.REPORT_GENERATION_FAILED, {}, { detail: error.message });
+  }
+}
+
+/** POST /api/compliance/reports/soc2 */
+async function handleGenerateSOC2Report(req, res) {
+  return generateComplianceReport(req, res, 'soc2', SOC2Report);
+}
+
+/** POST /api/compliance/reports/gdpr */
+async function handleGenerateGDPRReport(req, res) {
+  return generateComplianceReport(req, res, 'gdpr', GDPRReport);
+}
+
+/** POST /api/compliance/reports/cost-allocation */
+async function handleGenerateCostAllocationReport(req, res) {
+  return generateComplianceReport(req, res, 'cost-allocation', CostAllocationReport, (body) => ({ department: body.department }));
+}
+
+/** POST /api/compliance/reports/model-usage */
+async function handleGenerateModelUsageReport(req, res) {
+  return generateComplianceReport(req, res, 'model-usage', ModelUsageReport);
+}
+
+/** GET /api/compliance/reports - List previously generated report files */
+async function handleListComplianceReports(req, res) {
+  try {
+    if (!existsSync(REPORTS_DIR)) {
+      return send(res, 200, JSON.stringify({ success: true, reports: [] }));
+    }
+    const reports = readdirSync(REPORTS_DIR)
+      .filter((f) => /\.(json|csv)$/.test(f))
+      .map((f) => {
+        const st = statSync(path.join(REPORTS_DIR, f));
+        return { filename: f, size: st.size, created_at: st.mtime.toISOString() };
+      })
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    send(res, 200, JSON.stringify({ success: true, reports }));
+  } catch (error) {
+    send(res, 500, JSON.stringify({ success: false, error: error.message }));
   }
 }
 
@@ -2293,7 +2593,7 @@ async function handleGetReviewAssignments(req, res) {
     if (!requireAuth(req, res)) return;
 
     const reviewerAssigner = getReviewerAssigner();
-    const limit = parseInt(req.url.searchParams.get('limit') || '10', 10);
+    const limit = parseInt(req.url ? new URL(req.url, 'http://localhost').searchParams.get('limit') || '10' : '10', 10);
     const assignments = reviewerAssigner.getRecentAssignments(req.user.sub, limit);
 
     send(res, 200, JSON.stringify({ success: true, assignments }));
@@ -2511,7 +2811,7 @@ async function handleGetProjectActivity(req, res) {
 }
 
 /**
- * GET /api/projects/{id}/tasks/{task_id}/comments - Get task comments
+ * GET /api/projects/{id}/tasks/{task_id}/comments - Get task comments (project-scoped)
  */
 async function handleGetProjectTaskComments(req, res) {
   try {
