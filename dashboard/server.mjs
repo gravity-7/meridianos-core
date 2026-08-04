@@ -841,12 +841,21 @@ export function createDashboardServer(config) {
       if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/test$/)) {
         const pluginId = url.pathname.split('/')[3];
         const { registryPath } = await import('../plugin-registry.mjs');
-        const { getPluginConfig, testPluginConnection } = await import('../plugin-loader.mjs');
+        const { getPluginConfig, testPluginConnection, analyzePluginSource } = await import('../plugin-loader.mjs');
         try {
           const { loadRegistry } = await import('../plugin-registry.mjs');
           const entry = loadRegistry(registryPath(config)).find((e) => e.id === pluginId);
           if (!entry) return send(res, 404, JSON.stringify({ ok: false, error: `Plugin '${pluginId}' not found` }));
-          const pluginModule = await import(pathToFileURL(join(config.repoRoot, entry.main)).href);
+          const entryPath = join(config.repoRoot, entry.main);
+          // Same static-analysis gate loadPlugin() runs before its dynamic import (FR-019) — this
+          // route imports plugin code independently (to test an already-installed plugin's live
+          // connection config), so it must not skip the safety check just because discoverPlugins()
+          // already vetted it once at daemon boot.
+          const analysis = analyzePluginSource(readFileSync(entryPath, 'utf8'));
+          if (!analysis.safe) {
+            return send(res, 400, JSON.stringify({ ok: false, error: `Plugin '${entry.name ?? pluginId}' failed static analysis: ${analysis.violations.join('; ')}` }));
+          }
+          const pluginModule = await import(pathToFileURL(entryPath).href);
           const testConfig = getPluginConfig(getV1Db(config), pluginId, { includeSensitive: true });
           const result = await testPluginConnection(pluginModule, testConfig);
           return send(res, 200, JSON.stringify({ ok: true, ...result }));

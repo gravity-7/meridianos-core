@@ -279,7 +279,6 @@ installed → not_installed (uninstall action)
 ### SQLite (Local)
 
 ```sql
-CREATE INDEX idx_api_keys_is_active ON api_keys(is_active);
 CREATE INDEX idx_webhooks_is_active ON webhooks(is_active);
 CREATE INDEX idx_webhook_delivery_logs_webhook_id ON webhook_delivery_logs(webhook_id);
 CREATE INDEX idx_webhook_delivery_logs_delivered_at ON webhook_delivery_logs(delivered_at);

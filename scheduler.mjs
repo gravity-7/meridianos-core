@@ -40,7 +40,7 @@ import { pushEscalations } from './escalation-push.mjs';
 import { aggregatePendingWindows } from './aggregation.mjs';
 import { openLedger } from './gateway/ledger.mjs';
 import { evaluateAlerts } from './alerts.mjs';
-import { triggerEvent } from './api/webhooks.mjs';
+import { triggerEvent, pruneWebhookDeliveryLogs } from './api/webhooks.mjs';
 import { generateRecommendations } from './optimization.mjs';
 import { computeBudgetForecast, detectAnomalies as detectSpendAnomalies } from './analytics.mjs';
 import { selectModel } from './router.mjs';
@@ -139,6 +139,7 @@ const startedAt = Date.now();
  * @param {Function} deps._loadPolicy
  * @param {Function} deps._pruneEvents    store.events.pruneEvents
  * @param {Function} deps._pruneHistory   store.state.pruneHistory
+ * @param {Function} deps._pruneWebhookLogs  api/webhooks.pruneWebhookDeliveryLogs
  * @param {object}   [deps.config]     the injected AiosConfig (defaults to the composition root's)
  */
 export async function runWatchdogTick(deps) {
@@ -159,6 +160,7 @@ export async function runWatchdogTick(deps) {
     _loadPolicy     = loadPolicy,
     _pruneEvents    = store.events.pruneEvents,
     _pruneHistory   = store.state.pruneHistory,
+    _pruneWebhookLogs = () => pruneWebhookDeliveryLogs(db),
     _syncFromAdo    = syncFromAdo,
   } = deps;
   const events = store.events;
@@ -179,6 +181,7 @@ export async function runWatchdogTick(deps) {
         events.info('scheduler', 'heartbeat', { tick: tickCount, uptimeMin: Math.round((Date.now() - startedAt) / 60_000) });
         _pruneEvents();
         try { _pruneHistory(); } catch { /* best-effort */ }
+        try { _pruneWebhookLogs(); } catch { /* best-effort */ }
       }
     } catch (tickErr) {
       logger.error('watchdog', `tick-error: ${tickErr?.message ?? String(tickErr)}`, tickErr);

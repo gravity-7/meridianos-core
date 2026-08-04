@@ -16,6 +16,9 @@ const DEFAULT_WINDOW_MS = 60_000;
  * @param {{limit?: number, windowMs?: number}} [opts]
  */
 export function createRateLimiter({ limit = DEFAULT_LIMIT, windowMs = DEFAULT_WINDOW_MS } = {}) {
+  // Worst-case memory: O(limit * windowMs / avg_interval * numKeys). At limit=100, windowMs=60s,
+  // 500 keys ≈ 50,000 timestamps ≈ 400KB — acceptable at current scale. No eviction policy beyond
+  // the sliding-window filter in check(); revisit if the API-key ceiling grows substantially.
   /** @type {Map<string, number[]>} apiKeyId -> sorted array of request timestamps (ms) */
   const requestLog = new Map();
 

@@ -143,4 +143,27 @@ describe('T041 — webhook delivery end-to-end', () => {
     assert.deepEqual(logs.map((l) => l.status), ['retrying', 'retrying', 'failed']);
     db.close();
   });
+
+  test('pruneWebhookDeliveryLogs deletes only rows older than the retention window (code-review follow-up)', async () => {
+    const { openDb } = await import('../../db.mjs');
+    const { pruneWebhookDeliveryLogs } = await import('../../api/webhooks.mjs');
+    const db = openDb(undefined, config);
+    db.prepare(`INSERT INTO webhooks (id, url, events, is_active, created_at, failure_count) VALUES (?, ?, ?, 1, ?, 0)`)
+      .run('webhook-prune', 'https://example.invalid/hook', 'task.created', Math.floor(Date.now() / 1000));
+
+    const now = Math.floor(Date.now() / 1000);
+    const oldTs = now - 31 * 86_400;
+    const recentTs = now - 1 * 86_400;
+    db.prepare(`INSERT INTO webhook_delivery_logs (id, webhook_id, event_type, payload, status, attempt_number, delivered_at) VALUES (?, ?, 'task.created', '{}', 'success', 1, ?)`)
+      .run('delivery-old', 'webhook-prune', oldTs);
+    db.prepare(`INSERT INTO webhook_delivery_logs (id, webhook_id, event_type, payload, status, attempt_number, delivered_at) VALUES (?, ?, 'task.created', '{}', 'success', 1, ?)`)
+      .run('delivery-recent', 'webhook-prune', recentTs);
+
+    const deleted = pruneWebhookDeliveryLogs(db, { olderThanDays: 30 });
+    assert.equal(deleted, 1);
+    const remaining = db.prepare('SELECT id FROM webhook_delivery_logs WHERE webhook_id = ?').all('webhook-prune');
+    assert.deepEqual(remaining.map((r) => r.id), ['delivery-recent']);
+    db.prepare('DELETE FROM webhooks WHERE id = ?').run('webhook-prune');
+    db.close();
+  });
 });

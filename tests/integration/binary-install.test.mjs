@@ -64,15 +64,16 @@ describe('T013 — packaged binary build (scripts/build.mjs)', () => {
 
 // ─── T014: OS service registration ───────────────────────────────────────────────────────────
 describe('T014 — OS background service registration (scripts/install-service.mjs)', () => {
-  test('Windows: installService calls sc.exe create with start= auto, then sc.exe start', () => {
+  test('Windows: installService calls sc.exe create with start=auto as a single token, then sc.exe start', () => {
     const { exec, calls } = fakeExecCapture();
     const result = installWindowsService({ nodeExe: 'node.exe', daemonPath: 'C:\\app\\daemon-entry.mjs', execImpl: exec });
     assert.equal(result.mechanism, 'sc.exe');
     assert.equal(calls[0][0], 'sc.exe');
     assert.equal(calls[0][1], 'create');
     assert.equal(calls[0][2], 'MeridianOS');
-    assert.ok(calls[0].includes('start='));
-    assert.ok(calls[0].includes('auto'));
+    // start=auto must be ONE array element — sc.exe rejects it split across two ('start=', 'auto').
+    assert.ok(calls[0].includes('start=auto'));
+    assert.ok(!calls[0].includes('start='));
     assert.deepEqual(calls[1], ['sc.exe', 'start', 'MeridianOS']);
   });
 

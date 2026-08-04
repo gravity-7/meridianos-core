@@ -48,6 +48,12 @@ function queryRecentEvents(ledger, tenant, sinceTs) {
  *  a partially-existing parent key elsewhere in the file could end up duplicated; every
  *  SUBSEQUENT push of the same already-present path goes through policy-write.mjs's exact-line
  *  `setPolicyValue` instead, which has no such caveat. */
+// `value` is expected to be a JSON-primitive scalar (number, boolean, or a string without
+// characters JSON.stringify would need to backslash-escape) — the cloud control plane's own
+// policyUpdates payload only ever pushes budget/lever numbers and simple flags. A string
+// containing a backslash or embedded quote would round-trip through JSON.stringify but may not
+// re-parse cleanly via yaml-lite.mjs; acceptable since this append path only runs as a fallback
+// when writePolicy's exact-line update already failed (see caller).
 function appendPolicyPath(text, path, value) {
   const parts = path.split('.');
   const lines = parts.map((part, i) => `${'  '.repeat(i)}${part}${i === parts.length - 1 ? `: ${JSON.stringify(value)}` : ':'}`);

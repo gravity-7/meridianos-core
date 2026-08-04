@@ -52,6 +52,15 @@ export function deleteWebhook(db, id) {
   return db.prepare('DELETE FROM webhooks WHERE id = ?').run(id).changes > 0;
 }
 
+/** Delete `webhook_delivery_logs` rows older than `olderThanDays` (default 30) — mirrors
+ *  cloud-control-plane.mjs's `pruneOldMetadata()` precedent, since delivery logs otherwise grow
+ *  unboundedly on a busy instance with many endpoints/events. Wired into the scheduler's nightly
+ *  maintenance pass (scheduler.mjs) alongside `pruneEvents`/`pruneHistory`. */
+export function pruneWebhookDeliveryLogs(db, { olderThanDays = 30 } = {}) {
+  const cutoff = Math.floor(Date.now() / 1000) - olderThanDays * 86_400;
+  return db.prepare('DELETE FROM webhook_delivery_logs WHERE delivered_at < ?').run(cutoff).changes;
+}
+
 /** Active webhooks subscribed to `eventType`. */
 function subscribedWebhooks(db, eventType) {
   return db.prepare('SELECT * FROM webhooks WHERE is_active = 1').all()

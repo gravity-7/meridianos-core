@@ -6,7 +6,7 @@
  * Windows *scheduled task* (schtasks, onlogon) for developer checkouts. This module registers a
  * true OS-managed background SERVICE per FR-002 / research.md #2, for non-technical end users of
  * the packaged binary:
- *   Windows → a real Windows Service via `sc.exe create ... start= auto`
+ *   Windows → a real Windows Service via `sc.exe create ... start=auto`
  *   macOS   → a launchd LaunchAgent (~/Library/LaunchAgents/com.meridianos.daemon.plist)
  *   Linux   → a systemd --user unit (~/.config/systemd/user/meridianos.service)
  *
@@ -35,7 +35,7 @@ function defaultExec(cmd, args) {
 /** Windows: register a real service via `sc.exe create`, then set it to start automatically. */
 export function installWindowsService({ nodeExe, daemonPath, execImpl = defaultExec } = {}) {
   const binPath = `"${nodeExe}" "${daemonPath}"`;
-  execImpl('sc.exe', ['create', SERVICE_NAME, `binPath=${binPath}`, 'start=', 'auto']);
+  execImpl('sc.exe', ['create', SERVICE_NAME, `binPath=${binPath}`, 'start=auto']);
   execImpl('sc.exe', ['start', SERVICE_NAME]);
   return { platform: 'win32', mechanism: 'sc.exe', serviceName: SERVICE_NAME };
 }

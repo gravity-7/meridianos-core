@@ -137,7 +137,10 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used_at  INTEGER,
   is_active     INTEGER NOT NULL DEFAULT 1
 );
-CREATE INDEX IF NOT EXISTS idx_api_keys_is_active ON api_keys(is_active);
+-- No index on is_active here (unlike webhooks below): every api_keys query filters by the `id`
+-- PRIMARY KEY first (validateApiKey: `WHERE id = ? AND is_active = 1`) and there is no
+-- `WHERE is_active = 1` scan anywhere in auth/api-tokens.mjs, so a secondary index would never be
+-- chosen by the query planner — reviewed and confirmed cosmetic-only, removed (code-review follow-up).
 
 CREATE TABLE IF NOT EXISTS webhooks (
   id                TEXT PRIMARY KEY,
