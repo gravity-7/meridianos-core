@@ -120,3 +120,79 @@ CREATE TABLE IF NOT EXISTS verify_attempts (
   attempts   INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
+
+-- Phase 7 (Ecosystem, Distribution & Marketplace) — public REST API auth, webhooks, and the
+-- plugin marketplace. All timestamps here are INTEGER unix seconds (not the ISO strings used
+-- above) to match data-model.md and the REST API contract's JSON payloads directly.
+
+-- Scoped bearer tokens for the public REST API (`Authorization: Bearer mk-{id}`). Distinct from
+-- auth/api-tokens.mjs's APITokenManager, which authenticates the cloud multi-tenant SaaS control
+-- plane (control-plane.db, user-scoped); this table is the LOCAL, single-machine key store used
+-- by api/v1/*.
+CREATE TABLE IF NOT EXISTS api_keys (
+  id            TEXT PRIMARY KEY,                  -- mk-{32 random chars}
+  name          TEXT NOT NULL,
+  scopes        TEXT NOT NULL,                      -- comma-separated: tasks:read,costs:read,...
+  created_at    INTEGER NOT NULL,
+  last_used_at  INTEGER,
+  is_active     INTEGER NOT NULL DEFAULT 1
+);
+-- No index on is_active here (unlike webhooks below): every api_keys query filters by the `id`
+-- PRIMARY KEY first (validateApiKey: `WHERE id = ? AND is_active = 1`) and there is no
+-- `WHERE is_active = 1` scan anywhere in auth/api-tokens.mjs, so a secondary index would never be
+-- chosen by the query planner — reviewed and confirmed cosmetic-only, removed (code-review follow-up).
+
+CREATE TABLE IF NOT EXISTS webhooks (
+  id                TEXT PRIMARY KEY,
+  url               TEXT NOT NULL,
+  events            TEXT NOT NULL,                  -- comma-separated event types
+  secret            TEXT,                            -- optional HMAC secret
+  is_active         INTEGER NOT NULL DEFAULT 1,
+  created_at        INTEGER NOT NULL,
+  last_delivery_at  INTEGER,
+  failure_count     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_webhooks_is_active ON webhooks(is_active);
+
+CREATE TABLE IF NOT EXISTS webhook_delivery_logs (
+  id              TEXT PRIMARY KEY,
+  webhook_id      TEXT NOT NULL,
+  event_type      TEXT NOT NULL,
+  payload         TEXT NOT NULL,                     -- JSON string
+  status          TEXT NOT NULL,                      -- success | failed | retrying
+  http_status     INTEGER,
+  error_message   TEXT,
+  attempt_number  INTEGER NOT NULL,
+  delivered_at    INTEGER NOT NULL,
+  FOREIGN KEY (webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_delivery_logs_webhook_id ON webhook_delivery_logs(webhook_id);
+CREATE INDEX IF NOT EXISTS idx_webhook_delivery_logs_delivered_at ON webhook_delivery_logs(delivered_at);
+
+CREATE TABLE IF NOT EXISTS plugins (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  type           TEXT NOT NULL,                      -- intake-source | wire-adapter
+  description    TEXT,
+  author         TEXT,
+  version        TEXT NOT NULL,
+  rating         REAL NOT NULL DEFAULT 0,
+  install_count  INTEGER NOT NULL DEFAULT 0,
+  repository     TEXT,
+  is_installed   INTEGER NOT NULL DEFAULT 0,
+  is_enabled     INTEGER NOT NULL DEFAULT 0,
+  installed_at   INTEGER,
+  config         TEXT                                -- JSON string
+);
+CREATE INDEX IF NOT EXISTS idx_plugins_type ON plugins(type);
+CREATE INDEX IF NOT EXISTS idx_plugins_is_installed ON plugins(is_installed);
+
+CREATE TABLE IF NOT EXISTS plugin_configurations (
+  id            TEXT PRIMARY KEY,
+  plugin_id     TEXT NOT NULL,
+  key           TEXT NOT NULL,
+  value         TEXT NOT NULL,
+  is_sensitive  INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (plugin_id) REFERENCES plugins(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_plugin_configurations_plugin_id ON plugin_configurations(plugin_id);

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>MeridianOS Setup</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, Segoe UI, sans-serif; max-width: 480px; margin: 48px auto; padding: 0 24px; }
+  h1 { font-size: 1.4em; }
+  .step { display: none; }
+  .step.active { display: block; }
+  label { display: block; margin: 16px 0 4px; font-weight: 600; }
+  input { width: 100%; padding: 8px; box-sizing: border-box; font-size: 1em; }
+  .actions { margin-top: 24px; display: flex; justify-content: space-between; }
+  button { padding: 8px 20px; font-size: 1em; cursor: pointer; }
+  .progress { color: #888; font-size: 0.85em; margin-bottom: 8px; }
+  .status { margin-top: 12px; font-size: 0.9em; }
+  .status.error { color: #cf222e; }
+  .status.ok { color: #1a7f37; }
+</style>
+</head>
+<body>
+  <h1>MeridianOS Setup</h1>
+
+  <div class="step active" data-step="1">
+    <div class="progress">Step 1 of 4</div>
+    <label for="anthropic-key">Anthropic API key</label>
+    <input id="anthropic-key" type="password" placeholder="sk-ant-...">
+    <div class="actions"><span></span><button data-next>Next</button></div>
+  </div>
+
+  <div class="step" data-step="2">
+    <div class="progress">Step 2 of 4</div>
+    <label for="deepseek-key">DeepSeek API key (optional)</label>
+    <input id="deepseek-key" type="password" placeholder="sk-...">
+    <div class="actions"><button data-back>Back</button><button data-next>Next</button></div>
+  </div>
+
+  <div class="step" data-step="3">
+    <div class="progress">Step 3 of 4</div>
+    <label for="budget">Monthly budget limit (USD)</label>
+    <input id="budget" type="number" min="0" step="1" value="100">
+    <div class="actions"><button data-back>Back</button><button data-next>Next</button></div>
+  </div>
+
+  <div class="step" data-step="4">
+    <div class="progress">Step 4 of 4</div>
+    <p>Ready to start MeridianOS with the settings above.</p>
+    <div class="actions"><button data-back>Back</button><button id="finish">Finish</button></div>
+    <div id="status" class="status"></div>
+  </div>
+
+  <script src="wizard.js"></script>
+</body>
+</html>

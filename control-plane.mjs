@@ -36,7 +36,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml } from './yaml-lite.mjs';
 import { getActivityLogger } from './compliance/audit-log.mjs';
-import { getTelemetryCollector } from './telemetry.mjs';
+import { getTelemetryCollector } from './control-plane-telemetry.mjs';
 import { watchPolicy, unwatchPolicy, getHotReloadedConfig } from './config-hot-reload.mjs';
 import { backupDatabaseTimestamped, restoreDatabase } from './db-backup.mjs';
 

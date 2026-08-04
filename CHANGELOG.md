@@ -5,6 +5,40 @@ All notable changes to MeridianOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+#### Ecosystem, Distribution & Marketplace (Phase 7)
+
+**Packaged Binary & Desktop App**
+- `bun compile` standalone-binary build pipeline (`scripts/build.mjs`) — no Node.js/npm required to run
+- Console-based 4-question setup wizard (`scripts/setup-wizard-minimal.mjs`)
+- Real OS background service registration — Windows Service (`sc.exe`), macOS launchd, Linux systemd (`scripts/install-service.mjs`)
+- System tray icon with live green/yellow/red health status and a quick-action menu (`daemon-entry.mjs`, `tray-status.mjs`, `tray-icons.mjs`)
+- Electron desktop app with a GUI setup wizard, OS keychain-backed credential storage (`keytar`), and `electron-updater` auto-updates (`desktop/`)
+
+**Public REST API**
+- `/api/v1/*` — tasks, costs, providers, models, config, and webhooks endpoints, scoped `mk-{key}` bearer authentication, per-key sliding-window rate limiting (100 req/min), OpenAPI 3.0 spec + Swagger UI at `/api/v1/docs`
+- Webhook delivery with exponential backoff (1s/2x/60s max, 3 retries) and HMAC signing, for `task.created`, `task.completed`, `task.failed`, `budget.warning`, `budget.critical`, `provider.error`, `model.deprecated`, and `cost.spike` events
+
+**Plugin Marketplace**
+- 6 pre-built IntakeSource connectors: Jira, Linear, Notion, GitHub Issues, Microsoft Teams, and a configurable Generic Webhook receiver (`intake-adapters/`)
+- Plugin install/enable/configure/test-connection lifecycle with contract validation + static security analysis (`plugin-loader.mjs`, `plugin-registry.mjs`)
+- Marketplace and Community Plugins dashboard panels
+
+**Community Plugin Development**
+- Plugin scaffolding CLI (`node cli.mjs plugin create`) and publishing workflow (`node cli.mjs plugin publish`)
+- `docs/plugin-development.md` — full IntakeSource/WireAdapter contract reference
+
+**Hybrid Cloud Control Plane**
+- Local cloud agent reporting anonymized usage metadata (token counts, costs, provider health — never API keys or prompt/response content) at a configurable 30-300s interval (`cloud/local-agent.mjs`)
+- Cloud control plane with organizations/users/machines, policy push, provider-health aggregation, 90-day metadata retention, and a security audit log (`cloud/cloud-control-plane.mjs`, `cloud/cloud-server.mjs`)
+- Opt-in, local-only telemetry counters for installs/plugin-installs/cloud-connections (`telemetry.mjs`) — disabled by default, no network calls
+
+### Fixed
+- A pre-existing merge artifact in `dashboard/server.mjs` had left two colliding `handleGetTaskComments` declarations and an orphaned code fragment (missing function signature) that made the file fail to parse; resolved by renaming the project-scoped handler and restoring the orphaned body to its actual owner (`handleGetReviewAssignments`)
+
 ## [1.0.0] - 2026-08-02
 
 ### Added

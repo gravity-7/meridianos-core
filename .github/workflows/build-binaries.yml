@@ -1,0 +1,66 @@
+name: Build Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            outfile: dist/meridianos-linux-x64
+          - os: windows-latest
+            target: bun-windows-x64
+            outfile: dist/meridianos-win-x64.exe
+          - os: macos-latest
+            target: bun-darwin-arm64
+            outfile: dist/meridianos-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build binary
+        run: node scripts/build.mjs --target=${{ matrix.target }} --outfile=${{ matrix.outfile }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ matrix.outfile }}
+
+  # T108 — cuts a GitHub Release with all 3 platform binaries attached, once the whole build
+  # matrix succeeds. Only runs on an actual `v*` tag push (never on workflow_dispatch), since
+  # creating a public release is exactly the kind of consequential, hard-to-reverse action that
+  # should require a deliberate tag push, not a manual re-run.
+  release:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-artifacts/*/*
+          generate_release_notes: true

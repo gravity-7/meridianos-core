@@ -54,6 +54,12 @@ function migrate(db) {
   try { db.exec('ALTER TABLE tasks ADD COLUMN skipped_at TEXT'); } catch { /* already exists */ }
   try { db.exec('ALTER TABLE tasks ADD COLUMN skip_reason TEXT'); } catch { /* already exists */ }
   backfillGovernanceColumns(db);
+
+  // Phase 7 (US3 REST API): distinguishes tasks created through api/v1/tasks.mjs from the
+  // orchestrator's own agent/planner-created tasks, so the API only ever hard-deletes rows it
+  // created itself and never an orchestrator work item. NULL (existing rows, and anything
+  // upsertTask() writes without an explicit source) reads back as 'agent'.
+  try { db.exec("ALTER TABLE tasks ADD COLUMN source TEXT"); } catch { /* already exists */ }
 }
 
 /**

@@ -56,3 +56,40 @@ test('GET /healthz returns 200 {ok:true} with no auth token and touches no DB', 
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+// Metrics export for monitoring (code-review follow-up) — dashboard/metrics.mjs was already
+// built (T-something in an earlier pass) but never wired to a route; these prove it now is.
+test('GET /api/metrics and GET /metrics both reflect a request that was just made', async () => {
+  const server = createDashboardServer(config);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  function get(path) {
+    return new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path, method: 'GET' }, (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  try {
+    await get('/healthz'); // generate at least one tracked request
+
+    const jsonMetrics = await get('/api/metrics');
+    assert.equal(jsonMetrics.status, 200);
+    const parsed = JSON.parse(jsonMetrics.body);
+    assert.ok(parsed.summary.api.totalRequests >= 1);
+
+    const prom = await get('/metrics');
+    assert.equal(prom.status, 200);
+    assert.match(prom.headers['content-type'], /text\/plain/);
+    assert.match(prom.body, /^meridianos_api_requests_total \d+$/m);
+    assert.match(prom.body, /^meridianos_process_uptime_seconds \d+$/m);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

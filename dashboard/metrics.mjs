@@ -398,6 +398,64 @@ function send(res, code, body) {
   res.end(body);
 }
 
+/**
+ * Render the current metrics in Prometheus text exposition format (code-review follow-up: "Add
+ * metrics export for monitoring") — the de-facto standard scrape format, so this daemon can be
+ * added to an existing Prometheus/Grafana setup with zero extra glue. `extra` lets callers (e.g.
+ * dashboard/server.mjs) fold in counters this module doesn't itself track — webhook delivery
+ * counts, cloud metadata report counts — without this module needing to know about Phase 7's
+ * tables directly.
+ * @param {{webhookDeliveries?: Record<string, number>, apiKeysActive?: number, cloudMetadataReports?: number}} [extra]
+ */
+export function toPrometheusText(extra = {}) {
+  const summary = getMetricsSummary();
+  const lines = [];
+
+  lines.push('# HELP meridianos_api_requests_total Total API requests handled since daemon start.');
+  lines.push('# TYPE meridianos_api_requests_total counter');
+  lines.push(`meridianos_api_requests_total ${summary.api.totalRequests}`);
+
+  lines.push('# HELP meridianos_api_requests_failed_total Total API requests that returned an error status.');
+  lines.push('# TYPE meridianos_api_requests_failed_total counter');
+  lines.push(`meridianos_api_requests_failed_total ${summary.api.failedRequests}`);
+
+  lines.push('# HELP meridianos_api_response_time_bucket_total Requests by response-time bucket.');
+  lines.push('# TYPE meridianos_api_response_time_bucket_total counter');
+  for (const [bucket, count] of Object.entries(summary.api.responseTimeDistribution)) {
+    lines.push(`meridianos_api_response_time_bucket_total{bucket="${bucket}"} ${count}`);
+  }
+
+  lines.push('# HELP meridianos_process_uptime_seconds Daemon process uptime.');
+  lines.push('# TYPE meridianos_process_uptime_seconds gauge');
+  lines.push(`meridianos_process_uptime_seconds ${process.uptime().toFixed(0)}`);
+
+  lines.push('# HELP meridianos_process_memory_bytes Resident heap usage.');
+  lines.push('# TYPE meridianos_process_memory_bytes gauge');
+  lines.push(`meridianos_process_memory_bytes ${process.memoryUsage().heapUsed}`);
+
+  if (extra.apiKeysActive != null) {
+    lines.push('# HELP meridianos_api_keys_active Currently active (non-revoked) public API keys.');
+    lines.push('# TYPE meridianos_api_keys_active gauge');
+    lines.push(`meridianos_api_keys_active ${extra.apiKeysActive}`);
+  }
+
+  if (extra.webhookDeliveries) {
+    lines.push('# HELP meridianos_webhook_deliveries_total Webhook delivery attempts by outcome.');
+    lines.push('# TYPE meridianos_webhook_deliveries_total counter');
+    for (const [status, count] of Object.entries(extra.webhookDeliveries)) {
+      lines.push(`meridianos_webhook_deliveries_total{status="${status}"} ${count}`);
+    }
+  }
+
+  if (extra.cloudMetadataReports != null) {
+    lines.push('# HELP meridianos_cloud_metadata_reports_total Metadata reports received by the cloud control plane.');
+    lines.push('# TYPE meridianos_cloud_metadata_reports_total counter');
+    lines.push(`meridianos_cloud_metadata_reports_total ${extra.cloudMetadataReports}`);
+  }
+
+  return lines.join('\n') + '\n';
+}
+
 // Export metrics endpoint handler
 export function createMetricsEndpoint() {
   return async (req, res) => {

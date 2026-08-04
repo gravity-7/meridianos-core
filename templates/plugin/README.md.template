@@ -1,0 +1,29 @@
+# {{PLUGIN_NAME}}
+
+An IntakeSource plugin for [MeridianOS](https://github.com/gravity-7/meridianos-core) by {{AUTHOR}}.
+
+## What this plugin does
+
+TODO: describe the external system this plugin integrates with and what gets imported as tasks.
+
+## Configuration
+
+| Field | Required | Sensitive | Description |
+|-------|----------|-----------|--------------|
+| `example_field` | yes | no | TODO |
+| `api_token` | yes | yes | TODO |
+
+## Development
+
+```bash
+node test.mjs        # run the contract validation tests
+```
+
+## Publishing
+
+```bash
+npm publish --access public
+```
+
+See `docs/plugin-development.md` in the meridianos-core repo for the full IntakeSource contract
+and testing/publishing guide.

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS hardened-runtime entitlements for the MeridianOS Electron app (T101 — placeholder for
+  production code signing). electron-builder's `mac.hardenedRuntime` requires these to notarize
+  successfully; the specific entitlements below are the standard Electron set (see
+  https://www.electronjs.org/docs/latest/tutorial/code-signing) — nothing app-specific to add
+  unless a future feature needs another one (e.g. camera/microphone access).
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>

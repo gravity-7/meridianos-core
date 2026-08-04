@@ -1,0 +1,90 @@
+{
+  "name": "meridianos-desktop",
+  "version": "0.3.9",
+  "private": true,
+  "description": "MeridianOS Electron desktop application — GUI setup wizard, system tray, OS keychain-backed API key storage, and background daemon management.",
+  "main": "main.js",
+  "type": "commonjs",
+  "author": "MeridianOS Team",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
+  },
+  "dependencies": {
+    "keytar": "^7.9.0",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.meridianos.desktop",
+    "productName": "MeridianOS",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "keychain.mjs",
+      "daemon-manager.mjs",
+      "renderer/**/*",
+      "!node_modules/**/{test,tests}/**"
+    ],
+    "extraResources": [
+      {
+        "from": "..",
+        "to": "app",
+        "filter": [
+          "**/*.mjs",
+          "**/*.sql",
+          "**/*.yaml",
+          "**/*.json",
+          "!desktop/**",
+          "!node_modules/electron/**",
+          "!node_modules/electron-builder/**",
+          "!node_modules/.bin/**",
+          "!.ai/**",
+          "!.git/**",
+          "!dist/**",
+          "!tests/**",
+          "!brand/**"
+        ]
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "gravity-7",
+      "repo": "meridianos-core"
+    },
+    "win": {
+      "target": "nsis",
+      "artifactName": "MeridianOS-Setup.${ext}",
+      "certificateFile": "${env.WIN_CSC_LINK}",
+      "certificatePassword": "${env.WIN_CSC_KEY_PASSWORD}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools",
+      "artifactName": "MeridianOS-${version}.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "afterSign": "build/notarize.js",
+    "linux": {
+      "target": "AppImage",
+      "category": "Development",
+      "artifactName": "meridianos-${version}.${ext}"
+    }
+  }
+}

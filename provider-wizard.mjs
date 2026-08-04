@@ -67,7 +67,7 @@ export function autoDetectProviders() {
  * Read the current policy.yaml and return its mtime for concurrency detection.
  * @returns {{policy: object, mtimeMs: number, raw: string}}
  */
-function readPolicyState(repoRoot) {
+export function readPolicyState(repoRoot) {
   const policyPath = join(repoRoot, '.ai', 'policy.yaml');
   try {
     const stat = statSync(policyPath);
@@ -88,7 +88,7 @@ function readPolicyState(repoRoot) {
  * @param {number} expectedMtimeMs - The mtime at read time (for concurrency detection)
  * @returns {{written: boolean, backupPath?: string, conflict?: boolean}}
  */
-function writePolicyWithBackup(repoRoot, policy, expectedMtimeMs) {
+export function writePolicyWithBackup(repoRoot, policy, expectedMtimeMs) {
   const policyPath = join(repoRoot, '.ai', 'policy.yaml');
   mkdirSync(dirname(policyPath), { recursive: true });
 

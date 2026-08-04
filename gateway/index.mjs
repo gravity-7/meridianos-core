@@ -20,6 +20,8 @@ import { makeCheckVerdict } from './windows.mjs';
 import { startGateway } from './server.mjs';
 import { startHealthLoop } from '../provider-health.mjs';
 import { discoverAdapters } from './wire-adapter-registry.mjs';
+import { openDb } from '../db.mjs';
+import { triggerEvent } from '../api/webhooks.mjs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 
@@ -85,6 +87,15 @@ export async function assembleGateway({ config, policy, port = 0, tenant = 'pv',
       // Log health transitions for observability
       if (state.status === 'down') {
         console.warn(`[MERIDIANOS] provider-health: ${provider} is DOWN — ${state.error ?? 'unreachable'}`);
+        // Phase 7 (US3, T052): FR-011 provider.error webhook. `config` may be absent (this
+        // module's own hermetic tests assemble without one) — skip rather than fabricate a DB.
+        if (config) {
+          try {
+            const db = openDb(undefined, config);
+            triggerEvent(db, 'provider.error', { provider, error: state.error ?? 'unreachable', affected_requests: state.consecutiveFailures ?? 0 })
+              .finally(() => { try { db.close?.(); } catch { /* ignore */ } });
+          } catch { /* webhook delivery must never break the health loop */ }
+        }
       }
     },
   });
