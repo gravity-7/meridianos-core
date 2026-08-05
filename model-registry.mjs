@@ -115,7 +115,7 @@ export function upsertModel(db, provider, modelData) {
     pricing_output_per_m: modelData.pricing_output_per_m ?? null,
     pricing_source: modelData.pricing_source ?? null,
     pricing_refreshed: modelData.pricing_refreshed ?? null,
-    deprecated: modelData.deprecated ?? 0,
+    deprecated: modelData.deprecated ? 1 : 0,
     deprecated_successor: modelData.deprecated_successor ?? null,
     last_seen: now,
     updated_at: now,

@@ -137,6 +137,14 @@ quiet_hours:
     });
 
     after(() => {
+      // writePolicy (008 — End-User Configurability, US1/FR-003) now snapshots a pre-write backup
+      // on every call — clean up the ones this test's concurrent writers generate too, so the
+      // test directory doesn't accumulate `.test-edge-concurrent-policy.backup.*.yaml` files.
+      const dir = path.dirname(TEST_POLICY_PATH);
+      const backupPrefix = path.basename(TEST_POLICY_PATH, '.yaml') + '.backup.';
+      for (const f of fs.readdirSync(dir)) {
+        if (f.startsWith(backupPrefix)) fs.unlinkSync(path.join(dir, f));
+      }
       for (const f of [TEST_POLICY_PATH, `${TEST_POLICY_PATH}.lock`]) {
         if (fs.existsSync(f)) fs.unlinkSync(f);
       }

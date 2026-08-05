@@ -7,6 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- 008 — End-User Configurability: vendored, framework-free static assets (see
+     dashboard/static/vendor/VERSIONS.md) — the workspace's charting/grid/node-graph libraries. -->
+<link rel="stylesheet" href="static/vendor/uplot.min.css">
+<link rel="stylesheet" href="static/vendor/litegraph.css">
 <style>
 :root {
   /* Light Mode - Premium palette */
@@ -384,6 +388,52 @@ button:active { transform: translateY(0); box-shadow: none; }
 }
 
 .grid { display: grid; gap: 1.25rem; }
+
+/* 008 — End-User Configurability: Settings/Observability panel-grid workspace (FR-012). */
+.workspace-grid { position: relative; }
+.workspace-panel-item {
+  width: 380px;
+  height: 260px;
+  margin: 8px;
+  position: absolute;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  /* resize lives HERE (not on .workspace-panel-body) so the ResizeObserver in
+     settings-workspace.mjs — which watches this element and reads ITS style.width/height into
+     localStorage — actually sees the resize. A resize handle on an inner element wouldn't grow
+     this outer box, and the observer/persistence would silently never fire. */
+  resize: both;
+  overflow: auto;
+  min-width: 240px;
+  min-height: 140px;
+}
+.workspace-panel-item.muuri-item-dragging { z-index: 3; box-shadow: var(--shadow-lg); cursor: grabbing; }
+.workspace-panel-item.muuri-item-releasing { z-index: 2; }
+.workspace-panel-header {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+.workspace-panel-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+}
+.workspace-panel-loading, .workspace-panel-empty { color: var(--text-muted); font-size: 12px; padding: 8px 0; }
+.workspace-panel-error { color: var(--text-danger); font-size: 12px; padding: 8px 0; }
+.workspace-panel-status { font-size: 11px; color: var(--text-muted); margin-top: 6px; min-height: 14px; }
+.workspace-lever-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; }
+.workspace-litegraph-canvas { width: 100%; height: 100%; border-radius: 6px; }
 </style>
 </head>
 <body>
@@ -395,6 +445,7 @@ button:active { transform: translateY(0); box-shadow: none; }
       <div style="font-size:12px;color:var(--text-muted);margin-top:2px">source of truth · state.db + policy.yaml</div>
     </div>
     <div style="display:flex;align-items:center;gap:14px">
+      <button id="settingsNavBtn" title="Settings & Observability workspace" onclick="toggleSettingsWorkspace()" style="display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:12px;cursor:pointer">⚙ Settings</button>
       <button id="themeToggle" title="Toggle theme" style="display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:12px;cursor:pointer"><svg id="themeIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"></svg></button>
       <button id="refresh" title="refresh now" style="display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>refresh</button>
       <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)"><span id="dot" style="width:8px;height:8px;border-radius:50%;background:var(--text-muted)"></span><span id="clock" class="mono">—</span></span>
@@ -403,6 +454,13 @@ button:active { transform: translateY(0); box-shadow: none; }
   </div>
 
   <div id="killbanner" style="display:none;align-items:center;gap:8px;background:var(--bg-danger);color:var(--text-danger);border-radius:var(--radius);padding:.6rem .8rem;font-size:13px;margin-bottom:12px">kill switch on — both agents halted. no new work will be claimed.</div>
+
+  <!-- 008 — End-User Configurability: Settings/Observability panel-grid workspace (US1/FR-001,
+       FR-012). Collapsed by default; #settingsNavBtn / the Privacy Notice link below reveal it. -->
+  <div id="settingsPanel" class="card live" style="display:none; margin-bottom:1.5rem">
+    <div class="h">settings &amp; observability <span style="font-weight:400;color:var(--text-muted);margin-left:4px">· drag to reorder, resize from the corner</span></div>
+    <div id="settingsWorkspaceContainer"></div>
+  </div>
 
   <div class="card live" id="escalationsPanel" style="display:none; border-color:var(--border-strong); margin-bottom:1.5rem; background:var(--surface-1)">
     <div class="h" style="color:var(--text-primary)">needs you <span style="font-weight:400;color:var(--text-muted);margin-left:4px">· action required</span></div>
@@ -681,7 +739,7 @@ button:active { transform: translateY(0); box-shadow: none; }
   <div id="copilotStatusBadge" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;font-size:13px;font-weight:500"></div>
   <div id="copilotNote" style="font-size:12px;color:var(--text-secondary);margin-top:8px"></div>
   <div id="copilotPrivacy" style="display:none;margin-top:10px;padding:10px 14px;background:var(--bg-warning);border-radius:var(--radius);font-size:12px;color:var(--text-warning);line-height:1.45">
-    ⚠️ <strong>Privacy Notice:</strong> Copilot code context is visible in gateway logs when logging is enabled. <a href="#" onclick="document.querySelector('#settingsPanel')?.scrollIntoView()" style="color:var(--text-accent)">Disable request logging</a> in Settings → Gateway if processing sensitive code.
+    ⚠️ <strong>Privacy Notice:</strong> Copilot code context is visible in gateway logs when logging is enabled. <a href="#" onclick="showSettingsWorkspace(); document.querySelector('#settingsPanel')?.scrollIntoView({behavior:'smooth'}); return false;" style="color:var(--text-accent)">Disable request logging</a> in Settings → Gateway if processing sensitive code.
   </div>
 </div>
 
@@ -2290,6 +2348,31 @@ async function dismissOpt(id) {
   } catch(e) { alert('Failed: '+e.message); }
 }
 
+// 008 — End-User Configurability: Settings/Observability workspace visibility toggle. The Muuri
+// grid computes item positions from layout at init time, so it must only ever be initialized
+// while #settingsPanel is actually visible (display:block) — initializing it while hidden
+// (display:none) would give Muuri a zero-size container and every panel would stack at (0,0).
+let _settingsWorkspaceInitialized = false;
+function showSettingsWorkspace() {
+  document.getElementById('settingsPanel').style.display = 'block';
+  if (!_settingsWorkspaceInitialized) {
+    _settingsWorkspaceInitialized = true;
+    import('./static/settings-workspace-bootstrap.mjs');
+  }
+}
+function toggleSettingsWorkspace() {
+  const panel = document.getElementById('settingsPanel');
+  if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+  showSettingsWorkspace();
+}
 </script>
+
+<!-- 008 — End-User Configurability: vendored, framework-free static assets (see
+     dashboard/static/vendor/VERSIONS.md — second documented zero-dependency exception, first
+     being Stripe/backend/P6). Plain <script> (IIFE globals), not modules, matching how each
+     library ships. -->
+<script src="static/vendor/uplot.iife.min.js"></script>
+<script src="static/vendor/muuri.min.js"></script>
+<script src="static/vendor/litegraph.min.js"></script>
 </body>
 </html>

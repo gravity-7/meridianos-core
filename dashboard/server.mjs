@@ -22,6 +22,9 @@ import { openDb } from '../db.mjs';
 import { createProjectStore } from '../project-store.mjs';
 import { createAios } from '../config.mjs';
 import { writePolicy, LEVER_PATHS } from '../policy-write.mjs';
+import { listBackups, restoreBackup } from '../policy-backups.mjs';
+import { listProfiles } from '../profiles.mjs';
+import { TIERS } from '../model-router.mjs';
 import { loadPolicy, providerBreakdownFromLedger } from '../budget.mjs';
 import { validatePolicy, applyDottedUpdates } from '../policy-validate.mjs';
 import { handleAction } from './actions.mjs';
@@ -57,9 +60,31 @@ function getProjectManager() {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.html');
+const SETUP_HTML = join(HERE, 'setup.html');
+// GET /static/* (008 — End-User Configurability): the workspace's own .mjs modules plus the
+// vendored uPlot/Muuri/Litegraph.js assets. Extension allowlist, not a MIME-sniffing library —
+// zero-dependency principle — every extension actually used under dashboard/static/ is listed.
+const STATIC_DIR = join(HERE, 'static');
+const STATIC_CONTENT_TYPES = {
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.map': 'application/json',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/plain; charset=utf-8',
+};
 const ALLOWED = new Set(LEVER_PATHS);
 const ACTION_PATHS = new Set(['/api/run', '/api/task', '/api/verify', '/api/escalation']);
 const STATUS_TTL_MS = 2000; // dedupe bursty polls; buildStatus rescans transcripts, so don't do it per-request
+
+// GET /api/status's TTL cache. Was referenced (read AND reassigned) at every call site below without
+// ever being declared — a latent bug that threw "statusCache is not defined" on the very first hit to
+// /api/status (and on every mutating route that invalidates it), since ES modules are always strict
+// mode and a bare assignment to an undeclared identifier throws rather than creating an implicit
+// global. Discovered while adding /api/config/backups' cache-invalidation call (008 — End-User
+// Configurability, US1) — no existing test exercised any of these routes over real HTTP, only via
+// their underlying functions directly, which is why this went uncaught.
+let statusCache = { t: 0, body: '' };
 
 // ─── Rate Limiting (T192) ────────────────────────────────────────────────────
 //
@@ -349,9 +374,63 @@ export function createDashboardServer(config) {
         const html = readFileSync(INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
         return send(res, 200, html, 'text/html; charset=utf-8');
       }
+      // GET /setup + POST /api/setup/* (008 — End-User Configurability, US3): the browser twin of
+      // `gateway/cli.mjs setup`, both built on setup-wizard-core.mjs so the two paths can never
+      // drift into producing different policy.yaml/tenant.yaml/.env shapes (FR-009).
+      if (req.method === 'GET' && url.pathname === '/setup') {
+        const html = readFileSync(SETUP_HTML, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
+        return send(res, 200, html, 'text/html; charset=utf-8');
+      }
+      if (req.method === 'GET' && url.pathname === '/api/setup/status') {
+        const { detectExistingConfig, detectEnvironment, detectProviders } = await import('../setup-wizard-core.mjs');
+        const { exists } = detectExistingConfig(config.repoRoot);
+        return send(res, 200, JSON.stringify({
+          ok: true, exists, environment: detectEnvironment(),
+          providers: detectProviders().map((p) => ({ name: p.name, keyEnv: p.keyEnv })),
+        }));
+      }
+      // GET /static/* — the Settings/Observability workspace's own .mjs modules plus the three
+      // vendored frontend libraries (008 — End-User Configurability, FR-015). Read-only, no auth
+      // token required (same precedent as index.html itself — these are static assets, not data).
+      // path.join + a startsWith(STATIC_DIR) check blocks '..' traversal outside the static root.
+      if (req.method === 'GET' && url.pathname.startsWith('/static/')) {
+        const rel = decodeURIComponent(url.pathname.slice('/static/'.length));
+        const filePath = join(STATIC_DIR, rel);
+        if (!filePath.startsWith(STATIC_DIR) || !existsSync(filePath) || !statSync(filePath).isFile()) {
+          return send(res, 404, JSON.stringify({ ok: false, error: 'not found' }));
+        }
+        const contentType = STATIC_CONTENT_TYPES[path.extname(filePath)] ?? 'application/octet-stream';
+        res.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
+        return res.end(readFileSync(filePath));
+      }
       // Every mutating request must be same-origin + carry the per-boot token (security P1).
       if (req.method === 'POST' && !authorized(req)) {
         return send(res, 403, JSON.stringify({ ok: false, error: 'forbidden: missing/invalid token or cross-origin request' }));
+      }
+      // POST /api/setup/plan + /api/setup/commit (008 — End-User Configurability, US3) — placed
+      // AFTER the authorized() gate above like every other mutating route; these write files to
+      // the filesystem (commit) or at minimum echo back generated content (plan), so both require
+      // the same per-boot token as POST /api/policy.
+      if (req.method === 'POST' && url.pathname === '/api/setup/plan') {
+        try {
+          const { buildSetupPlan } = await import('../setup-wizard-core.mjs');
+          const body = JSON.parse((await readBody(req)) || '{}');
+          const plan = buildSetupPlan(body);
+          return send(res, 200, JSON.stringify({ ok: true, files: plan.files, budget: plan.budget }));
+        } catch (err) {
+          return send(res, 200, JSON.stringify({ ok: false, error: err.message }));
+        }
+      }
+      if (req.method === 'POST' && url.pathname === '/api/setup/commit') {
+        try {
+          const { buildSetupPlan, writeSetupPlan } = await import('../setup-wizard-core.mjs');
+          const body = JSON.parse((await readBody(req)) || '{}');
+          const plan = buildSetupPlan(body);
+          writeSetupPlan(plan, config.repoRoot, { force: Boolean(body.force) });
+          return send(res, 200, JSON.stringify({ ok: true, filesWritten: Object.keys(plan.files) }));
+        } catch (err) {
+          return send(res, 200, JSON.stringify({ ok: false, error: err.message }));
+        }
       }
       if (req.method === 'GET' && url.pathname === '/api/status') {
         const t = Date.now();
@@ -401,6 +480,38 @@ export function createDashboardServer(config) {
         const updates = JSON.parse((await readBody(req)) || '{}');
         const result = applyPolicyUpdates(updates, { config });
         statusCache.t = 0; // a lever changed — next poll rebuilds instead of serving stale
+        return send(res, 200, JSON.stringify(result));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/config/backups') {
+        const backups = listBackups(dirname(config.policyPath));
+        return send(res, 200, JSON.stringify({ ok: true, backups }));
+      }
+      // GET /api/config/profiles (008 — End-User Configurability, US2/FR-007): no prior endpoint
+      // exposed policy.yaml's `profiles:`/`active_profile` fields to the dashboard at all — every
+      // other route either writes policy or reads unrelated data — so the Settings workspace's
+      // profile selector had nothing to read from until this was added.
+      if (req.method === 'GET' && url.pathname === '/api/config/profiles') {
+        const policy = loadPolicy(undefined, config);
+        return send(res, 200, JSON.stringify({ ok: true, profiles: listProfiles(policy), active: policy?.active_profile ?? null }));
+      }
+      // GET /api/config/routing (008 — End-User Configurability, US1/FR-014): the routing
+      // flow-graph panel needs the roster + current model_routing.<agent>.<tier> assignments to
+      // render existing connections on load — nothing previously exposed policy.model_routing to
+      // the dashboard (status.mjs's `routing` field is per-TASK resolved routing, a different
+      // thing). Read-only; the panel writes back through the existing POST /api/policy (FR-002).
+      if (req.method === 'GET' && url.pathname === '/api/config/routing') {
+        const policy = loadPolicy(undefined, config);
+        return send(res, 200, JSON.stringify({
+          ok: true,
+          agents: config.domain?.agents ?? [],
+          tiers: TIERS,
+          routing: policy?.model_routing ?? {},
+        }));
+      }
+      if (req.method === 'POST' && url.pathname.startsWith('/api/config/restore/')) {
+        const timestamp = decodeURIComponent(url.pathname.slice('/api/config/restore/'.length));
+        const result = restoreBackup(dirname(config.policyPath), timestamp, { policyPath: config.policyPath });
+        if (result.ok) statusCache.t = 0; // restored config → next poll rebuilds instead of serving stale
         return send(res, 200, JSON.stringify(result));
       }
       if (req.method === 'POST' && url.pathname === '/api/run-now') {

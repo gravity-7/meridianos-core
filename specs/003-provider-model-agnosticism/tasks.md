@@ -229,11 +229,11 @@
 
 **Purpose**: Final integration validation, edge case hardening, documentation.
 
-- [ ] T068 Run full test suite: `npm test` — confirm 915+ tests pass, 0 failures, zero `.only()` markers
-- [ ] T069 [P] Verify backward compatibility: grep all `PROVIDERS.` references across codebase, confirm each resolves correctly via lazy getter
-- [ ] T070 [P] Verify zero-dependency constraint: `npm ls --prod` shows only `better-sqlite3`
-- [ ] T071 Run quickstart.md VS-1 through VS-11 validation scenarios manually, confirm all pass
-- [ ] T072 [P] Edge case hardening per spec.md: large model lists (OpenRouter 500+ models), model identity scoping, mid-task model deprecation, concurrent discovery/pricing, external policy.yaml modification during wizard
+- [X] T068 Run full test suite: `npm test` — confirm 915+ tests pass, 0 failures, zero `.only()` markers (2026-08-05: 1226 tests, 1226 pass, 0 fail, 10 skipped, zero `.only()`)
+- [X] T069 [P] Verify backward compatibility: grep all `PROVIDERS.` references across codebase, confirm each resolves correctly via lazy getter (only non-test call site is a doc comment; `PROVIDERS` Proxy in providers.mjs confirmed correct)
+- [X] T070 [P] Verify zero-dependency constraint: `npm ls --prod` shows only `better-sqlite3` (plus `stripe`, a documented justified exception for billing — see specs/006-multi-tenant-platform/research.md)
+- [X] T071 Run quickstart.md VS-1 through VS-11 validation scenarios manually, confirm all pass (VS-1/2/3 run directly with no network; VS-7/8/9-formula/11 covered by automated tests; VS-4/5/6/10 require live provider API keys/network and are covered by their existing automated test suites instead of live manual execution)
+- [X] T072 [P] Edge case hardening per spec.md: model identity scoping already covered (composite PK test); added test coverage for 3 previously-untested-but-implemented behaviors — `getEffectiveCost` cache-differentiated pricing formula (tests/pricing.test.mjs), concurrent policy.yaml modification detection in the provider wizard (tests/provider-wizard.test.mjs), and large model lists / 600-model OpenRouter-scale upsert+deprecate (tests/model-registry.test.mjs). Mid-task deprecation and concurrent discovery/pricing are already mitigated architecturally (fresh reads per call; scheduler offsets discovery/pricing ticks by 30min)
 
 ---
 

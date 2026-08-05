@@ -14,8 +14,22 @@
  * guards the read-modify-write with a short-lived exclusive lock file (`<path>.lock`, created
  * with `wx` so a concurrent acquirer sees EEXIST and retries) so concurrent writers serialize
  * instead of clobbering each other.
+ *
+ * Backups (008 — End-User Configurability, US1/FR-003): every write snapshots the PRE-write
+ * content to a sibling `<basename>.backup.<timestamp>.yaml` file before touching the live file —
+ * the same naming convention `provider-wizard.mjs`'s own `writePolicyWithBackup` already uses for
+ * its separate write path, so both are listable/restorable by the same `policy-backups.mjs`
+ * helper. Timestamp collisions (two writes inside the same millisecond) are resolved by probing
+ * for an unused suffix rather than silently overwriting an earlier backup.
+ *
+ * Insertion (008 — T010): `setPolicyValue` used to throw when `path` didn't already exist on
+ * disk — every LEVER_PATHS entry required a pre-seeded line, which broke on any policy.yaml that
+ * predates a newly-added lever (e.g. `active_profile`, `gateway.port`). It now inserts a missing
+ * path instead of throwing: if the deepest existing ancestor mapping is found, the remaining
+ * levels are added as its children (2-space indent per level, matching this file's own
+ * convention); if no ancestor exists at all, a brand-new top-level block is appended at EOF.
  */
-import { readFileSync, writeFileSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { stripComment, colonIndex } from './yaml-lite.mjs';
 
 /** Synchronously acquire an exclusive lock file, retrying until `timeoutMs` elapses. Uses
@@ -42,6 +56,25 @@ function releaseLock(lockPath) {
   try { unlinkSync(lockPath); } catch { /* best-effort — lock is advisory */ }
 }
 
+/** Snapshot `path`'s current content to `<basename>.backup.<timestamp>.yaml` before it's
+ *  overwritten. Probes for an unused suffix so two writes in the same millisecond never collide
+ *  into one backup silently replacing the other. Returns the backup path, or null if `path`
+ *  doesn't exist yet (nothing to back up on a first-ever write). */
+function backupBeforeWrite(path) {
+  if (!existsSync(path)) return null;
+  const dot = path.lastIndexOf('.');
+  const base = dot > 0 ? path.slice(0, dot) : path;
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  let backupPath = `${base}.backup.${timestamp}.yaml`;
+  let suffix = 1;
+  while (existsSync(backupPath)) {
+    backupPath = `${base}.backup.${timestamp}-${suffix}.yaml`;
+    suffix++;
+  }
+  copyFileSync(path, backupPath);
+  return backupPath;
+}
+
 /** The exact scalar paths the founder's dashboard is allowed to write. The server whitelists
  *  against this (defence in depth over setPolicyValue's own path check), and the round-trip
  *  test asserts .ai/policy.yaml actually exposes every one. */
@@ -64,6 +97,21 @@ export const LEVER_PATHS = [
   'model_routing.claude.complex', 'model_routing.claude.critical',
   'model_routing.antigravity.simple', 'model_routing.antigravity.medium', 'model_routing.antigravity.medium_high',
   'model_routing.antigravity.complex', 'model_routing.antigravity.critical',
+  // active_profile (008 — End-User Configurability, US2): which named `profiles.<name>` entry is
+  // currently active (see profiles.mjs's resolveActivePolicy). `setPolicyValue` now inserts this
+  // if missing from an older policy.yaml (see T010 note above) rather than throwing.
+  'active_profile',
+  // gateway.port (008 — T010): the only genuinely real, currently-unwritable Gateway field found
+  // by auditing actual runtime reads against the original "General/Gateway/Integrations/Prompts"
+  // task wording — policy-validate.mjs validates it and scheduler.mjs/dashboard/server.mjs read it
+  // (with an AIOS_GATEWAY_PORT env override and an 8787 fallback), so it's a live, meaningful lever.
+  // "Logging toggle" and "enforcement mode" (also named in the original task text) were NOT added:
+  // neither corresponds to any field actually read anywhere in this codebase — adding a lever for
+  // them would be a dead UI control with no backing behavior. "Prompts" fields live in tenant.yaml
+  // (multi-line `|` block scalars: prompts.implRules/reviewCriteria), not policy.yaml, and need a
+  // block-scalar-aware writer this module doesn't implement — tracked as a genuine follow-up gap,
+  // not silently faked here.
+  'gateway.port',
 ];
 
 /** Render a JS value as a policy scalar: bare when safe, double-quoted otherwise. */
@@ -84,13 +132,22 @@ function trailingComment(line) {
 
 /**
  * Set the scalar at `path` (array or dotted string) to `value`, returning the new text.
- * Only existing scalar leaves are updated; throws if the path is not found.
+ * Updates an existing scalar leaf in place. If the path doesn't exist yet, inserts it instead of
+ * throwing: the deepest existing ancestor mapping (a prefix of `path`) gets the remaining levels
+ * added as its children; if no ancestor exists at all, a new top-level block is appended at EOF.
+ * Every inserted level uses a 2-space indent, matching this repo's policy.yaml convention.
  */
 export function setPolicyValue(text, path, value) {
   const parts = Array.isArray(path) ? path : String(path).split('.');
   const lines = text.split(/\r?\n/);
   const stack = []; // { indent, key } for each open mapping
   let targetIdx = -1;
+
+  // For each prefix length of `parts`, track where that ancestor mapping's header line is (-1 if
+  // never seen) and the line index right after the last line seen anywhere in its body — the
+  // insertion point for a new child once we know the deepest ancestor that actually exists.
+  const ancestorHeaderIdx = new Array(parts.length).fill(-1);
+  const ancestorBodyEnd = new Array(parts.length).fill(-1);
 
   for (let i = 0; i < lines.length; i++) {
     const noComment = stripComment(lines[i]);
@@ -105,6 +162,13 @@ export function setPolicyValue(text, path, value) {
     const rest = trimmed.slice(colon + 1).trim();
     const curPath = [...stack.map((s) => s.key), key];
 
+    for (let depth = 1; depth < parts.length; depth++) {
+      if (curPath.length >= depth && curPath.slice(0, depth).every((p, idx) => p === parts[idx])) {
+        ancestorBodyEnd[depth - 1] = i + 1;
+        if (curPath.length === depth) ancestorHeaderIdx[depth - 1] = i;
+      }
+    }
+
     if (rest === '') {
       stack.push({ indent, key }); // an open mapping — descend
     } else if (curPath.length === parts.length && curPath.every((p, idx) => p === parts[idx])) {
@@ -113,11 +177,37 @@ export function setPolicyValue(text, path, value) {
     }
   }
 
-  if (targetIdx < 0) throw new Error(`policy path not found: ${parts.join('.')}`);
-  const raw = lines[targetIdx];
-  const lead = raw.slice(0, raw.length - raw.trimStart().length);
-  const comment = trailingComment(raw);
-  lines[targetIdx] = `${lead}${parts[parts.length - 1]}: ${serializeScalar(value)}${comment ? `  ${comment.trim()}` : ''}`;
+  if (targetIdx >= 0) {
+    const raw = lines[targetIdx];
+    const lead = raw.slice(0, raw.length - raw.trimStart().length);
+    const comment = trailingComment(raw);
+    lines[targetIdx] = `${lead}${parts[parts.length - 1]}: ${serializeScalar(value)}${comment ? `  ${comment.trim()}` : ''}`;
+    return lines.join('\n');
+  }
+
+  // Path not found — insert. Find the deepest existing ancestor mapping among parts[0..N-2].
+  let insertAt = -1;
+  let fromDepth = 0;
+  for (let depth = parts.length - 1; depth >= 1; depth--) {
+    if (ancestorHeaderIdx[depth - 1] >= 0) {
+      insertAt = ancestorBodyEnd[depth - 1];
+      fromDepth = depth;
+      break;
+    }
+  }
+
+  const newLines = [];
+  if (insertAt === -1) {
+    // No ancestor exists at all — append a brand-new top-level block at EOF.
+    insertAt = lines.length;
+    if (insertAt > 0 && lines[insertAt - 1] === '') insertAt--; // insert before a trailing blank line
+  }
+  for (let depth = fromDepth; depth < parts.length - 1; depth++) {
+    newLines.push(`${'  '.repeat(depth)}${parts[depth]}:`);
+  }
+  newLines.push(`${'  '.repeat(parts.length - 1)}${parts[parts.length - 1]}: ${serializeScalar(value)}`);
+
+  lines.splice(insertAt, 0, ...newLines);
   return lines.join('\n');
 }
 
@@ -129,6 +219,7 @@ export function writePolicy(updates, { path = undefined, config } = {}) {
   const lockPath = `${path}.lock`;
   acquireLock(lockPath);
   try {
+    backupBeforeWrite(path);
     let text = readFileSync(path, 'utf8');
     for (const [p, v] of Object.entries(updates)) text = setPolicyValue(text, p, v);
     writeFileSync(path, text);

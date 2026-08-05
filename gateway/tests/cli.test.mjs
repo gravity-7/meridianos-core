@@ -14,7 +14,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -275,4 +275,100 @@ test('an unregistered token still gets 401 (no run) — standalone does not sile
     body: JSON.stringify({ model: 'deepseek-chat', messages: [] }),
   });
   assert.equal(res.status, 401);
+});
+
+// ─── `models list` / `pricing show`: config must resolve via createAios, not a bare {repoRoot} ──
+//
+// Both handlers used to build `{ repoRoot: process.cwd() }` and call `openDb(undefined, config)` /
+// `loadPolicy()` with that stub — `config.dbPath`/`config.policyPath` were never set, so `loadPolicy()`
+// (called with zero args) threw a raw TypeError reading `.policyPath` off `undefined` before it could
+// even reach `openDb`. Regression coverage: run the real subprocess against a temp AIOS_ROOT (a
+// `policy.yaml` with an `agents:` field is enough for config.mjs's DomainPlugin resolution — see
+// resolveFromPolicy) and assert it exits cleanly instead of crashing.
+
+function runCliSubcommand(args, { cwd }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI_PATH, ...args], {
+      cwd,
+      env: { ...process.env, AIOS_ROOT: cwd },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (c) => { stdout += c.toString(); });
+    child.stderr.on('data', (c) => { stderr += c.toString(); });
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`timed out; stdout=${stdout} stderr=${stderr}`)); }, 10_000);
+    child.on('exit', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+  });
+}
+
+test('`pricing show` resolves a real config via createAios and exits 0 (was: TypeError on config.policyPath)', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cli-pricing-'));
+  // config.mjs looks for .ai/policy.yaml under repoRoot
+  const aiDir = join(tmpDir, '.ai');
+  mkdirSync(aiDir, { recursive: true });
+  writeFileSync(join(aiDir, 'policy.yaml'), 'agents: [agent-a, agent-b]\n');
+
+  const { code, stdout, stderr } = await runCliSubcommand(['pricing', 'show'], { cwd: tmpDir });
+  assert.equal(code, 0, `expected clean exit; stderr=${stderr}`);
+  assert.match(stdout, /^Pricing \(USD per 1M tokens\):/);
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('`models list` resolves a real config via createAios and exits 0 (was: TypeError on config.policyPath)', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cli-models-'));
+  const aiDir = join(tmpDir, '.ai');
+  mkdirSync(aiDir, { recursive: true });
+  writeFileSync(join(aiDir, 'policy.yaml'), 'agents: [agent-a, agent-b]\n');
+
+  const { code, stdout, stderr } = await runCliSubcommand(['models', 'list'], { cwd: tmpDir });
+  assert.equal(code, 0, `expected clean exit; stderr=${stderr}`);
+  assert.match(stdout, /^Models:/);
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// ─── `setup --init` (008 — End-User Configurability, US3) ──────────────────
+// Independent Test from spec.md: `node cli.mjs setup --init --providers deepseek --budget 50`
+// writes policy.yaml/.env with no prompts, matching what the interactive path would produce.
+
+test('`setup --init` writes policy.yaml/.env/tenant.yaml on a fresh checkout with no prompts', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cli-setup-'));
+
+  const { code, stdout, stderr } = await runCliSubcommand(['setup', '--init', '--budget', '50', '--agents', 'builder'], { cwd: tmpDir });
+  assert.equal(code, 0, `expected clean exit; stderr=${stderr}`);
+  assert.match(stdout, /Setup complete/);
+  assert.ok(existsSync(join(tmpDir, '.ai', 'policy.yaml')));
+  assert.ok(existsSync(join(tmpDir, '.ai', 'tenant.yaml')));
+  assert.ok(existsSync(join(tmpDir, '.env')));
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('`setup --init` refuses to overwrite an existing policy.yaml without --force', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cli-setup-guard-'));
+  const aiDir = join(tmpDir, '.ai');
+  mkdirSync(aiDir, { recursive: true });
+  writeFileSync(join(aiDir, 'policy.yaml'), 'kill_switch: true\n# must not be clobbered\n');
+
+  const { code, stderr } = await runCliSubcommand(['setup', '--init', '--budget', '50'], { cwd: tmpDir });
+  assert.notEqual(code, 0);
+  assert.match(stderr, /already exists/);
+  assert.match(readFileSync(join(aiDir, 'policy.yaml'), 'utf8'), /must not be clobbered/);
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('`setup --init --force` overwrites an existing policy.yaml', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cli-setup-force-'));
+  const aiDir = join(tmpDir, '.ai');
+  mkdirSync(aiDir, { recursive: true });
+  writeFileSync(join(aiDir, 'policy.yaml'), 'kill_switch: true\n');
+
+  const { code, stderr } = await runCliSubcommand(['setup', '--init', '--budget', '50', '--force'], { cwd: tmpDir });
+  assert.equal(code, 0, `expected clean exit; stderr=${stderr}`);
+  assert.match(readFileSync(join(aiDir, 'policy.yaml'), 'utf8'), /kill_switch: false/);
+
+  rmSync(tmpDir, { recursive: true, force: true });
 });

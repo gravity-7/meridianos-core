@@ -6,7 +6,10 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { runProviderWizard, runProviderWizardDashboard, autoDetectProviders } from '../provider-wizard.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runProviderWizard, runProviderWizardDashboard, autoDetectProviders, readPolicyState, writePolicyWithBackup } from '../provider-wizard.mjs';
 
 describe('Provider Wizard (US3)', () => {
   describe('autoDetectProviders', () => {
@@ -104,6 +107,52 @@ describe('Provider Wizard (US3)', () => {
       const result = await runProviderWizardDashboard('anthropic', 'ANTHROPIC_API_KEY', 'sk-ant-test');
       // May succeed or fail depending on policy.yaml state
       assert.ok(result.ok !== undefined);
+    });
+  });
+
+  describe('concurrent modification detection (readPolicyState + writePolicyWithBackup)', () => {
+    it('writes cleanly when no one else touched policy.yaml since it was read', () => {
+      const repoRoot = mkdtempSync(join(tmpdir(), 'provider-wizard-'));
+      mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+      writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), 'version: 1\n');
+
+      const { policy, mtimeMs } = readPolicyState(repoRoot);
+      const result = writePolicyWithBackup(repoRoot, { ...policy, providers: { foo: { name: 'foo' } } }, mtimeMs);
+
+      assert.equal(result.conflict, undefined);
+      assert.equal(result.written, true);
+    });
+
+    it('reports a conflict instead of silently overwriting when policy.yaml changed after it was read', () => {
+      const repoRoot = mkdtempSync(join(tmpdir(), 'provider-wizard-'));
+      mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+      const policyPath = join(repoRoot, '.ai', 'policy.yaml');
+      writeFileSync(policyPath, 'version: 1\n');
+
+      const { policy, mtimeMs } = readPolicyState(repoRoot);
+
+      // Simulate another process (e.g. the daemon, or a second dashboard request) writing to
+      // policy.yaml after our read but before our write. Force the mtime forward explicitly so
+      // the test doesn't depend on filesystem timestamp resolution.
+      writeFileSync(policyPath, 'version: 1\nkill_switch: true\n');
+      const future = new Date(Date.now() + 60_000);
+      utimesSync(policyPath, future, future);
+
+      const result = writePolicyWithBackup(repoRoot, { ...policy, providers: { foo: { name: 'foo' } } }, mtimeMs);
+
+      assert.equal(result.conflict, true);
+      assert.equal(result.written, false);
+    });
+
+    it('skips conflict detection when policy.yaml did not exist at read time (expectedMtimeMs is 0)', () => {
+      const repoRoot = mkdtempSync(join(tmpdir(), 'provider-wizard-'));
+
+      const { mtimeMs } = readPolicyState(repoRoot); // no .ai/policy.yaml yet → mtimeMs === 0
+      assert.equal(mtimeMs, 0);
+
+      const result = writePolicyWithBackup(repoRoot, { providers: { foo: { name: 'foo' } } }, mtimeMs);
+      assert.equal(result.conflict, undefined);
+      assert.equal(result.written, true);
     });
   });
 });

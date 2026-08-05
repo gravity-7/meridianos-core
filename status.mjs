@@ -107,6 +107,10 @@ export function buildStatus({ config, store, dbPath, now = Date.now(), policy = 
     return {
       ts: nowIso,
       kill_switch: budget.kill_switch,
+      // 008 — End-User Configurability: the Settings workspace's Gateway panel needs to read the
+      // CURRENT gateway.port to pre-fill its field, not just write a new one — buildStatus already
+      // surfaces other policy-derived state (kill_switch above) the same way.
+      gateway: { port: policy?.gateway?.port ?? null },
       budget,
       // Read-only "spend split by provider" (1.6) — computed inside budgetStatus from the run
       // log; surfaced at the top level alongside the other subsystems for discoverability.

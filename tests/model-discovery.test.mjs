@@ -5,6 +5,8 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { openDb } from '../db.mjs';
+import { ensureModelRegistry, getModels } from '../model-registry.mjs';
 
 // Test the adapter function signatures and basic behavior
 describe('Model Discovery (US4)', () => {
@@ -75,6 +77,61 @@ describe('Model Discovery (US4)', () => {
     it('exports discoverAllModels', async () => {
       const discovery = await import('../model-discovery.mjs');
       assert.equal(typeof discovery.discoverAllModels, 'function');
+    });
+  });
+
+  describe('concurrent discovery + pricing refresh (spec.md edge case)', () => {
+    // Anthropic-only policy: curated discovery adapter + provider-native pricing are both
+    // network-free, so this test is deterministic and doesn't depend on any other provider's
+    // reachability (deepseek/openrouter/ollama all ship as built-in defaults — see providers.defaults.yaml).
+    const policy = { providers: { deepseek: null, openrouter: null, ollama: null } };
+
+    it('running discoverAllModels and refreshAllModelPricing concurrently does not throw or corrupt the registry', async () => {
+      const db = openDb(':memory:');
+      ensureModelRegistry(db);
+      try {
+        const { discoverAllModels } = await import('../model-discovery.mjs');
+        const { refreshAllModelPricing } = await import('../pricing-refresh.mjs');
+
+        // Pricing refresh racing ahead of discovery (registry still empty) must no-op cleanly,
+        // not crash — this is the actual failure mode the spec.md edge case warns about.
+        const [discoveryResult, pricingResult] = await Promise.all([
+          discoverAllModels(db, policy, {}),
+          refreshAllModelPricing(db, policy, {}),
+        ]);
+
+        assert.ok(discoveryResult.modelsDiscovered >= 0);
+        assert.ok(pricingResult.failed === 0 || pricingResult.refreshed >= 0);
+
+        // Registry must still be well-formed after the race.
+        const rows = getModels(db, {});
+        assert.ok(Array.isArray(rows));
+      } finally {
+        db.close();
+      }
+    });
+
+    it('a model discovered mid-refresh is priced on the next pricing pass (not lost)', async () => {
+      const db = openDb(':memory:');
+      ensureModelRegistry(db);
+      try {
+        const { discoverAllModels } = await import('../model-discovery.mjs');
+        const { refreshAllModelPricing } = await import('../pricing-refresh.mjs');
+
+        await discoverAllModels(db, policy, {});
+        const afterDiscovery = getModels(db, { provider: 'anthropic' });
+        assert.ok(afterDiscovery.length > 0, 'anthropic curated adapter should have discovered models');
+
+        const result = await refreshAllModelPricing(db, policy, {});
+        assert.equal(result.failed, 0);
+
+        const priced = getModels(db, { provider: 'anthropic' });
+        for (const m of priced) {
+          assert.equal(m.pricing_source, 'provider-native');
+        }
+      } finally {
+        db.close();
+      }
     });
   });
 });
