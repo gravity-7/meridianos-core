@@ -36,8 +36,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cloud control plane with organizations/users/machines, policy push, provider-health aggregation, 90-day metadata retention, and a security audit log (`cloud/cloud-control-plane.mjs`, `cloud/cloud-server.mjs`)
 - Opt-in, local-only telemetry counters for installs/plugin-installs/cloud-connections (`telemetry.mjs`) — disabled by default, no network calls
 
+#### End-User Configurability (Phase 3, 008)
+
+**Config Profiles** (`profiles.mjs`)
+- Named `profiles:` blocks in `policy.yaml` with `extends:` inheritance (deep-merge, circular/unknown-target detection), `policy.active_profile` as a normal dashboard-writable lever, `node gateway/cli.mjs profile list`
+
+**Settings & Observability Workspace**
+- Grafana-parity drag/resize panel-grid workspace in the dashboard (`dashboard/static/settings-workspace.mjs`, Muuri-based, layout persisted per-browser), reachable via the new "⚙ Settings" toolbar button
+- Config panels: kill switch, `gateway.port`, profile selector, backup list/restore
+- Observability panels: cost-over-time and token-usage time series (uPlot), provider spend breakdown — real ledger data, not restyled tiles
+- Routing flow-graph panel (Litegraph.js): drag a connection from a model to an agent·tier node to update `model_routing.<agent>.<tier>`, through the existing policy-write path
+- `GET /api/config/backups`, `POST /api/config/restore/:timestamp`, `GET /api/config/profiles`, `GET /api/config/routing` — new read/write endpoints backing the panels above
+- Every Settings save now takes a timestamped backup (`policy-backups.mjs`) — previously only the provider wizard's separate write path did
+- `setPolicyValue` now inserts a missing lever path instead of throwing, so a new lever works on a `policy.yaml` scaffolded before that lever existed
+- Second documented zero-dependency exception (after Stripe): uPlot, Muuri, Litegraph.js vendored as static browser assets (`dashboard/static/vendor/`) — not npm runtime dependencies
+
+**Setup Wizard**
+- `GET /setup` — a 5-step browser wizard (tenant name → agents → providers → budget → review) producing a working `.ai/policy.yaml` + `.ai/tenant.yaml` + `.env` with zero direct YAML editing
+- `node gateway/cli.mjs setup [--init] [--agents x,y] [--providers x,y] [--budget N] [--resume] [--force]` — the CLI equivalent, sharing the same `setup-wizard-core.mjs` planning logic as the browser wizard so the two can never drift
+- Dollar-denominated monthly budget converted to weekly/5h token caps; both wizard paths refuse to overwrite an existing installation without explicit confirmation
+
 ### Fixed
 - A pre-existing merge artifact in `dashboard/server.mjs` had left two colliding `handleGetTaskComments` declarations and an orphaned code fragment (missing function signature) that made the file fail to parse; resolved by renaming the project-scoped handler and restoring the orphaned body to its actual owner (`handleGetReviewAssignments`)
+- `model-registry.mjs`'s `upsertModel` could never actually persist a discovered model: `deprecated: modelData.deprecated ?? 0` let a literal JS `false` (the shape every discovery adapter returns) through unconverted, and better-sqlite3 cannot bind a raw boolean — every real call silently failed and was swallowed by the caller's try/catch. Found via a new end-to-end test exercising `discoverAllModels()` against a real database (003 — Provider & Model Agnosticism, T072 edge-case hardening), something no prior test had done.
+- `dashboard/server.mjs`'s Settings/Observability workspace panels (Muuri drag-resize, provider-spend breakdown) each shipped with a bug caught only by live-browser verification, not unit tests: a `ResizeObserver` callback passed a raw DOM element to Muuri's `refreshItems()` (which requires Item instances), silently throwing on every real resize; and the provider-spend panel read `/api/ledger/spend-by-provider`'s response as if it WERE the breakdown map, instead of its actual `{ok, available, providers}` wrapper shape.
 
 ## [1.0.0] - 2026-08-02
 

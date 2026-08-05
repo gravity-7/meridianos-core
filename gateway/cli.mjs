@@ -385,8 +385,9 @@ async function handleModelsRefresh(flags) {
   try {
     const { openDb } = await import('../db.mjs');
     const { discoverAllModels } = await import('../model-discovery.mjs');
-    const policy = loadPolicy();
-    const config = { repoRoot: process.cwd() };
+    const { createAios } = await import('../config.mjs');
+    const { config } = createAios({ root: process.cwd() });
+    const policy = loadPolicy(undefined, config);
     const db = openDb(undefined, config);
 
     process.stdout.write('Discovering models...\n');
@@ -408,7 +409,8 @@ async function handleModelsList(flags) {
   try {
     const { openDb } = await import('../db.mjs');
     const { getModels } = await import('../model-registry.mjs');
-    const config = { repoRoot: process.cwd() };
+    const { createAios } = await import('../config.mjs');
+    const { config } = createAios({ root: process.cwd() });
     const db = openDb(undefined, config);
 
     const models = getModels(db, {
@@ -453,8 +455,9 @@ async function handlePricingRefresh(flags) {
   try {
     const { openDb } = await import('../db.mjs');
     const { refreshAllModelPricing } = await import('../pricing-refresh.mjs');
-    const policy = loadPolicy();
-    const config = { repoRoot: process.cwd() };
+    const { createAios } = await import('../config.mjs');
+    const { config } = createAios({ root: process.cwd() });
+    const policy = loadPolicy(undefined, config);
     const db = openDb(undefined, config);
 
     process.stdout.write('Refreshing pricing...\n');
@@ -476,7 +479,8 @@ async function handlePricingShow(flags) {
   try {
     const { openDb } = await import('../db.mjs');
     const { getModels } = await import('../model-registry.mjs');
-    const config = { repoRoot: process.cwd() };
+    const { createAios } = await import('../config.mjs');
+    const { config } = createAios({ root: process.cwd() });
     const db = openDb(undefined, config);
 
     const models = getModels(db, {
@@ -496,6 +500,163 @@ async function handlePricingShow(flags) {
     process.stderr.write(`Error: ${err.message}\n`);
     process.exit(1);
   }
+}
+
+// ─── Subcommand: profile (008 — End-User Configurability, US2) ─────────────
+
+async function handleProfileCommand(args, flags) {
+  const subArgs = parseSubcommandArgs(args, 'profile');
+  const action = subArgs[0];
+
+  if (action === 'list') {
+    return handleProfileList(flags);
+  }
+
+  process.stderr.write('Usage: node gateway/cli.mjs profile <list> [options]\n');
+  process.stderr.write('  profile list                    List all named profiles and their extends parent\n');
+  process.exit(1);
+}
+
+async function handleProfileList(_flags) {
+  try {
+    const { createAios } = await import('../config.mjs');
+    const { listProfiles } = await import('../profiles.mjs');
+    const { config } = createAios({ root: process.cwd() });
+    const policy = loadPolicy(undefined, config);
+    const profiles = listProfiles(policy);
+
+    if (profiles.length === 0) {
+      process.stdout.write('No profiles defined. Add a `profiles:` block to policy.yaml to create one.\n');
+      return;
+    }
+
+    const active = policy.active_profile;
+    process.stdout.write('Profiles:\n');
+    for (const p of profiles) {
+      const marker = p.name === active ? '*' : ' ';
+      const parent = p.extends ? ` (extends ${p.extends})` : '';
+      process.stdout.write(`  ${marker} ${p.name}${parent}\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+// ─── Subcommand: setup (008 — End-User Configurability, US3) ───────────────
+// `setup-wizard-core.mjs`'s buildSetupPlan()/writeSetupPlan() do the actual work — this is just
+// the CLI's flag-parsing/prompting layer over it, the non-interactive twin of `GET /setup`
+// (dashboard/server.mjs), matching Independent Test: `setup --init --providers deepseek --budget 50`.
+
+async function handleSetupCommand(args, flags) {
+  if (flags.init) return handleSetupInit(flags);
+  return handleSetupInteractive(flags);
+}
+
+async function handleSetupInit(flags) {
+  try {
+    const { buildSetupPlan, writeSetupPlan, detectExistingConfig, detectProviders } = await import('../setup-wizard-core.mjs');
+    const repoRoot = process.cwd();
+    const { exists } = detectExistingConfig(repoRoot);
+    if (exists && !flags.force) {
+      process.stderr.write('.ai/policy.yaml already exists — re-run with --force to overwrite (FR-010: the wizard never silently overwrites an existing installation).\n');
+      process.exit(1);
+    }
+
+    const agents = typeof flags.agents === 'string'
+      ? flags.agents.split(',').map((s) => s.trim()).filter(Boolean)
+      : ['builder', 'reviewer'];
+    const monthlyBudgetUsd = flags.budget !== undefined ? Number(flags.budget) : 100;
+
+    const detected = detectProviders();
+    let providers;
+    if (typeof flags.providers === 'string') {
+      const wanted = flags.providers.split(',').map((s) => s.trim()).filter(Boolean);
+      providers = wanted.map((name) => {
+        const d = detected.find((x) => x.name === name);
+        return d ? { name: d.name, keyEnv: d.keyEnv, apiKey: process.env[d.keyEnv] } : { name, keyEnv: `${name.toUpperCase()}_KEY` };
+      });
+    } else {
+      providers = detected.map((d) => ({ name: d.name, keyEnv: d.keyEnv, apiKey: process.env[d.keyEnv] }));
+    }
+
+    const plan = buildSetupPlan({ tenantName: flags.name, agents, providers, monthlyBudgetUsd });
+    writeSetupPlan(plan, repoRoot, { force: Boolean(flags.force) });
+
+    process.stdout.write(`Setup complete — wrote ${Object.keys(plan.files).join(', ')} to ${repoRoot}\n`);
+    process.stdout.write(`Budget: $${monthlyBudgetUsd}/month → ${plan.budget.weeklyTokenCap.toLocaleString()} tokens/week (${plan.budget.token_cap_5h.toLocaleString()}/5h)\n`);
+    if (providers.length === 0) {
+      process.stdout.write('No providers auto-detected or specified — edit .env to add your API keys.\n');
+    } else {
+      process.stdout.write(`Providers: ${providers.map((p) => p.name).join(', ')}\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`Error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function handleSetupInteractive(flags) {
+  const { createInterface } = await import('node:readline');
+  const { buildSetupPlan, writeSetupPlan, detectExistingConfig, detectProviders, computeBudgetFromDollars } = await import('../setup-wizard-core.mjs');
+  const repoRoot = process.cwd();
+
+  const { exists } = detectExistingConfig(repoRoot);
+  if (exists && !flags.force) {
+    process.stderr.write('.ai/policy.yaml already exists. Re-run with --force to reconfigure, or --resume to continue a prior wizard session.\n');
+    process.exit(1);
+  }
+
+  const statePath = join(repoRoot, '.ai', 'setup-state.json');
+  let saved = {};
+  if (flags.resume && existsSync(statePath)) {
+    try { saved = JSON.parse(readFileSync(statePath, 'utf8')); } catch { /* corrupt/partial state — start fresh */ }
+  }
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q, def) => new Promise((resolve) => {
+    rl.question(def ? `${q} [${def}]: ` : `${q}: `, (answer) => resolve(answer.trim() || def || ''));
+  });
+  const saveProgress = (partial) => {
+    saved = { ...saved, ...partial };
+    try { writeFileSync(statePath, JSON.stringify(saved, null, 2)); } catch { /* best-effort resume state */ }
+  };
+
+  process.stdout.write('\nMeridianOS Setup Wizard\n\n');
+
+  const tenantName = await ask('Tenant name', saved.tenantName ?? 'My Tenant');
+  saveProgress({ tenantName });
+
+  const agentsRaw = await ask('Agent roster (comma-separated)', saved.agentsRaw ?? 'builder,reviewer');
+  const agents = agentsRaw.split(',').map((s) => s.trim()).filter(Boolean);
+  saveProgress({ agentsRaw });
+
+  const detected = detectProviders();
+  if (detected.length > 0) {
+    process.stdout.write(`Auto-detected providers (API key found in environment): ${detected.map((d) => d.name).join(', ')}\n`);
+  } else {
+    process.stdout.write('No providers auto-detected — set an API key env var (e.g. ANTHROPIC_API_KEY) and re-run, or edit .env after setup.\n');
+  }
+  const providers = detected.map((d) => ({ name: d.name, keyEnv: d.keyEnv, apiKey: process.env[d.keyEnv] }));
+
+  const budgetRaw = await ask('Monthly budget in USD', saved.budgetRaw ?? '100');
+  const monthlyBudgetUsd = Number(budgetRaw);
+  saveProgress({ budgetRaw });
+
+  const preview = computeBudgetFromDollars(monthlyBudgetUsd, agents.length || 1);
+  process.stdout.write(`\nReview:\n  Tenant: ${tenantName}\n  Agents: ${agents.join(', ')}\n  Providers: ${providers.map((p) => p.name).join(', ') || '(none — edit .env after setup)'}\n`);
+  process.stdout.write(`  Budget: $${monthlyBudgetUsd}/month → ${preview.weeklyTokenCap.toLocaleString()} tokens/week (${preview.token_cap_5h.toLocaleString()}/5h)\n`);
+  const confirm = await ask('Write these files? (y/n)', 'y');
+  rl.close();
+
+  if (confirm.toLowerCase() !== 'y') {
+    process.stdout.write('Cancelled — no files written. Re-run with --resume to continue from here.\n');
+    return;
+  }
+
+  const plan = buildSetupPlan({ tenantName, agents, providers, monthlyBudgetUsd });
+  writeSetupPlan(plan, repoRoot, { force: Boolean(flags.force) });
+  process.stdout.write(`\nSetup complete — wrote ${Object.keys(plan.files).join(', ')} to ${repoRoot}\n`);
 }
 
 // ─── Subcommand: project ───────────────────────────────────────────────────
@@ -770,6 +931,12 @@ async function main() {
   }
   if (args[0] === 'project') {
     return handleProjectCommand(args, flags);
+  }
+  if (args[0] === 'profile') {
+    return handleProfileCommand(args, flags);
+  }
+  if (args[0] === 'setup') {
+    return handleSetupCommand(args, flags);
   }
 
   // Handle --init before assembly

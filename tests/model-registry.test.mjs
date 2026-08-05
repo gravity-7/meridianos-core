@@ -61,6 +61,32 @@ describe('Model Registry (US4)', () => {
       assert.equal(model.context_window, 200000);
     });
 
+    it('accepts a literal boolean `deprecated: false` (every discovery adapter passes this shape, not 0/1)', () => {
+      // Regression: `modelData.deprecated ?? 0` let `false` through unconverted, and
+      // better-sqlite3 cannot bind a raw JS boolean — this threw for every real adapter.
+      upsertModel(db, 'anthropic', {
+        model_id: 'claude-boolean-regression',
+        display_name: 'Boolean Regression',
+        deprecated: false,
+      });
+
+      const model = findModel(db, 'anthropic', 'claude-boolean-regression');
+      assert.ok(model);
+      assert.equal(model.deprecated, 0);
+    });
+
+    it('accepts a literal boolean `deprecated: true`', () => {
+      upsertModel(db, 'anthropic', {
+        model_id: 'claude-boolean-regression-2',
+        display_name: 'Boolean Regression 2',
+        deprecated: true,
+      });
+
+      const model = findModel(db, 'anthropic', 'claude-boolean-regression-2');
+      assert.ok(model);
+      assert.equal(model.deprecated, 1);
+    });
+
     it('updates an existing model (upsert)', () => {
       upsertModel(db, 'anthropic', {
         model_id: 'claude-sonnet-5',
@@ -195,6 +221,28 @@ describe('Model Registry (US4)', () => {
       const result = findModel(db, 'openai', 'gpt-4o');
       assert.ok(result);
       assert.equal(result.model_id, 'gpt-4o');
+    });
+  });
+
+  describe('large model lists (spec.md edge case: OpenRouter 500+ models)', () => {
+    it('upserts, lists, and deprecates 600 models for a single provider without hitting a SQL bound-parameter limit', () => {
+      const total = 600;
+      for (let i = 0; i < total; i++) {
+        upsertModel(db, 'openrouter-scale', { model_id: `model-${i}`, context_window: 8192 });
+      }
+
+      const all = getModels(db, { provider: 'openrouter-scale' });
+      assert.equal(all.length, total);
+
+      // markUnseenAsDeprecated builds a `NOT IN (?,?,...)` clause with one placeholder per
+      // active id — must not exceed SQLite's bound-parameter limit even at OpenRouter scale.
+      const keepHalf = all.slice(0, total / 2).map((m) => m.model_id);
+      assert.doesNotThrow(() => markUnseenAsDeprecated(db, 'openrouter-scale', keepHalf));
+
+      const active = getModels(db, { provider: 'openrouter-scale', deprecated: false });
+      const deprecated = getModels(db, { provider: 'openrouter-scale', deprecated: true });
+      assert.equal(active.length, total / 2);
+      assert.equal(deprecated.length, total / 2);
     });
   });
 });

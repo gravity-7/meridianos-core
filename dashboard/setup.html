@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeridianOS Setup</title>
+<style>
+:root {
+  --surface-2: #ffffff; --surface-1: #f8fafc; --surface-0: #f1f5f9;
+  --text-primary: #0f172a; --text-secondary: #475569; --text-muted: #94a3b8;
+  --border: rgba(15, 23, 42, 0.08); --text-accent: #2563eb; --fill-accent: #3b82f6;
+  --text-danger: #dc2626; --bg-danger: #fef2f2; --text-success: #16a34a; --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-2: #1e293b; --surface-1: #0f172a; --surface-0: #020617;
+    --text-primary: #f1f5f9; --text-secondary: #cbd5e1; --text-muted: #64748b;
+    --border: rgba(255,255,255,0.08); --text-accent: #60a5fa; --fill-accent: #3b82f6;
+  }
+}
+body { font-family: -apple-system, system-ui, sans-serif; background: var(--surface-0); color: var(--text-primary); margin: 0; padding: 24px; }
+.wizard { max-width: 560px; margin: 40px auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+.step-label { font-size: 12px; color: var(--text-muted); margin-bottom: 20px; }
+label { display: block; font-size: 13px; margin-bottom: 6px; color: var(--text-secondary); }
+input, select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); color: var(--text-primary); font-size: 14px; margin-bottom: 16px; }
+button { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border); background: var(--fill-accent); color: white; cursor: pointer; font-size: 13px; }
+button.secondary { background: var(--surface-1); color: var(--text-primary); }
+.row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+.error { color: var(--text-danger); font-size: 13px; margin-top: 8px; }
+.hint { font-size: 11px; color: var(--text-muted); margin-top: -10px; margin-bottom: 14px; }
+pre { background: var(--surface-1); padding: 10px; border-radius: 6px; font-size: 11px; overflow: auto; max-height: 200px; }
+</style>
+</head>
+<body>
+<div class="wizard" id="wizard"></div>
+<script>
+const AIOS_TOKEN = "__AIOS_TOKEN__";
+(function () {
+  const _fetch = window.fetch;
+  window.fetch = (input, init = {}) => {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (url.startsWith('/')) { init = { ...init, headers: { ...(init.headers || {}), 'x-aios-token': AIOS_TOKEN } }; }
+    return _fetch(input, init);
+  };
+})();
+
+const STORAGE_KEY = 'meridian.setupWizard.state.v1';
+const STEPS = ['welcome', 'agents', 'providers', 'budget', 'review', 'done'];
+
+function loadState() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { step: 0, tenantName: 'My Tenant', agentsRaw: 'builder,reviewer', monthlyBudgetUsd: 100 }; }
+  catch { return { step: 0, tenantName: 'My Tenant', agentsRaw: 'builder,reviewer', monthlyBudgetUsd: 100 }; }
+}
+function saveState(s) { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+
+let state = loadState();
+let detected = null;
+
+async function init() {
+  const res = await fetch('/api/setup/status');
+  detected = await res.json();
+  if (detected.exists && !state.acknowledgedExisting) {
+    return renderExistingWarning();
+  }
+  render();
+}
+
+function renderExistingWarning() {
+  const el = document.getElementById('wizard');
+  el.innerHTML = `
+    <h1>Existing configuration found</h1>
+    <div class="step-label">This directory already has a .ai/policy.yaml.</div>
+    <p style="font-size:13px">Continuing will let you overwrite it at the final step (you'll be asked to confirm again before anything is written).</p>
+    <div class="row">
+      <button class="secondary" onclick="window.location.href='/'">Cancel — back to dashboard</button>
+      <button onclick="acknowledgeExisting()">Continue anyway</button>
+    </div>
+  `;
+}
+window.acknowledgeExisting = () => { state.acknowledgedExisting = true; saveState(state); render(); };
+
+function render() {
+  const step = STEPS[state.step];
+  if (step === 'welcome') return renderWelcome();
+  if (step === 'agents') return renderAgents();
+  if (step === 'providers') return renderProviders();
+  if (step === 'budget') return renderBudget();
+  if (step === 'review') return renderReview();
+  if (step === 'done') return renderDone();
+}
+
+function renderWelcome() {
+  document.getElementById('wizard').innerHTML = `
+    <h1>MeridianOS Setup</h1>
+    <div class="step-label">Step 1 of 5 — Tenant name</div>
+    <label for="tenantName">What should we call this installation?</label>
+    <input id="tenantName" value="${state.tenantName}">
+    <div class="row"><button onclick="nextFrom('welcome')">Next</button></div>
+  `;
+}
+function renderAgents() {
+  document.getElementById('wizard').innerHTML = `
+    <h1>Agent roster</h1>
+    <div class="step-label">Step 2 of 5</div>
+    <label for="agentsRaw">Comma-separated agent names</label>
+    <input id="agentsRaw" value="${state.agentsRaw}">
+    <div class="hint">These are the identities that will pick up and work tasks.</div>
+    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="nextFrom('agents')">Next</button></div>
+  `;
+}
+function renderProviders() {
+  const list = detected.providers.length
+    ? detected.providers.map((p) => `<li>${p.name} <span class="hint" style="margin:0">(${p.keyEnv} found in environment)</span></li>`).join('')
+    : '<li class="hint" style="margin:0">None auto-detected — set an API key env var (e.g. ANTHROPIC_API_KEY) and reload this page, or add one to .env after setup.</li>';
+  document.getElementById('wizard').innerHTML = `
+    <h1>Providers</h1>
+    <div class="step-label">Step 3 of 5 — auto-detected from your environment</div>
+    <ul style="font-size:13px;padding-left:18px">${list}</ul>
+    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="nextFrom('providers')">Next</button></div>
+  `;
+}
+function renderBudget() {
+  document.getElementById('wizard').innerHTML = `
+    <h1>Budget</h1>
+    <div class="step-label">Step 4 of 5</div>
+    <label for="monthlyBudgetUsd">Monthly budget (USD)</label>
+    <input id="monthlyBudgetUsd" type="number" min="1" value="${state.monthlyBudgetUsd}">
+    <div class="hint">Converted into weekly / 5-hour token caps on the review step — see the estimate's own note for the assumption used.</div>
+    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="nextFrom('budget')">Next</button></div>
+  `;
+}
+async function renderReview() {
+  const el = document.getElementById('wizard');
+  el.innerHTML = `<h1>Review</h1><div class="step-label">Step 5 of 5</div><div class="hint">Computing…</div>`;
+  const agents = state.agentsRaw.split(',').map((s) => s.trim()).filter(Boolean);
+  const res = await fetch('/api/setup/plan', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tenantName: state.tenantName, agents, providers: detected.providers, monthlyBudgetUsd: Number(state.monthlyBudgetUsd) }),
+  });
+  const body = await res.json();
+  if (!body.ok) {
+    el.innerHTML = `<h1>Review</h1><div class="error">${body.error}</div><div class="row"><button class="secondary" onclick="back()">Back</button></div>`;
+    return;
+  }
+  el.innerHTML = `
+    <h1>Review</h1>
+    <div class="step-label">Step 5 of 5</div>
+    <p style="font-size:13px">
+      Tenant: <b>${state.tenantName}</b><br>
+      Agents: <b>${agents.join(', ')}</b><br>
+      Providers: <b>${detected.providers.map((p) => p.name).join(', ') || '(none)'}</b><br>
+      Budget: <b>$${state.monthlyBudgetUsd}/month</b> → ${body.budget.weeklyTokenCap.toLocaleString()} tokens/week (${body.budget.token_cap_5h.toLocaleString()}/5h)
+    </p>
+    <pre>${Object.keys(body.files).join('\n')}</pre>
+    <div class="error" id="commitError"></div>
+    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="commit()">Write files</button></div>
+  `;
+}
+async function commit() {
+  const agents = state.agentsRaw.split(',').map((s) => s.trim()).filter(Boolean);
+  const res = await fetch('/api/setup/commit', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      tenantName: state.tenantName, agents, providers: detected.providers,
+      monthlyBudgetUsd: Number(state.monthlyBudgetUsd), force: Boolean(state.acknowledgedExisting),
+    }),
+  });
+  const body = await res.json();
+  if (!body.ok) {
+    document.getElementById('commitError').textContent = body.error;
+    return;
+  }
+  state.step = STEPS.indexOf('done');
+  saveState(state);
+  render();
+}
+function renderDone() {
+  localStorage.removeItem(STORAGE_KEY);
+  document.getElementById('wizard').innerHTML = `
+    <h1>Setup complete</h1>
+    <p style="font-size:13px">Your installation is ready.</p>
+    <div class="row"><button onclick="window.location.href='/'">Go to dashboard</button></div>
+  `;
+}
+
+function nextFrom(step) {
+  if (step === 'welcome') state.tenantName = document.getElementById('tenantName').value.trim() || 'My Tenant';
+  if (step === 'agents') {
+    const val = document.getElementById('agentsRaw').value.trim();
+    if (!val) { alert('At least one agent is required.'); return; }
+    state.agentsRaw = val;
+  }
+  if (step === 'budget') {
+    const val = Number(document.getElementById('monthlyBudgetUsd').value);
+    if (!(val > 0)) { alert('Budget must be a positive number.'); return; }
+    state.monthlyBudgetUsd = val;
+  }
+  state.step += 1;
+  saveState(state);
+  render();
+}
+function back() {
+  state.step -= 1;
+  saveState(state);
+  render();
+}
+
+init();
+</script>
+</body>
+</html>

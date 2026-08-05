@@ -368,3 +368,58 @@ test('openai adapter extractUsage: parses OpenAI usage format', async () => {
     cacheWriteTokens: null,
   });
 });
+
+// ─── Generic-HTTP adapter: best-effort dual-format extraction (spec.md 003 edge case) ─────
+// "What happens when a user configures a provider with wire: 'generic-http' but the provider
+// actually speaks an Anthropic-compatible format? The generic HTTP adapter should still attempt
+// best-effort usage extraction."
+
+test('generic-http adapter extractUsage: recognizes an Anthropic-shaped body despite the generic wire', async () => {
+  const adaptersDir = join(
+    (await import('node:path')).dirname((await import('node:url')).fileURLToPath(import.meta.url)),
+    '..', '..', 'wire-adapters',
+  );
+  const { existsSync } = await import('node:fs');
+  if (!existsSync(join(adaptersDir, 'generic-http.mjs'))) return;
+
+  const mod = await import(join(adaptersDir, 'generic-http.mjs'));
+  const adapter = mod.default ?? mod;
+
+  const usage = adapter.extractUsage({
+    usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 3, cache_creation_input_tokens: 1 },
+  });
+  assert.deepEqual(usage, { inputTokens: 10, outputTokens: 20, cacheReadTokens: 3, cacheWriteTokens: 1 });
+});
+
+test('generic-http adapter extractUsage: recognizes an OpenAI-shaped body despite the generic wire', async () => {
+  const adaptersDir = join(
+    (await import('node:path')).dirname((await import('node:url')).fileURLToPath(import.meta.url)),
+    '..', '..', 'wire-adapters',
+  );
+  const { existsSync } = await import('node:fs');
+  if (!existsSync(join(adaptersDir, 'generic-http.mjs'))) return;
+
+  const mod = await import(join(adaptersDir, 'generic-http.mjs'));
+  const adapter = mod.default ?? mod;
+
+  const usage = adapter.extractUsage({
+    usage: { prompt_tokens: 5, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 2 } },
+  });
+  assert.deepEqual(usage, { inputTokens: 5, outputTokens: 7, cacheReadTokens: 2, cacheWriteTokens: null });
+});
+
+test('generic-http adapter extractUsage: returns null (not fabricated zeros) for an unrecognized usage shape', async () => {
+  const adaptersDir = join(
+    (await import('node:path')).dirname((await import('node:url')).fileURLToPath(import.meta.url)),
+    '..', '..', 'wire-adapters',
+  );
+  const { existsSync } = await import('node:fs');
+  if (!existsSync(join(adaptersDir, 'generic-http.mjs'))) return;
+
+  const mod = await import(join(adaptersDir, 'generic-http.mjs'));
+  const adapter = mod.default ?? mod;
+
+  assert.equal(adapter.extractUsage({ usage: { totally_unknown_field: 1 } }), null);
+  assert.equal(adapter.extractUsage({}), null);
+  assert.equal(adapter.extractUsage(null), null);
+});
