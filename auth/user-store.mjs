@@ -105,6 +105,7 @@ export class UserStore {
         password_hash TEXT NOT NULL,
         full_name TEXT,
         role TEXT NOT NULL DEFAULT 'viewer',
+        github_username TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         last_login INTEGER,
@@ -171,7 +172,7 @@ export class UserStore {
    * @returns {Object} Created user
    */
   async createUser(userData) {
-    const { email, password, full_name } = userData;
+    const { email, password, full_name, role } = userData;
 
     // Validate email format
     if (!this.isValidEmail(email)) {
@@ -190,14 +191,26 @@ export class UserStore {
     // Generate UUID
     const id = crypto.randomUUID();
 
-    // Insert user
-    const stmt = this.db.prepare(`
-      INSERT INTO users (id, email, password_hash, full_name, created_at, updated_at, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, 1)
-    `);
+    // role defaults to the column's own DEFAULT 'viewer' when omitted — validated here (not just
+    // left to the DB) so a caller passing a typo'd role fails loudly instead of silently landing
+    // whatever SQLite happens to accept.
+    const VALID_ROLES = ['admin', 'operator', 'viewer'];
+    if (role !== undefined && !VALID_ROLES.includes(role)) {
+      throw new Error(`Invalid role '${role}' — must be one of ${VALID_ROLES.join(', ')}`);
+    }
 
     const now = Math.floor(Date.now() / 1000);
-    stmt.run(id, email.toLowerCase(), password_hash, full_name, now, now);
+    if (role) {
+      this.db.prepare(`
+        INSERT INTO users (id, email, password_hash, full_name, role, created_at, updated_at, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+      `).run(id, email.toLowerCase(), password_hash, full_name, role, now, now);
+    } else {
+      this.db.prepare(`
+        INSERT INTO users (id, email, password_hash, full_name, created_at, updated_at, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+      `).run(id, email.toLowerCase(), password_hash, full_name, now, now);
+    }
 
     return this.getUserById(id);
   }
@@ -255,7 +268,12 @@ export class UserStore {
    * @returns {Object|null} Updated user or null
    */
   updateUser(id, updates) {
-    const allowedFields = ['full_name', 'is_active'];
+    // github_username (008 — Team Collaboration, FR-014): needed to map a project member onto a
+    // real GitHub identity for PR reviewer auto-assignment (see control-plane.mjs's
+    // ReviewerAssigner) — no field authorization concern in letting a user set their own, unlike
+    // `role`/`is_active` which stay admin-only at the HTTP layer (see dashboard/server.mjs's
+    // handleUpdateCurrentUser, which only forwards full_name/github_username from a self-update).
+    const allowedFields = ['full_name', 'is_active', 'github_username'];
     const fields = [];
     const values = [];
 

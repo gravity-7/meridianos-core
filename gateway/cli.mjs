@@ -116,7 +116,7 @@ export function parseArgs(argv) {
  */
 export async function startCli(flags = {}) {
   const port = flags.port !== undefined ? Number(flags.port) : 0;
-  const tenant = flags.tenant ?? 'pv';
+  const tenant = flags.tenant ?? 'default';
   const policy = flags.policy && typeof flags.policy === 'string' ? loadPolicy(flags.policy) : {};
   const ledgerPath = typeof flags.ledger === 'string' ? flags.ledger : undefined;
 
@@ -133,7 +133,10 @@ export async function startCli(flags = {}) {
     return { detectedProviders, initConfigPath: configPath, token: null, registeredRun: null };
   }
 
-  const assembled = await assembleGateway({ policy, port, tenant, ledgerPath });
+  // Phase 7: Pass config to assembleGateway so it can load the pricing catalog
+  const { createAios } = await import('../config.mjs');
+  const { config } = createAios({ root: process.cwd() });
+  const assembled = await assembleGateway({ config, policy, port, tenant, ledgerPath });
 
   let token = null;
   let registeredRun = null;
@@ -272,7 +275,9 @@ async function handleProviderTest(subArgs, flags) {
   try {
     const { resolveProvider } = await import('../providers.mjs');
     const { testProviderConnection } = await import('../provider-conformance.mjs');
-    const policy = loadPolicy();
+    const { createAios } = await import('../config.mjs');
+    const { config } = createAios({ root: process.cwd() });
+    const policy = loadPolicy(undefined, config);
 
     const providerConfig = resolveProvider(providerName, policy);
     if (!providerConfig) {
@@ -301,7 +306,9 @@ async function handleProviderTest(subArgs, flags) {
 async function handleProviderAdd(flags) {
   try {
     const { runProviderWizard } = await import('../provider-wizard.mjs');
-    const policy = loadPolicy();
+    const { createAios } = await import('../config.mjs');
+    const { config } = createAios({ root: process.cwd() });
+    const policy = loadPolicy(undefined, config);
 
     if (flags.auto) {
       const result = await runProviderWizard({ interactive: false, auto: true, policy });
@@ -345,7 +352,9 @@ async function handleProviderList(flags) {
   try {
     const { resolveAllProviders } = await import('../providers.mjs');
     const { getProviderHealth } = await import('../provider-health.mjs');
-    const policy = loadPolicy();
+    const { createAios } = await import('../config.mjs');
+    const { config } = createAios({ root: process.cwd() });
+    const policy = loadPolicy(undefined, config);
     const providers = resolveAllProviders(policy);
     const healthMap = getProviderHealth();
 

@@ -95,11 +95,20 @@ async function startSystemTray() {
 
   let SysTray;
   try {
-    ({ default: SysTray } = await import('systray'));
+    // systray is a CJS package — its constructor sits at module.exports.default
+    // when imported via dynamic ESM import(), not at the top-level default.
+    const mod = await import('systray');
+    SysTray = mod.default?.default ?? mod.default ?? mod['module.exports']?.default;
+    if (typeof SysTray !== 'function') throw new TypeError(`SysTray is not a constructor (got ${typeof SysTray})`);
   } catch (err) {
     trayLogger.error('tray', 'systray package unavailable — skipping tray icon', err);
     return;
   }
+
+  // Keep a reference to the current menu so we can re-send it when only the icon changes.
+  // systray's valid sendAction types are: 'update-item', 'update-menu', 'update-menu-and-item'.
+  // There is no 'update-menu-icon' — icon updates must use 'update-menu' with the full menu.
+  const menuItems = TRAY_MENU_ITEMS.map((title) => ({ title, tooltip: title, checked: false, enabled: true }));
 
   let systray;
   try {
@@ -108,7 +117,7 @@ async function startSystemTray() {
         icon: getTrayIcon('yellow'), // unknown until the first health check completes
         title: 'MeridianOS',
         tooltip: 'MeridianOS',
-        items: TRAY_MENU_ITEMS.map((title) => ({ title, tooltip: title, checked: false, enabled: true })),
+        items: menuItems,
       },
       debug: false,
       copyDir: true,
@@ -130,14 +139,22 @@ async function startSystemTray() {
     const status = await classifyHealth({ port });
     if (status !== lastStatus) {
       lastStatus = status;
-      systray.sendAction({ type: 'update-menu-icon', icon: getTrayIcon(status) });
+      // Must send full menu with 'update-menu' — 'update-menu-icon' is not a valid action type
+      systray.sendAction({ type: 'update-menu', menu: { icon: getTrayIcon(status), title: 'MeridianOS', tooltip: 'MeridianOS', items: menuItems } });
       trayLogger.log('tray', `status changed → ${status}`);
     }
   }
-  await refreshIcon();
-  setInterval(refreshIcon, 15_000).unref();
 
-  trayLogger.log('tray', 'System tray icon started');
+  // Wait for the binary's 'ready' event before sending any updates.
+  // The constructor registers its OWN onReady listener first (sends the initial menu JSON).
+  // Our listener runs second — by then the binary's stdin has the initial menu queued,
+  // so the subsequent update-menu from refreshIcon() always arrives AFTER the initial menu.
+  // This eliminates the race condition that caused intermittent blank/unresponsive tray icons.
+  systray.onReady(() => {
+    refreshIcon().catch(() => {});
+    setInterval(refreshIcon, 15_000).unref();
+    trayLogger.log('tray', 'System tray icon started');
+  });
 }
 
 await startSystemTray();

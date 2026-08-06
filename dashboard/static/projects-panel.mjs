@@ -3,6 +3,10 @@
  * Displays project cards with status indicators and action buttons
  */
 
+// Guards the document-level action-button click delegate below so re-mounting this panel (e.g.
+// switching Admin sub-tabs away and back) never binds a second delegate and double-fires actions.
+let _actionListenerWired = false;
+
 export function renderProjectsPanel(projects = []) {
   return `
     <div class="projects-panel">
@@ -35,13 +39,7 @@ export function renderProjectsPanel(projects = []) {
             <div class="form-group">
               <label for="project-template">Template</label>
               <select id="project-template" name="template">
-                <option value="">Blank Project</option>
-                <option value="saas-web-app">SaaS Web Application</option>
-                <option value="mobile-app">Mobile Application</option>
-                <option value="cli-tool">CLI Tool</option>
-                <option value="library-sdk">Library/SDK</option>
-                <option value="documentation-site">Documentation Site</option>
-                <option value="data-pipeline">Data Pipeline</option>
+                <option value="">No template</option>
               </select>
             </div>
 
@@ -199,16 +197,45 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+/** Populates the Create Project modal's template <select> from the real template catalog
+ *  (GET /api/projects/templates) — this used to be a hardcoded list of template ids
+ *  (saas-web-app, mobile-app, ...) that didn't match any file the template loader actually
+ *  serves, so picking one silently created a blank project instead of applying it. */
+async function populateTemplateOptions() {
+  const select = document.getElementById('project-template');
+  if (!select) return;
+  try {
+    const response = await fetch('/api/projects/templates', {
+      headers: { 'Authorization': `Bearer ${getAuthToken()}` }
+    });
+    const result = await response.json();
+    if (!result.success) return;
+    const templates = result.templates || [];
+    select.innerHTML = '<option value="">No template</option>' +
+      templates.map((t) => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+  } catch (error) {
+    console.error('Failed to load templates for the create-project select:', error);
+  }
+}
+
 /**
  * Initialize projects panel event handlers
  */
 export function initProjectsPanel() {
+  // Populated on-demand by the two "Create Project" buttons below and by
+  // openCreateModalWithTemplate(), not unconditionally here — initProjectsPanel() runs twice per
+  // tab-open (once synchronously, once again inside loadProjects() once real data arrives), and
+  // firing the fetch both times let the two in-flight populate calls race: whichever resolved
+  // last would reset the <select> and silently wipe out a value set by openCreateModalWithTemplate.
+
   // Create project button
-  document.getElementById('create-project-btn')?.addEventListener('click', () => {
+  document.getElementById('create-project-btn')?.addEventListener('click', async () => {
+    await populateTemplateOptions();
     document.getElementById('create-project-modal').classList.remove('hidden');
   });
 
-  document.getElementById('create-first-project-btn')?.addEventListener('click', () => {
+  document.getElementById('create-first-project-btn')?.addEventListener('click', async () => {
+    await populateTemplateOptions();
     document.getElementById('create-project-modal').classList.remove('hidden');
   });
 
@@ -237,7 +264,7 @@ export function initProjectsPanel() {
 
       const result = await response.json();
 
-      if (result.ok) {
+      if (result.success) {
         document.getElementById('create-project-modal').classList.add('hidden');
         e.target.reset();
         loadProjects(); // Reload projects
@@ -249,6 +276,9 @@ export function initProjectsPanel() {
       showNotification('Failed to create project: ' + error.message, 'error');
     }
   });
+
+  if (_actionListenerWired) return;
+  _actionListenerWired = true;
 
   // Project action buttons
   document.addEventListener('click', async (e) => {
@@ -288,9 +318,9 @@ export function initProjectsPanel() {
 
       const result = await response.json();
 
-      if (result.ok) {
+      if (result.success) {
         if (action === 'health') {
-          showNotification(`Health: ${result.health.status}`, 'info');
+          showNotification(`Health: ${result.status}`, 'info');
         } else {
           showNotification(`Project ${action}ed successfully`, 'success');
           loadProjects(); // Reload projects
@@ -304,10 +334,24 @@ export function initProjectsPanel() {
   });
 }
 
+/** Opens the Create Project modal with a template pre-selected (used by templates-panel.mjs's
+ *  "Use Template" button, wired through admin-bootstrap.mjs since the two panels are separate
+ *  Admin sub-tabs and don't share a container at the time the button is clicked). Re-populates
+ *  the select itself rather than trusting initProjectsPanel()'s own (un-awaited, and possibly
+ *  still in-flight from the tab switch that just happened) populateTemplateOptions() call — a
+ *  <select>.value assignment to an id with no matching <option> yet silently no-ops instead of
+ *  throwing, so a race here would look like "Use Template" just does nothing. */
+export async function openCreateModalWithTemplate(templateId) {
+  await populateTemplateOptions();
+  const select = document.getElementById('project-template');
+  if (select) select.value = templateId;
+  document.getElementById('create-project-modal')?.classList.remove('hidden');
+}
+
 /**
  * Load projects from API
  */
-async function loadProjects() {
+export async function loadProjects() {
   try {
     const response = await fetch('/api/projects', {
       headers: {
@@ -317,7 +361,7 @@ async function loadProjects() {
 
     const result = await response.json();
 
-    if (result.ok) {
+    if (result.success) {
       const panel = document.querySelector('.projects-panel');
       if (panel) {
         panel.innerHTML = renderProjectsPanel(result.projects);

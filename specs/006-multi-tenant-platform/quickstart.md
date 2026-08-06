@@ -254,7 +254,7 @@ curl -X POST http://localhost:4317/api/projects/{project_id}/tasks/{task_id}/com
   -H "Authorization: Bearer $TEAMMATE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "body": "I'll review this task tomorrow."
+    "content": "I'll review this task tomorrow."
   }'
 ```
 
@@ -271,13 +271,13 @@ curl -X POST http://localhost:4317/api/projects/{project_id}/tasks/{task_id}/com
 
 ```bash
 # Verify invitation in database
-sqlite3 .ai/control-plane.db "SELECT email, role, accepted_at FROM invitations"
+sqlite3 .ai/control-plane.db "SELECT email, role, status, updated_at FROM invitations"
 
 # Verify activity feed
-sqlite3 .ai/control-plane.db "SELECT action, user_id, timestamp FROM activity_events ORDER BY timestamp DESC LIMIT 10"
+sqlite3 .ai/control-plane.db "SELECT action, user_id, timestamp FROM activity_log ORDER BY timestamp DESC LIMIT 10"
 
 # Verify task comment
-sqlite3 .ai/projects/{project_id}/state/aios.db "SELECT user_id, body FROM task_comments"
+sqlite3 .ai/projects/{project_id}/state/aios.db "SELECT user_id, content FROM task_comments"
 ```
 
 ---

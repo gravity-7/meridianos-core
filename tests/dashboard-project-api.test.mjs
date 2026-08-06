@@ -17,12 +17,14 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateToken } from '../auth/jwt.mjs';
 import { resolvePaths } from '../config.mjs';
+import { closeControlPlaneSingletonsAndWipeDb } from './helpers/wipe-control-plane.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,7 +47,12 @@ function ensureJwtSecret() {
   writeFileSync(JWT_SECRET_PATH, crypto.randomBytes(64).toString('hex'), { mode: 0o600 });
 }
 
-const config = resolvePaths({ domain: FIXTURE_DOMAIN });
+// Isolated repo root (like every sibling test file) so config-derived paths — db.mjs's aios.db,
+// daemon-logger.mjs's daemon.log, etc. — never touch this repo's real .ai/. This does NOT cover
+// control-plane.mjs's ProjectManager singleton or dashboard/server.mjs's REPORTS_DIR, both of which
+// resolve their paths off their own module location rather than the injected config — see the
+// after() cleanup below for those.
+const config = resolvePaths({ root: mkdtempSync(path.join(tmpdir(), 'aios-dash-api-')), domain: FIXTURE_DOMAIN });
 
 let server;
 let port;
@@ -67,6 +74,11 @@ after(async () => {
     const full = path.join(REPO_ROOT, '.ai', 'reports', filename);
     if (existsSync(full)) unlinkSync(full);
   }
+  // The GET/POST /api/projects and POST /api/compliance/reports/{soc2,gdpr} routes above go
+  // through control-plane.mjs's ProjectManager and audit-log.mjs's ActivityLogger + AuditLogger —
+  // see tests/helpers/wipe-control-plane.mjs for why these can't be redirected into the isolated
+  // `config` root above and have to be cleaned up for real instead.
+  await closeControlPlaneSingletonsAndWipeDb();
 });
 
 function request(method, pathname, { auth = true, body } = {}) {

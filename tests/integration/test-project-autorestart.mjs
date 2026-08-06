@@ -190,8 +190,9 @@ describe('Project Auto-Restart Integration Tests', () => {
     db.close();
 
     // Simulate restart attempt
-    db.prepare('UPDATE projects SET status = ? WHERE id = ?').run('restarting', project.id);
-    db.close();
+    const db2 = new Database(TEST_DB_PATH);
+    db2.prepare('UPDATE projects SET status = ? WHERE id = ?').run('restarting', project.id);
+    db2.close();
 
     const updated = projectManager.getProject(project.id);
     assert.strictEqual(updated.status, 'restarting');

@@ -189,6 +189,7 @@ export class ProjectManager {
       last_health_check: 'INTEGER',
       restart_count: 'INTEGER NOT NULL DEFAULT 0',
       last_restart: 'INTEGER',
+      updated_at: 'INTEGER',
     };
     for (const [column, definition] of Object.entries(requiredColumns)) {
       if (!existingColumns.has(column)) {
@@ -261,13 +262,18 @@ export class ProjectManager {
       }
     }
 
-    // Insert project
+    // Insert project. updated_at is required here even though ProjectManager itself never reads
+    // it — auth/user-store.mjs creates its own narrower `projects` table (same db, for its
+    // project_users/invitations FKs) with `updated_at INTEGER NOT NULL` and no default; whichever
+    // of the two constructors runs first wins the initial CREATE TABLE (see ensureSchema() above),
+    // so on that boot order this INSERT trips the NOT NULL constraint unless it's set explicitly.
+    const now = Math.floor(Date.now() / 1000);
     const stmt = this.db.prepare(`
-      INSERT INTO projects (id, name, status, template, config_path, state_path, port, created_at, created_by, health_status, restart_count)
-      VALUES (?, ?, 'stopped', ?, ?, ?, ?, ?, ?, 'unknown', 0)
+      INSERT INTO projects (id, name, status, template, config_path, state_path, port, created_at, updated_at, created_by, health_status, restart_count)
+      VALUES (?, ?, 'stopped', ?, ?, ?, ?, ?, ?, ?, 'unknown', 0)
     `);
 
-    stmt.run(id, name, template, config_path, state_path, port, Math.floor(Date.now() / 1000), created_by);
+    stmt.run(id, name, template, config_path, state_path, port, now, now, created_by);
 
     getActivityLogger().log({
       user_id: created_by,
@@ -845,4 +851,169 @@ export function getTemplateLoader() {
     templateLoaderInstance = new TemplateLoader();
   }
   return templateLoaderInstance;
+}
+
+/**
+ * ReviewerAssigner — round-robin PR reviewer assignment from a project's team roster (008 — Team
+ * Collaboration, US3/FR-014: "System MUST automatically assign PR reviewers from the team
+ * roster"). Referenced by runner.mjs (T122, already correctly `await import()`s this) and
+ * dashboard/server.mjs's /api/reviews/* routes since before either had anything to call — this
+ * class did not previously exist anywhere in the codebase.
+ *
+ * Fairness: prefers whoever was assigned longest ago (or never), computed from
+ * `reviewer_assignments` history — not pure random — so load spreads across the roster instead of
+ * always landing on the same person.
+ *
+ * GitHub identity: needs each candidate's `users.github_username` to call
+ * `gh pr edit --add-reviewer <username>` — nothing tracked this before (see auth/user-store.mjs's
+ * UserStore, which now creates the column; this class's ensureSchema() ALSO backfills it via
+ * ALTER TABLE, the same ProjectManager.ensureSchema()-established pattern, for the case where
+ * this class's constructor happens to run against a fresher control-plane.db before UserStore's
+ * does). A project member with no github_username set is excluded from the pool, never assigned
+ * under a fabricated identity.
+ */
+export class ReviewerAssigner {
+  constructor(dbPath = path.join(__dirname, '.ai', 'control-plane.db')) {
+    this.db = new Database(dbPath);
+    this.db.pragma('journal_mode = WAL');
+    this.ensureSchema();
+  }
+
+  ensureSchema() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS reviewer_assignments (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        pr_url TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_reviewer_assignments_project ON reviewer_assignments(project_id)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_reviewer_assignments_assignment_id ON reviewer_assignments(id)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_reviewer_assignments_user ON reviewer_assignments(user_id)`);
+
+    // See class doc comment — backfill users.github_username if this constructor runs before
+    // auth/user-store.mjs's UserStore has had a chance to create it as part of its own schema.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        full_name TEXT,
+        role TEXT NOT NULL DEFAULT 'viewer',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_login INTEGER,
+        is_active INTEGER NOT NULL DEFAULT 1
+      )
+    `);
+    const existingColumns = new Set(this.db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
+    if (!existingColumns.has('github_username')) {
+      this.db.exec(`ALTER TABLE users ADD COLUMN github_username TEXT`);
+    }
+  }
+
+  /**
+   * Assign up to `reviewerCount` reviewers to `prUrl` from `projectId`'s roster. Never errors for
+   * "not enough reviewers" — returns fewer than requested if the eligible pool is smaller; only
+   * fails when the pool is completely empty (no project member has a github_username set).
+   *
+   * @returns {Promise<{success:true, assignment_id:string, pr_url:string, reviewers:Array<{user_id:string,username:string}>, reviewer_count:number}|{success:false, error:string}>}
+   */
+  async assign(projectId, prUrl, reviewerCount = 2) {
+    if (!projectId) return { success: false, error: 'projectId is required' };
+    if (!prUrl) return { success: false, error: 'prUrl is required' };
+
+    const candidates = this.db.prepare(`
+      SELECT u.id AS user_id, u.github_username AS username,
+             (SELECT MAX(ra.created_at) FROM reviewer_assignments ra
+                WHERE ra.user_id = u.id AND ra.project_id = ?) AS last_assigned
+      FROM project_users pu
+      JOIN users u ON u.id = pu.user_id
+      WHERE pu.project_id = ? AND u.github_username IS NOT NULL AND u.is_active = 1
+      ORDER BY last_assigned IS NOT NULL, last_assigned ASC
+    `).all(projectId, projectId);
+
+    if (candidates.length === 0) {
+      return {
+        success: false,
+        error: 'no eligible reviewers: no project member has a GitHub username set (PUT /api/auth/me with { github_username })',
+      };
+    }
+
+    const selected = candidates.slice(0, Math.max(1, reviewerCount));
+    const assignmentId = crypto.randomUUID();
+    const now = Math.floor(Date.now() / 1000);
+    const insert = this.db.prepare(`
+      INSERT INTO reviewer_assignments (id, project_id, pr_url, user_id, username, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    for (const c of selected) {
+      insert.run(assignmentId, projectId, prUrl, c.user_id, c.username, now);
+    }
+
+    return {
+      success: true,
+      assignment_id: assignmentId,
+      pr_url: prUrl,
+      reviewers: selected.map((c) => ({ user_id: c.user_id, username: c.username })),
+      reviewer_count: selected.length,
+    };
+  }
+
+  /** Recent assignment EVENTS for `projectId`, newest first — one entry per assign() call (which
+   *  may cover several reviewers), not one row per reviewer. */
+  getRecentAssignments(projectId, limit = 10) {
+    const rows = this.db.prepare(`
+      SELECT id, project_id, pr_url, user_id, username, created_at
+      FROM reviewer_assignments
+      WHERE project_id = ?
+      ORDER BY created_at DESC
+    `).all(projectId);
+
+    const byAssignment = new Map();
+    for (const row of rows) {
+      if (!byAssignment.has(row.id)) {
+        byAssignment.set(row.id, {
+          assignment_id: row.id, project_id: row.project_id, pr_url: row.pr_url,
+          created_at: row.created_at, reviewers: [],
+        });
+      }
+      byAssignment.get(row.id).reviewers.push({ user_id: row.user_id, username: row.username });
+    }
+    return [...byAssignment.values()].slice(0, limit);
+  }
+
+  /** Per-reviewer assignment counts for `projectId`, most-assigned first — surfaces whether
+   *  round-robin fairness is actually holding up in practice. */
+  getAssignmentStats(projectId) {
+    const byReviewer = this.db.prepare(`
+      SELECT username, COUNT(*) AS assignment_count, MAX(created_at) AS last_assigned
+      FROM reviewer_assignments
+      WHERE project_id = ?
+      GROUP BY username
+      ORDER BY assignment_count DESC
+    `).all(projectId);
+
+    const totalEvents = this.db.prepare(`
+      SELECT COUNT(DISTINCT id) AS n FROM reviewer_assignments WHERE project_id = ?
+    `).get(projectId).n;
+
+    return { total_assignment_events: totalEvents, by_reviewer: byReviewer };
+  }
+
+  close() {
+    this.db.close();
+  }
+}
+
+let reviewerAssignerInstance = null;
+
+export function getReviewerAssigner() {
+  if (!reviewerAssignerInstance) {
+    reviewerAssignerInstance = new ReviewerAssigner();
+  }
+  return reviewerAssignerInstance;
 }

@@ -33,10 +33,14 @@ test('buildProviderRegistry omits the native anthropic provider from routes but 
 
 test('buildProviderRegistry routes deepseek via its openai-wire baseUrl (not anthropicBaseUrl)', () => {
   const reg = buildProviderRegistry({ policy: {}, now: NOW });
+  // deepseek ships with thinking:{effort:"high"} as its own providers.defaults.yaml default
+  // (DeepSeek's own recommendation) — see the off-by-default coverage below, which uses
+  // openrouter (no such default) to isolate the no-policy-overlay case instead.
   assert.deepEqual(reg.routes.deepseek, {
     upstreamUrl: 'https://api.deepseek.com',
     wire: 'openai',
     keyEnv: 'DEEPSEEK_KEY',
+    thinking: { effort: 'high' },
   });
 });
 
@@ -54,10 +58,13 @@ test('buildProviderRegistry routes an anthropic-wire BYO provider via anthropicB
   // has wire:'anthropic', and it's native) — overlay deepseek's wire to exercise it instead.
   const policy = { providers: { deepseek: { wire: 'anthropic' } } };
   const reg = buildProviderRegistry({ policy, now: NOW });
+  // deepseek's own providers.defaults.yaml default (thinking:{effort:"high"}) still applies here
+  // — this overlay only touches `wire`, so it merges on top rather than replacing it.
   assert.deepEqual(reg.routes.deepseek, {
     upstreamUrl: 'https://api.deepseek.com/anthropic',
     wire: 'anthropic',
     keyEnv: 'DEEPSEEK_KEY',
+    thinking: { effort: 'high' },
   });
 });
 
@@ -76,12 +83,15 @@ test('buildProviderRegistry carries a boolean thinking overlay through unchanged
 });
 
 test('buildProviderRegistry omits thinking from the route when no policy overlay sets it (byte-identical to before)', () => {
+  // deepseek now ships its own providers.defaults.yaml thinking default (see the routing tests
+  // above), so it can't isolate "no policy overlay" anymore — openrouter has no such default,
+  // so it's the one exercising the original off-by-default behavior here.
   const reg = buildProviderRegistry({ policy: {}, now: NOW });
-  assert.equal('thinking' in reg.routes.deepseek, false);
-  assert.deepEqual(reg.routes.deepseek, {
-    upstreamUrl: 'https://api.deepseek.com',
+  assert.equal('thinking' in reg.routes.openrouter, false);
+  assert.deepEqual(reg.routes.openrouter, {
+    upstreamUrl: 'https://openrouter.ai/api/v1',
     wire: 'openai',
-    keyEnv: 'DEEPSEEK_KEY',
+    keyEnv: 'OPENROUTER_KEY',
   });
 });
 

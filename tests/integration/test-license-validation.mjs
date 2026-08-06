@@ -1,4 +1,4 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, mock } from 'node:test';
 import assert from 'node:assert';
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
@@ -36,6 +36,25 @@ describe('License Validation Integration Tests', () => {
       CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key);
       CREATE INDEX IF NOT EXISTS idx_licenses_tier ON licenses(tier);
       CREATE INDEX IF NOT EXISTS idx_licenses_status ON licenses(status);
+    `);
+
+    // LicenseValidator.getLimits() counts rows in these control-plane tables
+    // (see control-plane-schema.sql), so they must exist even in this
+    // licenses-focused test database.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'stopped',
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
 
     // Initialize license validator
@@ -226,10 +245,20 @@ describe('License Validation Integration Tests', () => {
       assert.ok(result.error);
     });
 
-    it('should update last_validated timestamp', async () => {
-      const result1 = licenseValidator.validate(testLicenseKey);
-      await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
-      const result2 = licenseValidator.validate(testLicenseKey);
+    it('should update last_validated timestamp', () => {
+      const result1 = licenseValidator.validate(testLicenseKey, { force_refresh: true });
+
+      // last_validated has 1-second resolution (Math.floor(Date.now() / 1000)),
+      // so a real-time delay here would need to be >1s to reliably cross a
+      // second boundary. Mock the clock instead so the second validate() call
+      // deterministically lands a full second later.
+      mock.timers.enable({ apis: ['Date'], now: Date.now() });
+      try {
+        mock.timers.tick(2000);
+        licenseValidator.validate(testLicenseKey, { force_refresh: true });
+      } finally {
+        mock.timers.reset();
+      }
 
       const stored = db.prepare('SELECT last_validated FROM licenses WHERE id = ?').get(result1.license_id);
       assert.ok(stored.last_validated > result1.last_validated);
@@ -276,6 +305,13 @@ describe('License Validation Integration Tests', () => {
   });
 
   describe('LicenseValidator.getLimits()', () => {
+    before(() => {
+      // The preceding checkFeature() block ends by deleting all rows from
+      // licenses, so re-validate the pro license here rather than relying on
+      // state left behind by sibling describe blocks.
+      licenseValidator.validate(testLicenseKey, { force_refresh: true });
+    });
+
     it('should return limits for pro tier', () => {
       const result = licenseValidator.getLimits();
 
@@ -319,17 +355,16 @@ describe('License Validation Integration Tests', () => {
 
   describe('License caching', () => {
     it('should cache validation result for 24 hours', () => {
-      const startTime = Date.now();
-      const result1 = licenseValidator.validate(testLicenseKey);
-      const midTime = Date.now();
+      // Comparing wall-clock durations between two sub-millisecond calls is
+      // inherently flaky (JIT/GC noise can make the "cached" call look
+      // slower). Assert on the from_cache flag the API already returns
+      // instead.
+      const result1 = licenseValidator.validate(testLicenseKey, { force_refresh: true });
       const result2 = licenseValidator.validate(testLicenseKey);
-      const endTime = Date.now();
 
-      // Second validation should be faster (from cache)
-      const firstDuration = midTime - startTime;
-      const secondDuration = endTime - midTime;
-
-      assert.ok(secondDuration < firstDuration);
+      assert.strictEqual(result1.from_cache, false);
+      assert.strictEqual(result2.from_cache, true);
+      assert.strictEqual(result2.license_id, result1.license_id);
     });
 
     it('should bypass cache when force_refresh is true', () => {

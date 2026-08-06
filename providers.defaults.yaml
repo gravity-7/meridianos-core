@@ -31,6 +31,12 @@ providers:
     wire: openai
     baseUrl: "https://api.deepseek.com"
     keyEnv: DEEPSEEK_KEY
+    # Per DeepSeek docs: reasoning_effort="high" + thinking: { type: "enabled" }
+    # The gateway injects both automatically (gateway/server.mjs applyThinkingToBody).
+    # Override effort per tier by setting thinking.effort in policy.yaml, or set
+    # thinking: null to disable entirely for this provider.
+    thinking:
+      effort: "high"
     auth:
       mode: env
       headerPrefix: "Bearer "

@@ -329,6 +329,19 @@ test('`models list` resolves a real config via createAios and exits 0 (was: Type
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('`provider list` resolves a real config via createAios and exits 0 (was: TypeError on config.policyPath)', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cli-provider-'));
+  const aiDir = join(tmpDir, '.ai');
+  mkdirSync(aiDir, { recursive: true });
+  writeFileSync(join(aiDir, 'policy.yaml'), 'agents: [agent-a, agent-b]\n');
+
+  const { code, stdout, stderr } = await runCliSubcommand(['provider', 'list'], { cwd: tmpDir });
+  assert.equal(code, 0, `expected clean exit; stderr=${stderr}`);
+  assert.match(stdout, /^Providers:/);
+
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
 // ─── `setup --init` (008 — End-User Configurability, US3) ──────────────────
 // Independent Test from spec.md: `node cli.mjs setup --init --providers deepseek --budget 50`
 // writes policy.yaml/.env with no prompts, matching what the interactive path would produce.

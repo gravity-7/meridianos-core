@@ -40,7 +40,6 @@ function renderEmptyState() {
 }
 
 function renderPluginCard(plugin) {
-  const stars = '★'.repeat(Math.round(plugin.rating ?? 0)) + '☆'.repeat(5 - Math.round(plugin.rating ?? 0));
   return `
     <div class="plugin-card" data-plugin-id="${plugin.id}">
       <div class="plugin-card-header">
@@ -50,7 +49,7 @@ function renderPluginCard(plugin) {
       <p class="plugin-description">${escapeHtml(plugin.description ?? '')}</p>
       <div class="plugin-meta">
         <span class="plugin-author">by ${escapeHtml(plugin.author ?? 'Unknown')}</span>
-        <span class="plugin-rating" title="${plugin.rating ?? 0} / 5">${stars}</span>
+        ${renderRating(plugin)}
         <span class="plugin-installs">${plugin.install_count ?? 0} installs</span>
       </div>
       <div class="plugin-actions">
@@ -61,6 +60,18 @@ function renderPluginCard(plugin) {
       </div>
     </div>
   `;
+}
+
+/** Built-in plugins get a static rating display; community plugins (published via
+ *  `node cli.mjs plugin publish`) get a clickable widget so a viewer can rate them
+ *  (POST /api/plugins/:id/rate — see the rate-star handler in initMarketplacePanel). */
+function renderRating(plugin) {
+  if (plugin.built_in) {
+    const stars = '★'.repeat(Math.round(plugin.rating ?? 0)) + '☆'.repeat(5 - Math.round(plugin.rating ?? 0));
+    return `<span class="plugin-rating" title="${plugin.rating ?? 0} / 5">${stars}</span>`;
+  }
+  const widgetStars = [1, 2, 3, 4, 5].map((n) => `<span class="rate-star" data-plugin-id="${plugin.id}" data-stars="${n}">${n <= Math.round(plugin.rating ?? 0) ? '★' : '☆'}</span>`).join('');
+  return `<span class="plugin-rating-widget" title="Rate this plugin">${widgetStars}</span>`;
 }
 
 function escapeHtml(text) {
@@ -87,12 +98,36 @@ async function reloadPanel() {
   const panel = document.querySelector('.marketplace-panel');
   if (panel && result.ok) {
     panel.outerHTML = renderMarketplacePanel(result.plugins);
-    initMarketplacePanel();
+    wireModalClose();
   }
 }
 
+/** Fetch the plugin catalog and render+wire it into `container` — the entry point admin-bootstrap.mjs
+ *  calls when the Marketplace sub-tab is selected. */
+export async function mountMarketplacePanel(container) {
+  const result = await api('/api/plugins');
+  container.innerHTML = renderMarketplacePanel(result.ok ? result.plugins : []);
+  initMarketplacePanel();
+}
+
+// Guards the document-level delegate below so re-mounting this panel (e.g. switching Admin
+// sub-tabs away and back, or reloadPanel() re-rendering after an action) never binds a second
+// delegate — each installed/enabled/etc. click would otherwise fire once per prior binding.
+let _delegateWired = false;
+
 export function initMarketplacePanel() {
+  if (_delegateWired) return wireModalClose();
+  _delegateWired = true;
+
   document.addEventListener('click', async (e) => {
+    if (e.target.classList.contains('rate-star')) {
+      const pluginId = e.target.dataset.pluginId;
+      const stars = Number(e.target.dataset.stars);
+      await api(`/api/plugins/${pluginId}/rate`, { method: 'POST', body: { stars } });
+      await reloadPanel();
+      return;
+    }
+
     const id = e.target.dataset?.pluginId;
     if (!id) return;
 
@@ -114,6 +149,10 @@ export function initMarketplacePanel() {
     }
   });
 
+  wireModalClose();
+}
+
+function wireModalClose() {
   document.querySelectorAll('.modal-close').forEach((btn) => {
     btn.addEventListener('click', () => document.getElementById('plugin-config-modal')?.classList.add('hidden'));
   });

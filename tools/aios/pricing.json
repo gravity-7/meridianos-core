@@ -1,0 +1,12 @@
+{
+  "deepseek": {
+    "deepseek-chat": {
+      "inputPerM": 0.27,
+      "outputPerM": 1.10
+    },
+    "deepseek-reasoner": {
+      "inputPerM": 0.55,
+      "outputPerM": 2.19
+    }
+  }
+}

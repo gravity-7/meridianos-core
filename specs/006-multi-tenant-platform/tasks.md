@@ -22,7 +22,9 @@
 
 - [X] T001 Create multi-tenant platform directory structure (auth/, licensing/, compliance/, templates/, deploy/kubernetes/)
 - [X] T002 Install Stripe SDK as single additional dependency (npm install stripe)
-- [X] T003 [P] Create control plane database schema with projects, users, project_users, api_tokens, invitations, licenses, activity_events tables
+- [X] T003 [P] Create control plane database schema with projects, users, project_users, api_tokens, invitations, licenses, activity_log tables (table
+  is named `activity_log`, not `activity_events` as originally planned — see schema/control-plane-schema.sql's
+  2026-08 reconciliation note; the running code never created an `activity_events` table)
 - [X] T004 [P] Extend gateway ledger schema with tenant, user_id, project_id columns and create audit_log table
 - [X] T005 [P] Create project database schema template for task_comments table
 - [X] T006 [P] Initialize .ai/control-plane.db with schema and indexes
@@ -408,25 +410,25 @@ Phase 1 (Setup) → Phase 2 (Foundational) → [US1, US2, US5] (P1 - MVP) → [U
 
 **Purpose**: Close gaps between specification, plan, tasks, and current implementation
 
-- [ ] T104 [P] [US3] Implement InvitationManager.create() in auth/user-store.mjs (generate token, send email) per FR-011 (missing)
-- [ ] T105 [P] [US3] Implement InvitationManager.accept() in auth/user-store.mjs (validate token, create user, add to project) per US3/AC1 (missing)
-- [ ] T106 [P] [US3] Implement InvitationManager.validate() in auth/user-store.mjs (check expiration, status) per FR-011 (missing)
-- [ ] T107 [P] [US3] Implement ActivityLogger.log() in compliance/audit-log.mjs (append to audit_log table) per FR-012 (missing)
-- [ ] T108 [P] [US3] Implement ActivityLogger.query() in compliance/audit-log.mjs (filter by user/project/action/date) per US3/AC2 (missing)
-- [ ] T109 [P] [US3] Implement TaskComment.create() in project database (add comment to task) per FR-013 (missing)
-- [ ] T110 [P] [US3] Implement TaskComment.list() in project database (get comments for task) per FR-013 (missing)
-- [ ] T111 [P] [US3] Implement ReviewerAssigner.assign() in control-plane.mjs (round-robin from team roster) per FR-014 (missing)
-- [ ] T112 [P] [US3] Implement POST /api/auth/invitations endpoint in dashboard/server.mjs (create invitation) per US3/AC1 (missing)
-- [ ] T113 [P] [US3] Implement POST /api/auth/invitations/{token}/accept endpoint in dashboard/server.mjs (accept invitation) per US3/AC1 (missing)
-- [ ] T114 [P] [US3] Implement GET /api/projects/{id}/members endpoint in dashboard/server.mjs (list project members) per FR-008 (missing)
-- [ ] T115 [P] [US3] Implement POST /api/projects/{id}/members endpoint in dashboard/server.mjs (add member) per FR-008 (missing)
-- [ ] T116 [P] [US3] Implement PUT /api/projects/{id}/members/{user_id} endpoint in dashboard/server.mjs (update member role) per FR-008 (missing)
-- [ ] T117 [P] [US3] Implement DELETE /api/projects/{id}/members/{user_id} endpoint in dashboard/server.mjs (remove member) per FR-008 (missing)
-- [ ] T118 [P] [US3] Implement GET /api/projects/{id}/activity endpoint in dashboard/server.mjs (activity feed) per US3/AC2 (missing)
-- [ ] T119 [P] [US3] Implement POST /api/projects/{id}/tasks/{task_id}/comments endpoint in dashboard/server.mjs (add comment) per US3/AC3 (missing)
-- [ ] T120 [US3] Create team panel UI in dashboard/static/team-panel.mjs (member list, invitation form, activity feed) per US3/AC2 (missing)
-- [ ] T121 [US3] Add task comment UI to dashboard task detail panel per US3/AC3 (missing)
-- [ ] T122 [US3] Implement PR review assignment in runner.mjs (auto-assign reviewer on PR creation) per US3/AC4 (missing)
+- [X] T104 [P] [US3] Implement InvitationManager.create() in auth/user-store.mjs (generate token, send email) per FR-011 (missing)
+- [X] T105 [P] [US3] Implement InvitationManager.accept() in auth/user-store.mjs (validate token, create user, add to project) per US3/AC1 (missing)
+- [X] T106 [P] [US3] Implement InvitationManager.validate() in auth/user-store.mjs (check expiration, status) per FR-011 (missing)
+- [X] T107 [P] [US3] Implement ActivityLogger.log() in compliance/audit-log.mjs (append to audit_log table) per FR-012 (missing)
+- [X] T108 [P] [US3] Implement ActivityLogger.query() in compliance/audit-log.mjs (filter by user/project/action/date) per US3/AC2 (missing)
+- [X] T109 [P] [US3] Implement TaskComment.create() in project database (add comment to task) per FR-013 (missing)
+- [X] T110 [P] [US3] Implement TaskComment.list() in project database (get comments for task) per FR-013 (missing)
+- [X] T111 [P] [US3] Implement ReviewerAssigner.assign() in control-plane.mjs (round-robin from team roster) per FR-014 (missing)
+- [X] T112 [P] [US3] Implement POST /api/auth/invitations endpoint in dashboard/server.mjs (create invitation) per US3/AC1 (missing)
+- [X] T113 [P] [US3] Implement POST /api/auth/invitations/{token}/accept endpoint in dashboard/server.mjs (accept invitation) per US3/AC1 (missing)
+- [X] T114 [P] [US3] Implement GET /api/projects/{id}/members endpoint in dashboard/server.mjs (list project members) per FR-008 (missing)
+- [X] T115 [P] [US3] Implement POST /api/projects/{id}/members endpoint in dashboard/server.mjs (add member) per FR-008 (missing)
+- [X] T116 [P] [US3] Implement PUT /api/projects/{id}/members/{user_id} endpoint in dashboard/server.mjs (update member role) per FR-008 (missing)
+- [X] T117 [P] [US3] Implement DELETE /api/projects/{id}/members/{user_id} endpoint in dashboard/server.mjs (remove member) per FR-008 (missing)
+- [X] T118 [P] [US3] Implement GET /api/projects/{id}/activity endpoint in dashboard/server.mjs (activity feed) per US3/AC2 (missing)
+- [X] T119 [P] [US3] Implement POST /api/projects/{id}/tasks/{task_id}/comments endpoint in dashboard/server.mjs (add comment) per US3/AC3 (missing)
+- [X] T120 [US3] Create team panel UI in dashboard/static/team-panel.mjs (member list, invitation form, activity feed) per US3/AC2 (missing)
+- [X] T121 [US3] Add task comment UI to dashboard task detail panel per US3/AC3 (missing)
+- [X] T122 [US3] Implement PR review assignment in runner.mjs (auto-assign reviewer on PR creation) per US3/AC4 (missing)
 - [X] T123 [P] [US4] Integration test for template loading and validation in tests/integration/test-project-templates.mjs per US4 (missing)
 - [X] T124 [P] [US4] Integration test for template-based project creation in tests/integration/test-template-creation.mjs per US4 (missing)
 - [X] T125 [P] [US4] Create templates/saas-web-app.yaml (3 agents: builder/reviewer/designer, 7 categories) per US4/AC1 (missing)
