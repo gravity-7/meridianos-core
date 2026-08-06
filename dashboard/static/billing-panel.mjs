@@ -1,8 +1,9 @@
 /**
  * Billing Panel - Subscription management UI
- * 
+ *
  * Displays license status, upgrade CTAs, and subscription management
  */
+import { authFetch } from './auth-client.mjs';
 
 export function renderBillingPanel() {
   return `
@@ -36,7 +37,13 @@ async function loadBillingInfo() {
   const error = document.getElementById('billing-error');
 
   try {
-    const response = await fetch('/api/billing/license');
+    const response = await authFetch('/api/billing/license');
+    if (!response) {
+      content.innerHTML = renderFreeTier();
+      error.textContent = 'Your session expired — switch tabs and sign back in to see your real billing status.';
+      error.style.display = 'block';
+      return;
+    }
     const data = await response.json();
 
     if (data.success) {
@@ -190,7 +197,8 @@ document.addEventListener('click', async (e) => {
 
 async function openCustomerPortal() {
   try {
-    const response = await fetch('/api/billing/portal');
+    const response = await authFetch('/api/billing/portal');
+    if (!response) return alert('Your session expired — switch tabs and sign back in.');
     const data = await response.json();
 
     if (data.success) {
@@ -205,9 +213,10 @@ async function openCustomerPortal() {
 
 async function refreshLicense() {
   try {
-    const response = await fetch('/api/billing/license/refresh', {
+    const response = await authFetch('/api/billing/license/refresh', {
       method: 'POST'
     });
+    if (!response) return alert('Your session expired — switch tabs and sign back in.');
     const data = await response.json();
 
     if (data.success) {
@@ -223,7 +232,7 @@ async function refreshLicense() {
 
 async function startCheckout(tier) {
   try {
-    const response = await fetch('/api/billing/checkout', {
+    const response = await authFetch('/api/billing/checkout', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -233,6 +242,7 @@ async function startCheckout(tier) {
         seats: 1
       })
     });
+    if (!response) return alert('Your session expired — switch tabs and sign back in.');
     const data = await response.json();
 
     if (data.success) {

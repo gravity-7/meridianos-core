@@ -40,7 +40,7 @@ function assertKeyEnvGuarantee(reg) {
  * policy overlay (via resolveProvider — this never reforks that resolution logic). `now` is
  * injectable so `generatedAt` is deterministic in tests.
  */
-export function buildProviderRegistry({ policy, config, tenant = 'pv', version = 1, now = Date.now() }) {
+export function buildProviderRegistry({ policy, config, tenant = 'default', version = 1, now = Date.now() }) {
   const providers = {};
   const routes = {};
 

@@ -434,6 +434,132 @@ button:active { transform: translateY(0); box-shadow: none; }
 .workspace-panel-status { font-size: 11px; color: var(--text-muted); margin-top: 6px; min-height: 14px; }
 .workspace-lever-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; }
 .workspace-litegraph-canvas { width: 100%; height: 100%; border-radius: 6px; }
+
+/* 008 — Team Collaboration (US3): team-panel.mjs / task-comments.mjs style using this
+   dashboard's own design tokens instead of the Bootstrap-ish classes those modules were
+   originally authored against (.btn/.btn-primary/.modal/.form-group had no matching rules
+   anywhere in this file — they'd have rendered completely unstyled). */
+.btn-primary { background: var(--fill-accent); color: #fff; border-color: var(--fill-accent); }
+.btn-danger { background: var(--fill-danger); color: #fff; border-color: var(--fill-danger); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.panel-header h2 { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin: 0; }
+.empty-state, .empty-state-sm { text-align: center; color: var(--text-muted); padding: 1.5rem 0; }
+.empty-state .empty-icon { font-size: 28px; margin-bottom: 6px; }
+.member-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.member-card:last-child { border-bottom: 0; }
+.member-info { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.member-avatar { flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; background: var(--bg-accent); color: var(--text-accent); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+.member-details h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.member-email { margin: 2px 0 0; font-size: 12px; color: var(--text-muted); }
+.member-meta { font-size: 12px; color: var(--text-secondary); text-transform: capitalize; }
+.member-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.activity-item { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.activity-item:last-child { border-bottom: 0; }
+.activity-time { color: var(--text-muted); white-space: nowrap; }
+.activity-content { display: flex; gap: 6px; flex-wrap: wrap; }
+.activity-user { font-weight: 600; }
+.activity-action { color: var(--text-secondary); }
+.modal.hidden { display: none; }
+.modal:not(.hidden) { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.modal-content { background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 16px; box-shadow: var(--shadow-lg); width: 100%; max-width: 420px; }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }
+.modal-header h3 { margin: 0; font-size: 14px; }
+.modal-body { padding: 1rem 1.25rem; }
+.form-group { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
+.form-group label { font-size: 12px; color: var(--text-secondary); }
+.form-group input, .form-group select { width: 100%; }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.close-btn { background: transparent; border: none; box-shadow: none; font-size: 16px; padding: 2px 6px; }
+.comments-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.comment-item { padding: 8px 10px; background: var(--surface-1); border-radius: 8px; }
+.comment-header { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+.comment-author { font-weight: 600; color: var(--text-secondary); }
+.comment-body { font-size: 13px; white-space: pre-wrap; }
+.add-comment-box textarea { width: 100%; min-height: 60px; resize: vertical; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-1); color: var(--text-primary); font-family: inherit; font-size: 13px; padding: 8px 10px; margin-bottom: 8px; }
+.comment-actions { display: flex; justify-content: flex-end; }
+.auth-prompt input { padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-2); }
+
+/* Admin workspace (projects-panel.mjs / templates-panel.mjs / api-keys-panel.mjs /
+   billing-panel.mjs / compliance-panel.mjs / marketplace-panel.mjs) — same Bootstrap-ish class
+   names those modules were authored against (.btn-secondary/.detail-row/etc, no matching rules
+   anywhere in this file previously), reusing this dashboard's own design tokens like the Team
+   panel CSS above. */
+.admin-tab-btn.active { background: var(--fill-accent); color: #fff; border-color: var(--fill-accent); }
+.btn-secondary { background: var(--surface-1); }
+.btn-success { background: var(--bg-success); color: var(--text-success); border-color: rgba(22, 163, 74, 0.3); }
+.btn-warning { background: var(--bg-warning); color: var(--text-warning); border-color: rgba(217, 119, 6, 0.3); }
+.btn-info { background: var(--bg-accent); color: var(--text-accent); border-color: rgba(59, 130, 246, 0.3); }
+.icon { font-weight: 600; margin-right: 2px; }
+.loading, .error-message { padding: 1rem 0; color: var(--text-muted); font-size: 13px; }
+.error-message { color: var(--text-danger); }
+.empty-state-icon { font-size: 28px; margin-bottom: 6px; }
+.grid-2col { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+
+/* Projects */
+.projects-grid, .templates-grid, .marketplace-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 12px; }
+.project-card, .template-card, .plugin-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
+.project-header, .plugin-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.project-name, .project-header h3, .plugin-card-header h3, .template-card h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.project-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.badge.status, .badge.health, .badge.scope-admin, .badge.scope-operator, .badge.scope-viewer, .badge.scope-unknown, .badge.active, .badge.revoked, .tier-badge {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 999px; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.04em;
+  background: var(--surface-0); color: var(--text-secondary); border: 1px solid var(--border);
+}
+.badge.status.success, .badge.health.success, .badge.active, .tier-badge.tier-pro, .tier-badge.tier-enterprise { background: var(--bg-success); color: var(--text-success); border-color: rgba(22, 163, 74, 0.2); }
+.badge.status.warning, .badge.health.warning, .badge.status.restarting { background: var(--bg-warning); color: var(--text-warning); border-color: rgba(217, 119, 6, 0.2); }
+.badge.status.danger, .badge.health.danger, .badge.revoked { background: var(--bg-danger); color: var(--text-danger); border-color: rgba(220, 38, 38, 0.2); }
+.badge.scope-admin { background: var(--bg-danger); color: var(--text-danger); border-color: rgba(220, 38, 38, 0.2); }
+.badge.scope-operator { background: var(--bg-accent); color: var(--text-accent); border-color: rgba(59, 130, 246, 0.2); }
+.tier-badge.tier-free { background: var(--surface-0); color: var(--text-muted); }
+.project-details, .token-details { margin: 10px 0; display: flex; flex-direction: column; gap: 4px; }
+.detail-row, .detail-item { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
+.detail-row .label, .detail-item .label { color: var(--text-muted); }
+.detail-row.warning { color: var(--text-warning); }
+.project-actions, .plugin-actions, .token-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.template-meta { display: flex; gap: 6px; margin-top: 4px; }
+
+/* API keys */
+.api-keys-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.token-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.85rem 1rem; }
+.token-name { font-size: 13px; font-weight: 600; }
+.token-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.token-id { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+.token-display { display: flex; align-items: center; gap: 8px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin: 10px 0; }
+.token-display code { flex: 1; font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
+.warning { color: var(--text-warning); font-size: 12px; }
+
+/* Billing */
+.license-header, .tier-badge { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.license-key { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
+.license-details { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.usage-metrics, .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 8px; }
+.metric { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.metric-label { font-size: 11px; color: var(--text-muted); }
+.metric-value { font-size: 18px; font-weight: 600; margin-top: 2px; }
+.metric-bar { height: 5px; background: var(--surface-0); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+.metric-fill { display: block; height: 100%; background: var(--fill-accent); }
+.feature-item { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.feature-icon { color: var(--text-success); }
+.billing-actions, .usage-section, .features-section, .upgrade-section, .enterprise-section { margin-top: 14px; }
+.features-list, .pro-features { list-style: none; padding: 0; margin: 8px 0; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+.pricing { display: flex; align-items: baseline; gap: 6px; margin: 10px 0; }
+.price { font-size: 24px; font-weight: 600; }
+.period, .yearly { font-size: 12px; color: var(--text-muted); }
+
+/* Marketplace */
+.plugin-description { font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; }
+.plugin-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); }
+.plugin-rating, .plugin-rating-widget { color: #eda100; letter-spacing: 1px; }
+.rate-star { cursor: pointer; }
+#plugin-test-result.success { color: var(--text-success); }
+#plugin-test-result.error { color: var(--text-danger); }
+
+/* Toast notifications (projects-panel.mjs / api-keys-panel.mjs) */
+.notification { position: fixed; bottom: 24px; right: 24px; z-index: 1100; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 10px 16px; font-size: 12px; box-shadow: var(--shadow-md); }
+.notification-success { border-color: rgba(22, 163, 74, 0.4); color: var(--text-success); }
+.notification-error { border-color: rgba(220, 38, 38, 0.4); color: var(--text-danger); }
+.notification-info { color: var(--text-accent); }
 </style>
 </head>
 <body>
@@ -445,6 +571,8 @@ button:active { transform: translateY(0); box-shadow: none; }
       <div style="font-size:12px;color:var(--text-muted);margin-top:2px">source of truth · state.db + policy.yaml</div>
     </div>
     <div style="display:flex;align-items:center;gap:14px">
+      <button id="teamNavBtn" title="Team collaboration workspace" onclick="toggleTeamWorkspace()" style="display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:12px;cursor:pointer">👥 Team</button>
+      <button id="adminNavBtn" title="Admin workspace · projects, templates, API keys, billing, compliance, marketplace" onclick="toggleAdminWorkspace()" style="display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:12px;cursor:pointer">🛠 Admin</button>
       <button id="settingsNavBtn" title="Settings & Observability workspace" onclick="toggleSettingsWorkspace()" style="display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:12px;cursor:pointer">⚙ Settings</button>
       <button id="themeToggle" title="Toggle theme" style="display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:12px;cursor:pointer"><svg id="themeIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"></svg></button>
       <button id="refresh" title="refresh now" style="display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>refresh</button>
@@ -460,6 +588,19 @@ button:active { transform: translateY(0); box-shadow: none; }
   <div id="settingsPanel" class="card live" style="display:none; margin-bottom:1.5rem">
     <div class="h">settings &amp; observability <span style="font-weight:400;color:var(--text-muted);margin-left:4px">· drag to reorder, resize from the corner</span></div>
     <div id="settingsWorkspaceContainer"></div>
+  </div>
+
+  <!-- 008 — Team Collaboration (US3): project members, invitations, and activity feed. -->
+  <div id="teamPanel" class="card live" style="display:none; margin-bottom:1.5rem">
+    <div class="h">team collaboration</div>
+    <div id="teamWorkspaceContainer"></div>
+  </div>
+
+  <!-- Admin workspace: projects, templates, API keys, billing, compliance, marketplace —
+       previously-dangling panel modules wired in via admin-bootstrap.mjs (see toggleAdminWorkspace). -->
+  <div id="adminPanel" class="card live" style="display:none; margin-bottom:1.5rem">
+    <div class="h">admin</div>
+    <div id="adminWorkspaceContainer"></div>
   </div>
 
   <div class="card live" id="escalationsPanel" style="display:none; border-color:var(--border-strong); margin-bottom:1.5rem; background:var(--surface-1)">
@@ -545,8 +686,10 @@ button:active { transform: translateY(0); box-shadow: none; }
   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
     <div class="card live">
       <div class="h">active now</div>
-      <div class="row" id="activeclaude"></div>
-      <div class="row" id="activeanti"></div>
+      <!-- Roster-driven: populated by renderActiveList() from the same s.budget-derived roster
+           used by renderBudgetCards()/renderAgentBudgetControls(); was previously two rows
+           hardcoded to claude/antigravity (id="activeclaude"/"activeanti"). -->
+      <div id="activeList"></div>
     </div>
     <div class="card live">
       <div class="h">next in queue <span id="qcount" style="color:var(--text-muted);font-weight:400"></span></div>
@@ -708,6 +851,10 @@ button:active { transform: translateY(0); box-shadow: none; }
     <div class="modal-body">
       <div id="specSummary" style="display:none;font-size:13px"></div>
       <textarea id="specTextarea" spellcheck="false"></textarea>
+      <!-- 008 — Team Collaboration (US3): task-comments.mjs mount point. Task IDs here are the
+           existing queue/spec task ids (e.g. `.ai/features/<id>`), which map 1:1 to the
+           non-project-scoped /api/tasks/:id/comments route (dashboard/server.mjs). -->
+      <div id="specComments" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)"></div>
     </div>
     <div class="modal-foot">
       <button id="specSave">Save</button>
@@ -914,6 +1061,18 @@ function actEsc(id, ep, pay) {
 function unblockEsc(task) {
   if (!confirm(`Approve and unblock ${task}?\n\nThis clears the §6 governance hold so agents may work it (e.g. spend money / send external). Proceed only if you approve that action.`)) return;
   postAction('/api/task', { id: task, action: 'unblock' });
+}
+
+function formatNumber(num) {
+  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+  if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+  return num.toString();
+}
+
+function formatSpend(amount) {
+  if (amount === 0) return '$0.00';
+  if (amount < 0.01) return '$' + amount.toPrecision(2);
+  return '$' + amount.toFixed(2);
 }
 
 // Snooze/skip park a blocked task WITHOUT approving the underlying spend/external/deploy/schema
@@ -1223,6 +1382,7 @@ function syncReadouts(){
     if (out) out.textContent = fmt(+el.value);
   }
   if ($('outWarn')) $('outWarn').textContent=$('warn').value+'%';
+  if ($('outPtask') && $('ptask')) $('outPtask').textContent=fmt(+$('ptask').value);
   if ($('outConc')) $('outConc').textContent=$('conc').value;
   if ($('outWip')) $('outWip').textContent=$('wip').value;
   if ($('outTtl')) $('outTtl').textContent=$('ttl').value;
@@ -1277,7 +1437,7 @@ function renderProviderCost(last7d){
   const entries=Object.entries(last7d||{}).sort((a,b)=>(b[1].cost||0)-(a[1].cost||0));
   if(!entries.length){ el.innerHTML='<div style="font-size:12px;color:var(--text-muted)">no provider spend recorded</div>'; return; }
   el.innerHTML=entries.map(([name,p])=>{
-    const costStr = p.cost>0 ? '$'+p.cost.toFixed(2) : (p.costUnknownRuns>0 ? `— (${p.costUnknownRuns} runs unpriced)` : '$0.00');
+    const costStr = p.cost>0 ? formatSpend(p.cost) : (p.costUnknownRuns>0 ? `— (${p.costUnknownRuns} runs unpriced)` : '$0.00');
     return `<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">${esc(name)}</div>`+
       `<div style="display:flex;align-items:baseline;gap:4px"><span class="mono" style="font-size:22px;font-weight:500">${costStr}</span></div>`+
       `<div class="mono" style="font-size:11px;color:var(--text-muted)">${fmt(p.billable)} tok · ${p.runs} run${p.runs===1?'':'s'}</div></div>`;
@@ -1292,17 +1452,21 @@ function copySession(sess, agent) {
     setTimeout(() => el.style.display = 'none', 2000);
   });
 }
-function renderActive(prefix,name,a,ha){
-  const el=$('active'+prefix);
+// Roster-driven (matches renderBudgetCards()/renderAgentBudgetControls()): builds one row per
+// agent in the live roster into a single container instead of writing into per-agent elements
+// keyed by a hardcoded prefix. The old renderActive(prefix,...) did `$('active'+prefix)`, which
+// only ever resolved for the two ids baked into the static HTML (activeclaude/activeanti) — once
+// the roster became config-driven (e.g. builder/reviewer), that lookup returned null and the
+// `el.innerHTML=...` assignment threw, aborting render() before it reached renderQueue/renderRuns/
+// renderHealth/renderRunner/renderVerifier/renderPlanner/renderCapabilityMatrix/renderTaskCategories/
+// renderSystemLog/populateControls further down the same synchronous call chain.
+function activeRowHtml(name,a,ha){
   if(a && a.active){
     const sess = a.active.session || '';
-    el.innerHTML=`<span class="badge ${badgeFor(a.active.status)}">${esc(a.active.status)}</span>`+
+    return `<div class="row active-row" data-agent="${esc(name)}" data-sess="${esc(sess)}" style="cursor:pointer" title="Click to copy session resume command"><span class="badge ${badgeFor(a.active.status)}">${esc(a.active.status)}</span>`+
       `<div style="flex:1;min-width:0"><div class="mono" style="font-size:13px">${esc(a.active.task)}</div>`+
-      `<div style="font-size:11px;color:var(--text-muted)">${name} · session <span class="mono" style="cursor:pointer;text-decoration:underline dotted;color:var(--text-accent)" title="Click to copy resume command" onclick="copySession('${esc(sess)}','${name}')">${esc(sess.slice(0,8))}</span> · ${a.active.heartbeatAgeSec}s ago</div></div>`+
-      `<span class="model">${esc(shortModel(a.model))}</span>`;
-    el.style.cursor = 'pointer';
-    el.title = 'Click to copy session resume command';
-    el.onclick = () => copySession(sess, name);
+      `<div style="font-size:11px;color:var(--text-muted)">${esc(name)} · session <span class="mono" style="cursor:pointer;text-decoration:underline dotted;color:var(--text-accent)" title="Click to copy resume command" onclick="copySession('${esc(sess)}','${esc(name)}')">${esc(sess.slice(0,8))}</span> · ${a.active.heartbeatAgeSec}s ago</div></div>`+
+      `<span class="model">${esc(shortModel(a.model))}</span></div>`;
   } else {
     const idleReason = (ha && ha.reason) ? ha.reason : 'no lease';
     const isSessionLimit = idleReason === 'session_limit';
@@ -1325,14 +1489,20 @@ function renderActive(prefix,name,a,ha){
         below_priority_floor: 'below priority floor',
       }[idleReason] || (idleReason.startsWith('sensitive_action:') ? 'awaiting approval: '+idleReason.slice(17) : idleReason);
     }
-    el.innerHTML=`<span class="badge ${isSessionLimit ? 'b-warn' : 'b-muted'}">idle</span>`+
+    return `<div class="row active-row" data-agent="${esc(name)}"><span class="badge ${isSessionLimit ? 'b-warn' : 'b-muted'}">idle</span>`+
       `<div style="flex:1;min-width:0"><div style="font-size:13px;color:${reasonColor}">${reasonLabel}</div>`+
-      `<div style="font-size:11px;color:var(--text-muted)">${name} · waiting</div></div>`+
-      `<span class="model">${esc(shortModel(a&&a.model))}</span>`;
-    el.style.cursor = '';
-    el.title = '';
-    el.onclick = null;
+      `<div style="font-size:11px;color:var(--text-muted)">${esc(name)} · waiting</div></div>`+
+      `<span class="model">${esc(shortModel(a&&a.model))}</span></div>`;
   }
+}
+function renderActiveList(roster, agentsMap, haMap){
+  const el=$('activeList'); if(!el) return;
+  if(!roster || !roster.length){ el.innerHTML='<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no agents in roster</div>'; return; }
+  el.innerHTML = roster.map(name => activeRowHtml(name, agentsMap && agentsMap[name], haMap && haMap[name])).join('');
+  el.querySelectorAll('.active-row').forEach(row=>{
+    const sess = row.getAttribute('data-sess');
+    row.onclick = sess ? ()=>copySession(sess, row.getAttribute('data-agent')) : null;
+  });
 }
 
 function renderQueue(q){
@@ -1401,6 +1571,39 @@ async function openSpec(id, path, reason, taskStatus, taskOwner){
     }
   }catch(e){ ta.value=''; status.textContent='load failed: '+e.message; }
   ta.disabled=false;
+  loadSpecComments(id);
+}
+// 008 — Team Collaboration (US3): comments on the currently-open spec/task, using the same
+// per-user JWT session as the Team workspace (auth-client.mjs) — not the shared __AIOS_TOKEN__
+// this file's other fetches use, since comments need a real author, not "the dashboard".
+async function loadSpecComments(taskId){
+  const mount = $('specComments');
+  mount.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">Loading comments…</div>';
+  const { renderTaskComments } = await import('./static/task-comments.mjs');
+  const { getToken, authFetch, renderLoginPrompt } = await import('./static/auth-client.mjs');
+  if(!getToken()){
+    renderLoginPrompt(mount, ()=>loadSpecComments(taskId));
+    return;
+  }
+  const res = await authFetch('/api/tasks/'+encodeURIComponent(taskId)+'/comments');
+  if(!res){ renderLoginPrompt(mount, ()=>loadSpecComments(taskId)); return; }
+  const result = await res.json();
+  const comments = result.success ? result.comments : [];
+  mount.innerHTML = renderTaskComments(taskId, comments);
+  mount.querySelector('.add-comment-form')?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const textarea = mount.querySelector('.comment-input');
+    const content = textarea.value.trim();
+    if(!content) return;
+    const postRes = await authFetch('/api/tasks/'+encodeURIComponent(taskId)+'/comments', {
+      method: 'POST',
+      headers: {'content-type':'application/json'},
+      body: JSON.stringify({content}),
+    });
+    const postResult = postRes && await postRes.json();
+    if(!postResult?.success){ alert('Comment failed: '+(postResult?.error||'unknown error')); return; }
+    loadSpecComments(taskId);
+  });
 }
 function closeSpec(){
   if(specDirty && !confirm('Discard unsaved changes to this spec?')) return;
@@ -1463,9 +1666,7 @@ function render(s){
   renderAgentBudgetControls(roster, s.policy || {});
 
   const ha = s.health && s.health.agents ? s.health.agents : {};
-  for (const agent of roster) {
-    renderActive(agent, agent, s.agents[agent], ha[agent]);
-  }
+  renderActiveList(roster, s.agents, ha);
   renderQueue(s.queue||[]);
   renderRuns(s.runs||[]);
   renderEscalations(s.escalations);
@@ -1826,9 +2027,23 @@ initCmdButtons();
 
 const POLL_MS=10000;
 let pollTimer=null;
-function startPolling(){ if(pollTimer) return; poll(); pollTimer=setInterval(poll,POLL_MS); }
+// Note: `poll` gets reassigned further down (search `const _origPoll = poll;`) as later panels
+// (IDE/MCP connect, analytics, budget) chain their own fetches onto it. setInterval/addEventListener
+// capture a callback *value* at registration time, not a live binding — registering the bare `poll`
+// identifier here would freeze this timer and the refresh button onto today's (pre-chaining)
+// definition forever, silently skipping every fetch those later wrappers add. Wrapping in closures
+// makes each call re-read the current `poll` binding instead.
+// The `poll();` call right here still runs before any of those later reassignments have executed
+// (this function is invoked once, synchronously, near the top of the script), so it always uses
+// today's not-yet-chained `poll` — same reason it's fine for the base status/health/queue/runs
+// panels (which render instantly off this first call) but leaves IDE/MCP/analytics/budget panels
+// waiting for the first setInterval tick (up to POLL_MS later) before they get their first fetch.
+// queueMicrotask defers a second call until the rest of this synchronous script — including every
+// later `poll = ...` reassignment — has finished running, so that second call sees the fully
+// chained poll and those panels populate immediately instead of after a ~10s delay.
+function startPolling(){ if(pollTimer) return; poll(); queueMicrotask(()=>poll()); pollTimer=setInterval(()=>poll(),POLL_MS); }
 function stopPolling(){ clearInterval(pollTimer); pollTimer=null; }
-$('refresh').addEventListener('click',poll);
+$('refresh').addEventListener('click',()=>poll());
 document.addEventListener('visibilitychange',()=>{ document.hidden ? stopPolling() : startPolling(); });
 startPolling();
 setInterval(renderQuiet,60000);
@@ -1985,7 +2200,7 @@ async function fetchSubscriptions() {
     }
 
     // Combined total
-    $('combinedTotal').textContent = 'Combined monthly: $' + (j.combinedMonthlyTotal || 0).toFixed(2);
+    $('combinedTotal').textContent = 'Combined monthly: ' + formatSpend(j.combinedMonthlyTotal || 0);
   } catch { /* subscriptions unavailable */ }
 }
 
@@ -2062,13 +2277,13 @@ poll = async function() {
 
 let analyticsRangeDays = 30;
 
-function setAnalyticsRange(days) {
+function setAnalyticsRange(days, fetchNow = true) {
   analyticsRangeDays = days;
   document.querySelectorAll('.ar-btn').forEach(b => b.classList.remove('active'));
   document.querySelector(`.ar-btn[data-range="${days}"]`)?.classList.add('active');
   const labels = {1:'Today',7:'7 days',30:'30 days',90:'90 days'};
   $('analyticsDateRange').textContent = '· last ' + (labels[days]||days+'d');
-  fetchAnalytics();
+  if (fetchNow) fetchAnalytics();
 }
 
 // ─── HTML5 Canvas Chart Classes (T024) ──────────────────────────────────────
@@ -2100,7 +2315,7 @@ class LineChart {
       ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(pad.left+w,y); ctx.stroke();
       ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-muted').trim()||'#94a3b8';
       ctx.font = '10px Inter,sans-serif';
-      ctx.fillText('$'+(maxCost*(1-i/4)).toFixed(2), 2, y+3);
+      ctx.fillText(formatSpend(maxCost*(1-i/4)), 2, y+3);
     }
 
     // Lines
@@ -2127,13 +2342,25 @@ class DonutChart {
     ctx.clearRect(0,0,width,height);
     if (!items.length) return;
     const cx = width/2, cy = height/2, outerR = Math.min(cx,cy)-10, innerR = outerR*0.55;
-    let total = items.reduce((s,i)=>s+(i.cost||0),0);
-    if (total===0) total=1;
+
+    const totalCost = items.reduce((s,i) => s+(i.cost||0), 0);
+    // If no cost data, fall back to tokens so the chart is still meaningful
+    const useCost = totalCost > 0;
+    const getValue = (item) => useCost ? (item.cost||0) : (item.tokens||0);
+    let total = items.reduce((s,i) => s+getValue(i), 0);
+    if (total === 0) { // nothing to show at all
+      ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-muted').trim() || '#94a3b8';
+      ctx.font = '12px Inter,sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No data', cx, cy+5);
+      return;
+    }
 
     const colors = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#8b5cf6','#ec4899','#06b6d4','#84cc16'];
     let angle = -Math.PI/2;
     items.forEach((item, i) => {
-      const slice = ((item.cost||0)/total)*Math.PI*2;
+      const val = getValue(item);
+      const slice = (val/total)*Math.PI*2;
       ctx.fillStyle = colors[i%colors.length];
       ctx.beginPath();
       ctx.arc(cx,cy,outerR,angle,angle+slice);
@@ -2146,15 +2373,16 @@ class DonutChart {
       ctx.fillStyle = '#fff';
       ctx.font = 'bold 9px Inter,sans-serif';
       ctx.textAlign = 'center';
-      const pct = Math.round(((item.cost||0)/total)*100);
+      const pct = Math.round((val/total)*100);
       if (slice>0.2) ctx.fillText(pct+'%', lx, ly+3);
       angle += slice;
     });
-    // Center text
+    // Center text — show cost if available, otherwise token count
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-primary').trim();
     ctx.font = 'bold 14px Inter,sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('$'+total.toFixed(2), cx, cy+5);
+    const centerLabel = useCost ? formatSpend(totalCost) : formatNumber(total)+' tok';
+    ctx.fillText(centerLabel, cx, cy+5);
   }
 }
 
@@ -2182,7 +2410,7 @@ async function fetchAnalytics() {
     }
 
     // KPI cards
-    $('kvTotalSpend').textContent = '$'+(ovr.totalSpend||0).toFixed(2);
+    $('kvTotalSpend').textContent = formatSpend(ovr.totalSpend||0);
     $('kvChange').textContent = ovr.spendChangePct!=null ? (ovr.spendChangePct>=0?'+':'')+ovr.spendChangePct+'%' : '—';
     $('kvChange').style.color = ovr.spendChangePct>0?'var(--text-danger)':(ovr.spendChangePct<0?'var(--text-success)':'');
     $('kvTokens').textContent = formatNumber(ovr.totalTokens||0);
@@ -2203,6 +2431,11 @@ async function fetchAnalytics() {
     console.error('Analytics fetch error:', e);
   }
 }
+
+// Auto-load on page open — must be here, AFTER analyticsRangeDays and setAnalyticsRange are defined.
+// fetchNow=false: the startup poll() cycle (see startPolling()) already fetches analytics once
+// fully chained, so fetching here too would just double the request on every page load.
+setAnalyticsRange(7, false);
 
 function exportAnalyticsCSV() {
   const from = new Date(Date.now()-analyticsRangeDays*86400000).toISOString();
@@ -2233,9 +2466,9 @@ poll = async function() {
 async function fetchBudget() {
   try {
     const r = await fetch('/api/analytics/budget').then(r=>r.json());
-    $('bvSpend').textContent = '$'+(r.spendToDate||0).toFixed(2);
-    $('bvForecast').textContent = '$'+(r.projectedTotal||0).toFixed(2);
-    $('bvBurn').textContent = 'burn: $'+(r.dailyBurnRate||0).toFixed(2)+'/day';
+    $('bvSpend').textContent = formatSpend(r.spendToDate||0);
+    $('bvForecast').textContent = formatSpend(r.projectedTotal||0);
+    $('bvBurn').textContent = 'burn: '+formatSpend(r.dailyBurnRate||0)+'/day';
     $('bvPct').textContent = (r.pctUsed||0)+'% of $'+(r.budget?.amount||0);
     $('budgetMeter').style.width = Math.min(100, r.pctUsed||0)+'%';
     if (r.pctUsed > 90) $('budgetMeter').style.background = 'var(--fill-danger)';
@@ -2246,7 +2479,7 @@ async function fetchBudget() {
     else if (r.status === 'at-risk') $('bvStatus').style.color = 'var(--text-warning)';
     else $('bvStatus').style.color = 'var(--text-success)';
 
-    $('budgetStatus').textContent = '· '+(r.status||'on-track')+' · $'+(r.spendToDate||0).toFixed(2)+' / $'+(r.budget?.amount||0);
+    $('budgetStatus').textContent = '· '+(r.status||'on-track')+' · '+formatSpend(r.spendToDate||0)+' / '+formatSpend(r.budget?.amount||0);
 
     // Spend pause state
     try {
@@ -2364,6 +2597,39 @@ function toggleSettingsWorkspace() {
   const panel = document.getElementById('settingsPanel');
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
   showSettingsWorkspace();
+}
+
+// 008 — Team Collaboration (US3): same lazy-load-on-first-open pattern as Settings above.
+let _teamWorkspaceInitialized = false;
+async function showTeamWorkspace() {
+  document.getElementById('teamPanel').style.display = 'block';
+  if (!_teamWorkspaceInitialized) {
+    _teamWorkspaceInitialized = true;
+    const { initTeamWorkspace } = await import('./static/team-bootstrap.mjs');
+    initTeamWorkspace(document.getElementById('teamWorkspaceContainer'));
+  }
+}
+function toggleTeamWorkspace() {
+  const panel = document.getElementById('teamPanel');
+  if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+  showTeamWorkspace();
+}
+
+// Admin workspace (Projects/Templates/API Keys/Billing/Compliance/Marketplace): same
+// lazy-load-on-first-open pattern as Team/Settings above.
+let _adminWorkspaceInitialized = false;
+async function showAdminWorkspace() {
+  document.getElementById('adminPanel').style.display = 'block';
+  if (!_adminWorkspaceInitialized) {
+    _adminWorkspaceInitialized = true;
+    const { initAdminWorkspace } = await import('./static/admin-bootstrap.mjs');
+    initAdminWorkspace(document.getElementById('adminWorkspaceContainer'));
+  }
+}
+function toggleAdminWorkspace() {
+  const panel = document.getElementById('adminPanel');
+  if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+  showAdminWorkspace();
 }
 </script>
 

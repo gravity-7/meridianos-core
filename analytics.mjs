@@ -114,7 +114,7 @@ export function queryOverview(db, from, to) {
     const topAgent = topBy('agent');
 
     return {
-      totalSpend: Math.round(totalSpend * 100) / 100,
+      totalSpend,
       spendChangePct,
       totalTokens,
       totalApiCalls,
@@ -280,13 +280,13 @@ export function queryBreakdown(db, dimension, from, to, limit = 10) {
 
     const items = rows.map((r) => ({
       key: r.key || 'unknown',
-      cost: Math.round(r.cost * 100) / 100,
+      cost: r.cost,
       tokens: r.tokens,
       apiCalls: r.apiCalls,
       pct: totalCost > 0 ? Math.round((r.cost / totalCost) * 1000) / 10 : 0,
     }));
 
-    return { dimension: dim, items, totalCost: Math.round(totalCost * 100) / 100, period: { from: fromDate, to: toDate } };
+    return { dimension: dim, items, totalCost, period: { from: fromDate, to: toDate } };
   } catch {
     return { dimension: dimension || 'provider', items: [], totalCost: 0, period: { from: from || '', to: to || '' } };
   }
@@ -334,7 +334,7 @@ export function queryTaskCost(db, taskId, includeRuns = false) {
 
     const runList = [...runs.values()].map(r => ({
       runId: r.runId,
-      cost: Math.round(r.cost * 100) / 100,
+      cost: r.cost,
       tokens: r.tokens,
       apiCalls: r.apiCalls,
       durationMs: r.durationMs,
@@ -343,7 +343,7 @@ export function queryTaskCost(db, taskId, includeRuns = false) {
 
     return {
       taskId,
-      totalCost: Math.round(totalCost * 100) / 100,
+      totalCost,
       totalTokens,
       apiCalls: rows.length,
       models: [...modelSet],
@@ -379,7 +379,7 @@ export function queryProjectCosts(db, project, orderBy = 'cost', limit = 20) {
       totalCost += r.cost;
       return {
         taskId: r.task,
-        cost: Math.round(r.cost * 100) / 100,
+        cost: r.cost,
         tokens: r.tokens,
         apiCalls: r.apiCalls,
         modelCount: r.modelCount,
@@ -388,7 +388,7 @@ export function queryProjectCosts(db, project, orderBy = 'cost', limit = 20) {
       };
     });
 
-    return { project, tasks, totalCost: Math.round(totalCost * 100) / 100 };
+    return { project, tasks, totalCost };
   } catch {
     return { project: project || null, tasks: [], totalCost: 0 };
   }
@@ -438,7 +438,7 @@ export function computeBudgetForecast(db, budgetConfig) {
     const trailingSpend = burnRow?.spend ?? 0;
     const dailyBurnRate = Math.round((trailingSpend / 7) * 10000) / 10000;
 
-    const projectedTotal = Math.round((spendToDate + dailyBurnRate * daysRemaining) * 100) / 100;
+    const projectedTotal = spendToDate + dailyBurnRate * daysRemaining;
     const pctUsed = monthlyLimit > 0 ? Math.round((spendToDate / monthlyLimit) * 1000) / 10 : 0;
     const pctProjected = monthlyLimit > 0 ? Math.round((projectedTotal / monthlyLimit) * 1000) / 10 : 0;
 
@@ -447,7 +447,7 @@ export function computeBudgetForecast(db, budgetConfig) {
     else if (pctProjected >= 90) status = 'at-risk';
 
     return {
-      spendToDate: Math.round(spendToDate * 100) / 100,
+      spendToDate,
       projectedTotal,
       dailyBurnRate,
       daysElapsed,

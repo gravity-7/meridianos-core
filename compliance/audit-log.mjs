@@ -67,7 +67,10 @@ export class ActivityLogger {
   }
 
   /**
-   * Log an activity event
+   * Log an activity event. Returns the created row (matching every other create()/log()-style
+   * method in this codebase — UserStore.createUser, InvitationManager.create, TaskComment.create
+   * all return what they made) so a caller that needs the new activity's id/timestamp doesn't
+   * have to issue a second query.
    */
   log({ user_id = null, project_id = null, action, details = {} }) {
     const id = randomUUID();
@@ -76,7 +79,9 @@ export class ActivityLogger {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     const now = Math.floor(Date.now() / 1000);
-    stmt.run(id, user_id, project_id, action, JSON.stringify(details), now, now);
+    const detailsJson = JSON.stringify(details);
+    stmt.run(id, user_id, project_id, action, detailsJson, now, now);
+    return { id, user_id, project_id, action, details: detailsJson, timestamp: now, created_at: now };
   }
 
   /**
@@ -130,9 +135,12 @@ export class ActivityLogger {
    */
   getProjectFeed(projectId, options = {}) {
     const { limit = 50, action, startDate, endDate } = options;
-    
+
+    // query()'s filter is `project_id` (snake_case, matching the column name) — passing
+    // camelCase `projectId` here silently no-ops the filter and returns every project's
+    // activity, not just this one's.
     const activities = this.query({
-      projectId,
+      project_id: projectId,
       limit,
       action,
       startDate,
@@ -282,10 +290,13 @@ export class ActivityLogger {
     const stmt = this.db.prepare(query);
     const result = stmt.get(...params);
 
-    // Get action breakdown
+    // Get action breakdown. actionParams starts EMPTY, not a copy of `params` — the same filter
+    // values get pushed again below (rebuilt fresh for actionQuery's own placeholders), so
+    // starting from a copy double-counted every active filter, throwing "Too many parameter
+    // values were provided" as soon as any filter (e.g. projectId) was actually set.
     let actionQuery = 'SELECT action, COUNT(*) as count FROM activity_log WHERE 1=1';
-    const actionParams = [...params];
-    
+    const actionParams = [];
+
     if (projectId) {
       actionQuery += ' AND project_id = ?';
       actionParams.push(projectId);

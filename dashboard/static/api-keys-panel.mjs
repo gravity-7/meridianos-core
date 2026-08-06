@@ -3,6 +3,10 @@
  * Generate, list, and revoke API tokens
  */
 
+// Guards the document-level revoke-button click delegate below so re-mounting this panel (e.g.
+// switching Admin sub-tabs away and back) never binds a second delegate and double-fires revokes.
+let _revokeListenerWired = false;
+
 export function renderApiKeysPanel(tokens = []) {
   return `
     <div class="api-keys-panel">
@@ -43,7 +47,7 @@ export function renderApiKeysPanel(tokens = []) {
 
             <div class="form-group">
               <label for="token-expires">Expiration</label>
-              <select id="token-expires" name="expires_in">
+              <select id="token-expires" name="expiresIn">
                 <option value="">Never expires</option>
                 <option value="86400">24 hours</option>
                 <option value="604800">7 days</option>
@@ -202,17 +206,24 @@ export function initApiKeysPanel() {
 
       const result = await response.json();
 
-      if (result.ok) {
+      if (result.success) {
         // Close create modal
         document.getElementById('create-token-modal').classList.add('hidden');
         e.target.reset();
 
-        // Show token in modal
-        document.getElementById('generated-token').textContent = result.token;
-        document.getElementById('token-created-modal').classList.remove('hidden');
+        // result.token is {id, token, name, scope, created_at, expires_at} — the raw secret is
+        // the nested .token field (see handleCreateApiToken/generateToken), and it's the ONLY
+        // time the server ever returns it (listTokens() never exposes it again), so it must be
+        // captured now, before anything else touches the DOM.
+        const secret = result.token.token;
 
-        // Reload tokens list
-        loadApiTokens();
+        // Reload the tokens list FIRST — it replaces this whole panel's innerHTML (including both
+        // modals), so setting the generated-token modal's content before this would just get
+        // wiped out a moment later and the operator would never see their one-time secret.
+        await loadApiTokens();
+
+        document.getElementById('generated-token').textContent = secret;
+        document.getElementById('token-created-modal').classList.remove('hidden');
       } else {
         showNotification(result.error || 'Failed to generate API key', 'error');
       }
@@ -232,10 +243,12 @@ export function initApiKeysPanel() {
   });
 
   // Revoke token buttons
+  if (_revokeListenerWired) return;
+  _revokeListenerWired = true;
   document.addEventListener('click', async (e) => {
     if (e.target.classList.contains('action-revoke')) {
       const tokenId = e.target.dataset.tokenId;
-      
+
       if (!confirm('Are you sure you want to revoke this API key? This action cannot be undone.')) {
         return;
       }
@@ -250,7 +263,7 @@ export function initApiKeysPanel() {
 
         const result = await response.json();
 
-        if (result.ok) {
+        if (result.success) {
           showNotification('API key revoked successfully', 'success');
           loadApiTokens();
         } else {
@@ -266,7 +279,7 @@ export function initApiKeysPanel() {
 /**
  * Load API tokens from API
  */
-async function loadApiTokens() {
+export async function loadApiTokens() {
   try {
     const response = await fetch('/api/auth/tokens', {
       headers: {
@@ -276,7 +289,7 @@ async function loadApiTokens() {
 
     const result = await response.json();
 
-    if (result.ok) {
+    if (result.success) {
       const panel = document.querySelector('.api-keys-panel');
       if (panel) {
         panel.innerHTML = renderApiKeysPanel(result.tokens);

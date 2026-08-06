@@ -20,6 +20,24 @@ export class APITokenManager {
   constructor(dbPath = DB_PATH) {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
+    // No other module creates this table — unlike UserStore/ActivityLogger, which own their
+    // schema in their own constructor, this class previously assumed api_tokens already existed,
+    // so every method threw "no such table: api_tokens" against a fresh control-plane.db.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS api_tokens (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        scope TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        last_used INTEGER,
+        is_active INTEGER NOT NULL DEFAULT 1
+      )
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash)`);
   }
 
   /**

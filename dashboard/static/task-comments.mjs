@@ -40,25 +40,23 @@ function renderEmptyComments() {
 }
 
 function renderComment(comment) {
-  const date = new Date(comment.created_at).toLocaleString();
+  // TaskComment stores `created_at` in unix SECONDS (Math.floor(Date.now()/1000)) — Date()
+  // needs milliseconds. `user_name` is a server-side join added on top of TaskComment's raw
+  // row (which only has user_id) — see handleGetTaskComments/handleAddTaskComment.
+  const date = new Date(comment.created_at * 1000).toLocaleString();
   return `
     <div class="comment-item">
       <div class="comment-header">
-        <span class="comment-author">${comment.username || 'System'}</span>
+        <span class="comment-author">${comment.user_name || 'Unknown'}</span>
         <span class="comment-date">${date}</span>
       </div>
       <div class="comment-body">
-        ${escapeHtml(comment.content)}
+        ${comment.content}
       </div>
     </div>
   `;
 }
 
-function escapeHtml(unsafe) {
-  return (unsafe || '')
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
+// No escapeHtml() here: TaskComment.create()/update() (project/task-comments.mjs) already
+// HTML-escape content before storing it, so it is safe to insert as-is. Escaping again here
+// would double-escape (e.g. "&amp;" would render as the literal text "&amp;amp;").

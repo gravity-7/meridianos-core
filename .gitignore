@@ -1,4 +1,7 @@
 node_modules/
+# Environment files — contain API keys and secrets, never commit
+.env
+.env.*
 # transient publish-time npmrc (holds only an env-var reference, never a token) — belt-and-suspenders
 .npmrc.publish
 

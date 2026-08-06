@@ -32,7 +32,7 @@ import { join, dirname } from 'node:path';
  *   (loadPolicy's default path, ledger.mjs's default `.ai/gateway/ledger.db` path).
  * - `policy` — pre-loaded policy object; defaults to `loadPolicy(undefined, config)`.
  * - `port` — 0 (default) picks an ephemeral free port, matching startGateway's own default.
- * - `tenant` — the single tenant this sidecar serves today (defaults to 'pv').
+ * - `tenant` — the single tenant this sidecar serves today (defaults to 'default').
  * - `ledgerPath` — pass ':memory:' in tests; omitted falls back to ledger.mjs's on-disk default.
  * - `now` — a numeric epoch-ms clock seam for the registry envelope's `generatedAt` only (matches
  *   buildProviderRegistry's own `now: Date.now()` convention). makeCheckVerdict's PER-REQUEST clock
@@ -51,7 +51,7 @@ import { join, dirname } from 'node:path';
  * catalog has no entry for a provider/model, so a tenant without a `pricing.json` simply gets
  * `costUsd: null` on every event — no error.
  */
-export async function assembleGateway({ config, policy, port = 0, tenant = 'pv', ledgerPath, now } = {}) {
+export async function assembleGateway({ config, policy, port = 0, tenant = 'default', ledgerPath, now } = {}) {
   const pol = policy ?? loadPolicy(undefined, config);
   const ledger = openLedger(ledgerPath, { config });
   const runs = createRunRegistry();
@@ -120,7 +120,7 @@ export async function assembleGateway({ config, policy, port = 0, tenant = 'pv',
  * providers.mjs change), without restarting the sidecar. Returns `applyIfNewer`'s own
  * `{ applied, version }` result.
  */
-export function refreshRegistry(store, { policy, config, tenant = 'pv', version, now } = {}) {
+export function refreshRegistry(store, { policy, config, tenant = 'default', version, now } = {}) {
   const reg = buildProviderRegistry({ policy, config, tenant, version, now });
   return store.applyIfNewer(reg);
 }

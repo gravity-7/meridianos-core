@@ -500,7 +500,7 @@ export async function start({ domain } = {}) {
   // Metering/enforcement gateway (default-ON since Phase 0). Set gateway.disabled: true to opt out.
   const gwPolicy = loadPolicy(undefined, config);
   const gwPort = Number(process.env.AIOS_GATEWAY_PORT) || (gwPolicy?.gateway?.port ?? 0);
-  const gwTenant = gwPolicy?.gateway?.tenant ?? 'pv';
+  const gwTenant = gwPolicy?.gateway?.tenant ?? 'default';
   let closeGateway = () => {};
 
   // Phase 0: Validate unified policy configuration at boot

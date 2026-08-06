@@ -184,7 +184,7 @@ export class LicenseValidator {
   checkFeature(feature) {
     // Get active license
     const license = this.#db.prepare(
-      'SELECT * FROM licenses WHERE status = ? ORDER BY created_at DESC LIMIT 1'
+      'SELECT * FROM licenses WHERE status = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
     ).get('active');
 
     if (!license) {
@@ -212,7 +212,7 @@ export class LicenseValidator {
   getLimits() {
     // Get active license
     const license = this.#db.prepare(
-      'SELECT * FROM licenses WHERE status = ? ORDER BY created_at DESC LIMIT 1'
+      'SELECT * FROM licenses WHERE status = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
     ).get('active');
 
     if (!license) {
@@ -251,7 +251,7 @@ export class LicenseValidator {
    */
   getLicenseStatus() {
     const license = this.#db.prepare(
-      'SELECT * FROM licenses WHERE status = ? ORDER BY created_at DESC LIMIT 1'
+      'SELECT * FROM licenses WHERE status = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
     ).get('active');
 
     if (!license) {
@@ -295,7 +295,7 @@ export class LicenseValidator {
     ).get().count;
 
     const license = this.#db.prepare(
-      'SELECT * FROM licenses WHERE status = ? ORDER BY created_at DESC LIMIT 1'
+      'SELECT * FROM licenses WHERE status = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
     ).get('active');
 
     const limits = license ? LicenseKey.getTierLimits(license.tier) : LicenseKey.getTierLimits('free');

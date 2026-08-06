@@ -69,14 +69,17 @@ Represents a team member with authentication credentials and roles.
 | email | TEXT | NOT NULL, UNIQUE | User email address |
 | password_hash | TEXT | NOT NULL | Scrypt-hashed password (salt:key format) |
 | full_name | TEXT | NULL | User's full name |
+| role | TEXT | NOT NULL, DEFAULT 'viewer' | Global/site role: 'admin', 'operator', 'viewer' (distinct from a project-scoped `project_users.role` — see ProjectUser) |
 | created_at | INTEGER | NOT NULL | Unix timestamp (seconds) |
+| updated_at | INTEGER | NOT NULL | Unix timestamp (seconds) |
 | last_login | INTEGER | NULL | Unix timestamp of last login |
-| is_active | BOOLEAN | NOT NULL, DEFAULT true | Account active status |
+| is_active | INTEGER | NOT NULL, DEFAULT 1 | Account active status (SQLite has no native BOOLEAN — 0/1) |
 
 **Relationships**:
 - One-to-many with `project_users` (user's project memberships)
 - One-to-many with `api_tokens` (user's API keys)
-- One-to-many with `activity_events` (user's actions)
+- One-to-many with `activity_log` (user's actions — see ActivityEvent; table renamed from an
+  earlier `activity_events` this doc used to specify, which is not what the code creates)
 - One-to-many with `task_comments` (user's comments)
 
 **Validation Rules**:
@@ -98,8 +101,11 @@ Represents a user's membership in a project with assigned role.
 | project_id | TEXT | NOT NULL, FK → projects.id | Project identifier |
 | user_id | TEXT | NOT NULL, FK → users.id | User identifier |
 | role | TEXT | NOT NULL | Role: 'admin', 'operator', 'viewer' |
-| joined_at | INTEGER | NOT NULL | Unix timestamp (seconds) |
-| invited_by | TEXT | NULL | User ID who sent invitation |
+| created_at | INTEGER | NOT NULL | Unix timestamp (seconds) — column is `created_at`, not `joined_at` |
+| updated_at | INTEGER | NOT NULL | Unix timestamp (seconds) |
+
+Note: there is no `invited_by` column in the real implementation — which user sent a given
+invitation is not currently tracked anywhere (Invitation below has the same gap: no `created_by`).
 
 **Relationships**:
 - Many-to-one with `projects` (project this membership belongs to)
@@ -151,27 +157,32 @@ Represents an API key for programmatic access.
 
 Represents an auditable action in the system.
 
-**Table**: `activity_events` (in control plane database)
+**Table**: `activity_log` (in control plane database — an earlier version of this doc named it
+`activity_events`; that table is not what `compliance/audit-log.mjs`'s ActivityLogger actually
+creates, so anything querying `activity_events` against a real `.ai/control-plane.db` found
+nothing. `target_type`/`target_id`/`ip_address` below were likewise aspirational — ActivityLogger
+never writes them. There is a *separate* `compliance_log` table, with its own `category`/
+`ip_address` columns, for SOC2/GDPR compliance trail purposes — a different concern from this
+team-activity log, owned by the same file's `AuditLogger` class.)
 
 | Field | Type | Constraints | Description |
 |-------|------|-------------|-------------|
 | id | TEXT | PRIMARY KEY | Unique event identifier (UUID v4) |
-| timestamp | INTEGER | NOT NULL | Unix timestamp (seconds) |
-| user_id | TEXT | NULL, FK → users.id | User who performed action (NULL = system) |
-| project_id | TEXT | NULL, FK → projects.id | Project context (NULL = global) |
+| user_id | TEXT | NULL | User who performed action (NULL = system) |
+| project_id | TEXT | NULL | Project context (NULL = global) |
 | action | TEXT | NOT NULL | Action type (see Action Types) |
-| target_type | TEXT | NULL | Type of target (e.g., 'task', 'config', 'user') |
-| target_id | TEXT | NULL | Identifier of target |
-| detail | TEXT | NULL | Additional detail (JSON string) |
-| ip_address | TEXT | NULL | IP address of request |
+| details | TEXT | NOT NULL, DEFAULT '{}' | Additional detail (JSON string) — column is `details`, not `detail` |
+| timestamp | INTEGER | NOT NULL | Unix timestamp (seconds) |
+| created_at | INTEGER | NOT NULL | Unix timestamp (seconds) — always equal to `timestamp` at insert time |
 
 **Relationships**:
-- Many-to-one with `users` (user who performed action)
-- Many-to-one with `projects` (project context)
+- Many-to-one with `users` (user who performed action) — not FK-enforced at the SQLite level
+- Many-to-one with `projects` (project context) — not FK-enforced at the SQLite level
 
 **Validation Rules**:
-- `action`: Must be one of defined action types
-- `detail`: Must be valid JSON if present
+- `action`: Must be one of defined action types (not enforced by the table itself — `action` is
+  just `NOT NULL`; the code that calls `ActivityLogger.log()` is responsible for using a real one)
+- `details`: Must be valid JSON (ActivityLogger.log() always JSON.stringify()s whatever it's given)
 
 **Action Types**:
 - `user.login`, `user.logout`, `user.created`, `user.invited`
@@ -194,17 +205,18 @@ Represents comments on tasks for team collaboration.
 | id | TEXT | PRIMARY KEY | Unique comment identifier (UUID v4) |
 | task_id | TEXT | NOT NULL | Task identifier |
 | user_id | TEXT | NOT NULL | User who wrote comment |
-| body | TEXT | NOT NULL | Comment content |
+| content | TEXT | NOT NULL | Comment content — column is `content`, not `body` |
 | created_at | INTEGER | NOT NULL | Unix timestamp (seconds) |
-| updated_at | INTEGER | NULL | Unix timestamp of last edit |
+| updated_at | INTEGER | NOT NULL | Unix timestamp (seconds) — set equal to `created_at` at insert time, not NULL until first edit |
 
 **Relationships**:
-- Many-to-one with `tasks` (task this comment belongs to)
-- Many-to-one with `users` (user who wrote comment)
+- Many-to-one with `tasks` (task this comment belongs to) — not FK-enforced at the SQLite level
+- Many-to-one with `users` (user who wrote comment) — not FK-enforced at the SQLite level
 
 **Validation Rules**:
-- `body`: 1-10000 characters
-- `updated_at`: Must be >= `created_at` if present
+- `content`: non-empty string enforced by TaskComment.create() at the application layer (not a
+  DB-level CHECK constraint); HTML-escaped via TaskComment.sanitizeContent() before storage
+- `updated_at`: always >= `created_at`
 
 ---
 
@@ -217,31 +229,35 @@ Represents a pending team member invitation.
 | Field | Type | Constraints | Description |
 |-------|------|-------------|-------------|
 | id | TEXT | PRIMARY KEY | Unique invitation identifier (UUID v4) |
-| token | TEXT | NOT NULL, UNIQUE | Invitation token (32-character hex) |
+| token | TEXT | NOT NULL, UNIQUE | Invitation token (UUID v4 — not a 32-char hex string as this doc used to claim; `crypto.randomUUID()`) |
 | email | TEXT | NOT NULL | Email address of invitee |
-| project_id | TEXT | NOT NULL, FK → projects.id | Project to invite to |
+| project_id | TEXT | NOT NULL | Project to invite to — not FK-enforced at the SQLite level |
 | role | TEXT | NOT NULL | Role to assign: 'admin', 'operator', 'viewer' |
-| created_by | TEXT | NOT NULL, FK → users.id | User who sent invitation |
+| expires_at | INTEGER | NOT NULL | Unix timestamp of expiration (24h from creation) |
+| status | TEXT | NOT NULL, DEFAULT 'pending' | 'pending' or 'accepted' — there is no separate `accepted_at` column; acceptance is `status='accepted'` + `updated_at` |
 | created_at | INTEGER | NOT NULL | Unix timestamp (seconds) |
-| expires_at | INTEGER | NOT NULL | Unix timestamp of expiration |
-| accepted_at | INTEGER | NULL | Unix timestamp of acceptance (NULL = pending) |
+| updated_at | INTEGER | NOT NULL | Unix timestamp (seconds) — bumped on acceptance |
+
+There is no `created_by` column — which admin sent a given invitation is not currently tracked
+(same gap noted on ProjectUser above).
 
 **Relationships**:
-- Many-to-one with `projects` (project this invitation is for)
-- Many-to-one with `users` (user who sent invitation)
+- Many-to-one with `projects` (project this invitation is for) — not FK-enforced at the SQLite level
 
 **Validation Rules**:
-- `token`: 32-character hex string
-- `email`: Valid email format
-- `role`: Must be one of ['admin', 'operator', 'viewer']
-- `expires_at`: Must be > `created_at`
-- `accepted_at`: Must be > `created_at` and < `expires_at` if present
+- `token`: UUID v4
+- `email`: Valid email format (checked at the application layer, not a DB constraint)
+- `role`: Must be one of ['admin', 'operator', 'viewer'] (checked at the application layer)
+- `expires_at`: Always `created_at + 86400` (24h) — not independently settable
 
 **State Transitions**:
 ```
 pending → accepted (user accepts invitation)
 pending → expired (expires_at passed)
 ```
+Note: "expired" is not a stored `status` value — `InvitationManager.validate()` computes it at
+read time by comparing `expires_at` against the current time while `status` is still 'pending'.
+Only 'pending' and 'accepted' actually appear in the `status` column.
 
 ---
 
