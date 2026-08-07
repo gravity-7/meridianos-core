@@ -879,7 +879,7 @@ button:active { transform: translateY(0); box-shadow: none; }
   </div>
 </div>
 
-<script>
+<script type="module">
 // Same-origin CSRF/local-process guard (postmortem security P1): the server injects a per-boot
 // token into __AIOS_TOKEN__ below; we attach it to every same-origin request via a fetch wrapper
 // so no individual fetch call needs to know about it. A cross-origin page can neither read this
@@ -998,16 +998,18 @@ async function postAction(endpoint, payload) {
   try {
     const r = await fetch(endpoint, { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(payload) });
     const j = await r.json();
-    if (!j.ok) { $('dirty').textContent = 'action failed: ' + j.error; $('dirty').style.display = 'inline'; } 
+    if (!j.ok) { $('dirty').textContent = 'action failed: ' + j.error; $('dirty').style.display = 'inline'; }
     else poll();
   } catch (e) { $('dirty').textContent = 'action failed: ' + e.message; $('dirty').style.display = 'inline'; }
 }
+window.postAction = postAction;
 
 function actEsc(id, ep, pay) {
   const endpoint = ep ? decodeURIComponent(ep) : '/api/escalation';
   const payload = pay ? JSON.parse(decodeURIComponent(pay)) : {id, action: 'ack'};
   postAction(endpoint, payload);
 }
+window.actEsc = actEsc;
 
 // Founder approves a §6 governance hold → unblock the task back into the pipeline. The server
 // records the approval so the planner won't immediately re-block it.
@@ -1015,12 +1017,7 @@ function unblockEsc(task) {
   if (!confirm(`Approve and unblock ${task}?\n\nThis clears the §6 governance hold so agents may work it (e.g. spend money / send external). Proceed only if you approve that action.`)) return;
   postAction('/api/task', { id: task, action: 'unblock' });
 }
-
-function formatNumber(num) {
-  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
-  if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
-  return num.toString();
-}
+window.unblockEsc = unblockEsc;
 
 function formatSpend(amount) {
   if (amount === 0) return '$0.00';
@@ -1035,11 +1032,13 @@ function snoozeEsc(task, days, sel) {
   if (sel) sel.selectedIndex = 0;
   postAction('/api/task', { id: task, action: 'snooze', days: Number(days) });
 }
+window.snoozeEsc = snoozeEsc;
 function skipEsc(task) {
   const reason = prompt(`Optional reason for skipping ${task} (leave blank to skip without one):`, '');
   if (reason === null) return; // cancelled
   postAction('/api/task', { id: task, action: 'skip', reason: reason || undefined });
 }
+window.skipEsc = skipEsc;
 
 // 009 — Dashboard Modernization (US4/FR-009): renderEscalations() (the "needs you" list renderer)
 // removed along with its now-gone #escalationsList/#escalationsPanel elements — the same escList
@@ -1054,6 +1053,7 @@ function toggleParked() {
   $('parkedList').style.display = parkedOpen ? 'block' : 'none';
   $('parkedCaret').textContent = parkedOpen ? '▾' : '▸';
 }
+window.toggleParked = toggleParked;
 function renderParked(list) {
   const panel = $('parkedPanel'), el = $('parkedList'), count = $('parkedCount');
   if (!list || !list.length) { panel.style.display = 'none'; return; }
@@ -1196,11 +1196,13 @@ function copySession(sess, agent) {
     setTimeout(() => el.style.display = 'none', 2000);
   });
 }
+window.copySession = copySession;
 // 009 — Dashboard Modernization (US2/FR-004): activeRowHtml()/renderActiveList()/renderQueue()
 // removed along with their now-gone #activeList/#queueList/#qcount/#qtoggle targets — this content
 // now renders in task-workflow-panel.mjs (self-contained copies of this HTML-generation logic,
 // reusing copySession()/openSpec() from here as shared globals, per that file's own doc comment).
 function defaultSpecPath(id){ return '.ai/features/'+id+'/spec.md'; }
+window.defaultSpecPath = defaultSpecPath;
 let specDirty=false;
 // `taskStatus`/`taskOwner` are only passed when opening from an escalation/parked-task control
 // (the founder already knows this is a real task, not a "next up" queue card). When present AND
@@ -1247,6 +1249,7 @@ async function openSpec(id, path, reason, taskStatus, taskOwner){
   ta.disabled=false;
   loadSpecComments(id);
 }
+window.openSpec = openSpec;
 // 008 — Team Collaboration (US3): comments on the currently-open spec/task, using the same
 // per-user JWT session as the Team workspace (auth-client.mjs) — not the shared __AIOS_TOKEN__
 // this file's other fetches use, since comments need a real author, not "the dashboard".
@@ -1458,7 +1461,9 @@ async function runCmd(name) {
   cmdRunning = false;
   btns.forEach(b => { b.disabled = false; b.style.borderColor = ''; });
 }
+window.runCmd = runCmd;
 function clearCmdOutput() { $('cmdOutput').style.display = 'none'; $('cmdPre').textContent = ''; }
+window.clearCmdOutput = clearCmdOutput;
 async function stopScheduler() {
   if (!confirm('Stop the scheduler? You will need to restart it manually.')) return;
   const out = $('cmdOutput'), pre = $('cmdPre'), label = $('cmdLabel');
@@ -1471,6 +1476,7 @@ async function stopScheduler() {
     stopPolling();
   } catch (e) { pre.textContent = 'connection lost — scheduler has stopped'; pre.style.color = 'var(--text-warning)'; label.textContent = 'scheduler stopped — restart with: node tools/aios/scheduler.mjs'; stopPolling(); }
 }
+window.stopScheduler = stopScheduler;
 async function restartDaemon() {
   if (!confirm('Restart & update the daemon?\n\nIt will stop, pull the latest main (picking up any merged tools/aios changes), and restart — about 10 seconds of downtime. The dashboard will briefly disconnect, then reconnect.')) return;
   const out = $('cmdOutput'), pre = $('cmdPre'), label = $('cmdLabel');
@@ -1502,6 +1508,7 @@ async function restartDaemon() {
     if (tries > 40) { clearInterval(reconnect); label.textContent = 'daemon did not come back — check .ai/runs/restart.log'; }
   }, 2000);
 }
+window.restartDaemon = restartDaemon;
 initCmdButtons();
 
 const POLL_MS=10000;
@@ -1587,6 +1594,7 @@ async function fetchIdeConfig(ideName) {
     pre.style.display = 'block';
   }
 }
+window.fetchIdeConfig = fetchIdeConfig;
 
 async function testIdeConn(ideName) {
   const el = $('ideTest-' + ideName);
@@ -1601,6 +1609,7 @@ async function testIdeConn(ideName) {
     el.style.color = 'var(--text-danger)';
   }
 }
+window.testIdeConn = testIdeConn;
 
 // ─── P4: MCP Config Panel ───────────────────────────────────────────────────
 
@@ -1689,6 +1698,7 @@ function reportBrokenSub(providerName) {
   const url = 'https://github.com/gravity-7/meridianos-core/issues/new?title=Subscription%20token%20extraction%20broken:%20' + encodeURIComponent(providerName) + '&labels=bug,docs';
   window.open(url, '_blank');
 }
+window.reportBrokenSub = reportBrokenSub;
 
 // ─── P4: Add Subscription Modal ─────────────────────────────────────────────
 
@@ -1765,6 +1775,7 @@ function setAnalyticsRange(days, fetchNow = true) {
   $('analyticsDateRange').textContent = '· last ' + (labels[days]||days+'d');
   if (fetchNow) fetchAnalytics();
 }
+window.setAnalyticsRange = setAnalyticsRange;
 
 // 009 — Dashboard Modernization (US1/FR-002): the hand-rolled LineChart/DonutChart canvas classes
 // that used to render here were removed — superseded by the themed uPlot panels in the Settings &
@@ -1824,6 +1835,7 @@ function exportAnalyticsCSV() {
   a.download = `analytics-${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
 }
+window.exportAnalyticsCSV = exportAnalyticsCSV;
 
 function formatNumber(n) {
   if (n>=1e6) return (n/1e6).toFixed(1)+'M';
@@ -1889,6 +1901,7 @@ async function toggleSpendPause() {
     fetchBudget();
   } catch(e) { alert('Failed: '+e.message); }
 }
+window.toggleSpendPause = toggleSpendPause;
 
 // ─── P5: Alerts (T052) ─────────────────────────────────────────────────────
 
@@ -1908,6 +1921,7 @@ async function testAlert() {
     } catch (e) { reportError('testAlert-refreshConfig', e, { severity: 'info' }); }
   } catch(e) { $('testAlertResult').textContent = '✗ '+e.message; reportError('testAlert', e); }
 }
+window.testAlert = testAlert;
 
 // ─── P5: Optimization (T060) ────────────────────────────────────────────────
 
@@ -1946,6 +1960,7 @@ async function applyOpt(id) {
     fetchOptimization();
   } catch(e) { alert('Failed: '+e.message); }
 }
+window.applyOpt = applyOpt;
 
 async function dismissOpt(id) {
   const reason = prompt('Reason for dismissal?') || '';
@@ -1958,6 +1973,7 @@ async function dismissOpt(id) {
     fetchOptimization();
   } catch(e) { alert('Failed: '+e.message); }
 }
+window.dismissOpt = dismissOpt;
 
 // 008 — End-User Configurability: Settings/Observability workspace visibility toggle. The Muuri
 // grid computes item positions from layout at init time, so it must only ever be initialized
@@ -1971,11 +1987,13 @@ function showSettingsWorkspace() {
     import('./static/settings-workspace-bootstrap.mjs');
   }
 }
+window.showSettingsWorkspace = showSettingsWorkspace;
 function toggleSettingsWorkspace() {
   const panel = document.getElementById('settingsPanel');
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
   showSettingsWorkspace();
 }
+window.toggleSettingsWorkspace = toggleSettingsWorkspace;
 
 // 008 — Team Collaboration (US3): same lazy-load-on-first-open pattern as Settings above.
 let _teamWorkspaceInitialized = false;
@@ -1992,6 +2010,7 @@ function toggleTeamWorkspace() {
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
   showTeamWorkspace();
 }
+window.toggleTeamWorkspace = toggleTeamWorkspace;
 
 // Admin workspace (Projects/Templates/API Keys/Billing/Compliance/Marketplace): same
 // lazy-load-on-first-open pattern as Team/Settings above.
@@ -2009,6 +2028,7 @@ function toggleAdminWorkspace() {
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
   showAdminWorkspace();
 }
+window.toggleAdminWorkspace = toggleAdminWorkspace;
 
 // 009 — Dashboard Modernization (US2/FR-003): the panel-grid workspace is now the default view on
 // page load instead of a hidden overlay behind the "⚙ Settings" nav button. Placed here — the true
