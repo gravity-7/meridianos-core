@@ -190,13 +190,25 @@ describe('setup wizard (scripts/setup-wizard-minimal.mjs)', () => {
 
 // ─── T015: system tray icon + menu ───────────────────────────────────────────────────────────
 describe('T015 — system tray icon and menu (tray-icons.mjs, tray-status.mjs)', () => {
-  test('getTrayIcon returns a valid 32x32 RGB PNG for each status, and falls back for unknown', () => {
+  test('getTrayIcon returns a valid 32x32 RGB PNG for each status on macOS/Linux, and falls back for unknown', () => {
+    // Explicit non-win32 platform — deterministic regardless of which OS actually runs this test
+    // (getTrayIcon returns ICO, not PNG, on win32; see the win32 test below and the module doc comment).
     const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     for (const status of ['green', 'yellow', 'red', 'anything-else']) {
-      const buf = Buffer.from(getTrayIcon(status), 'base64');
+      const buf = Buffer.from(getTrayIcon(status, 'linux'), 'base64');
       assert.ok(buf.subarray(0, 8).equals(PNG_SIGNATURE), `${status} icon must start with the PNG signature`);
       assert.equal(buf.readUInt32BE(16), 32, `${status} icon width`);
       assert.equal(buf.readUInt32BE(20), 32, `${status} icon height`);
+    }
+  });
+
+  test('getTrayIcon returns a valid 32x32 ICO for each status on win32 (systray requires ICO there)', () => {
+    const ICO_SIGNATURE = Buffer.from([0x00, 0x00, 0x01, 0x00]); // reserved=0, type=1 (ICO)
+    for (const status of ['green', 'yellow', 'red', 'anything-else']) {
+      const buf = Buffer.from(getTrayIcon(status, 'win32'), 'base64');
+      assert.ok(buf.subarray(0, 4).equals(ICO_SIGNATURE), `${status} icon must start with the ICO signature`);
+      assert.equal(buf[6], 32, `${status} icon width`);  // directory entry, right after the 6-byte ICO header
+      assert.equal(buf[7], 32, `${status} icon height`);
     }
   });
 

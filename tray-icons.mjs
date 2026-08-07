@@ -129,13 +129,15 @@ const cache = new Map();
 /**
  * Base64 icon for a tray status. `status` is one of 'green'|'yellow'|'red' (FR-004); unknown
  * values fall back to 'yellow'. On Windows returns ICO base64 (required by systray on win32);
- * on macOS/Linux returns PNG base64.
+ * on macOS/Linux returns PNG base64. `platform` defaults to `process.platform` (real runtime
+ * behavior) but is injectable so tests can assert both branches deterministically regardless of
+ * which OS is actually running the test — mirrors this repo's buildBinary/installService pattern.
  */
-export function getTrayIcon(status) {
+export function getTrayIcon(status, platform = process.platform) {
   const color = COLORS[status] ?? COLORS.yellow;
-  const cacheKey = `${process.platform}:${status}`;
+  const cacheKey = `${platform}:${status}`;
   if (!cache.has(cacheKey)) {
-    const icon = process.platform === 'win32'
+    const icon = platform === 'win32'
       ? solidColorIco(32, color)
       : solidColorPng(32, color);
     cache.set(cacheKey, icon);

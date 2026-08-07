@@ -113,10 +113,16 @@ export function parseArgs(argv) {
  * Returns `{ ...assembled, token, registeredRun }` (see `assembleGateway`'s own return shape for
  * `gateway`/`ledger`/`runs`/`store`/`url`/`close`). `token` is the minted gateway token for the one
  * default run registered when `--provider` is given; `null` when it isn't (nothing registered).
+ *
+ * `flags.root` overrides the repo root `createAios` resolves `.ai/tenant.yaml`/`.ai/policy.yaml`
+ * (agents/domain) from — defaults to `process.cwd()`, unchanged for real CLI usage. Lets tests drive
+ * `startCli()` in-process against an isolated temp root instead of depending on ambient repo state
+ * (BUG-1).
  */
 export async function startCli(flags = {}) {
   const port = flags.port !== undefined ? Number(flags.port) : 0;
   const tenant = flags.tenant ?? 'default';
+  const root = typeof flags.root === 'string' ? flags.root : process.cwd();
   const policy = flags.policy && typeof flags.policy === 'string' ? loadPolicy(flags.policy) : {};
   const ledgerPath = typeof flags.ledger === 'string' ? flags.ledger : undefined;
 
@@ -135,7 +141,7 @@ export async function startCli(flags = {}) {
 
   // Phase 7: Pass config to assembleGateway so it can load the pricing catalog
   const { createAios } = await import('../config.mjs');
-  const { config } = createAios({ root: process.cwd() });
+  const { config } = createAios({ root });
   const assembled = await assembleGateway({ config, policy, port, tenant, ledgerPath });
 
   let token = null;
