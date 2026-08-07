@@ -10,6 +10,10 @@
  * targeted). The patterns are deliberately narrow (see EMPTY_CATCH_RE / POLL_REASSIGN_RE below) so
  * this test fails only on the exact anti-patterns it exists to prevent, not on legitimate catches
  * that already report or handle their error.
+ *
+ * 010 (Frontend ES Module Migration, FR-010) adds two more assertions, both expected to stay red
+ * from Phase 1 through Phase 10 and go green only once Phase 11/US9 deletes dashboard/index.html's
+ * classic script entirely — see TOP_LEVEL_FUNCTION_RE / NON_MODULE_SCRIPT_RE below.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,6 +34,26 @@ const EMPTY_CATCH_RE = /catch\s*(\([^)]*\))?\s*\{\s*(\/\*[\s\S]*?\*\/\s*)*\}/g;
 // Matches the specific `poll = async function` global-reassignment anti-pattern this phase replaces
 // with poll-dispatcher.mjs's registerPollHandler().
 const POLL_REASSIGN_RE = /\bpoll\s*=\s*async\s+function\s*\(/g;
+
+// Matches a top-level `function foo(...)` / `async function foo(...)` declaration — anchored to
+// column 0 (start of line, `m` flag) because every classic-script declaration in
+// dashboard/index.html is written unindented; a nested function inside another function/callback is
+// always indented. Confirmed empirically, not assumed: a `^\s+(async )?function ` scan (leading
+// whitespace required) over the current file returns zero matches. This is FR-010/010's completion
+// gate — expected to match 66 declarations (65 unique names) at Phase 1 baseline, dropping to zero
+// only once Phase 11/US9 removes the classic script entirely.
+const TOP_LEVEL_FUNCTION_RE = /^(async )?function [a-zA-Z_$][a-zA-Z0-9_$]*/gm;
+
+// Matches any `<script` tag that is neither `type="module"` nor one of the three unmodified vendor
+// `<script src="static/vendor/...">` includes (uPlot/Muuri/Litegraph, out of scope per 010's
+// Assumptions) — i.e. a classic (non-module), non-vendor script tag, exactly what FR-002 forbids
+// once 010 completes. Order-independent: the lookaheads scan the whole tag for `type="module"` /
+// the vendor src prefix regardless of where in the tag they appear. Anchored to column 0 (`^`, `m`
+// flag), same empirically-confirmed convention as TOP_LEVEL_FUNCTION_RE above — every real
+// `<script` tag in this file starts a line; the string "<script>" also appears once, unanchored,
+// inside a prose HTML comment near the vendor includes (referring to the concept, not a real tag),
+// which the anchor correctly excludes.
+const NON_MODULE_SCRIPT_RE = /^<script(?![^>]*type="module")(?![^>]*src="static\/vendor\/)[^>]*>/gm;
 
 function findMatches(source, re) {
   const matches = [];
@@ -101,6 +125,29 @@ test('dashboard/index.html has zero `poll = async function` reassignments', () =
     [],
     `Found ${matches.length} \`poll = async function\` reassignment(s) in dashboard/index.html ` +
       `— use poll-dispatcher.mjs's registerPollHandler() instead:\n` +
+      matches.map((m) => `  line ${m.line}: ${m.text}`).join('\n'),
+  );
+});
+
+test('dashboard/index.html has zero top-level function declarations (010 FR-010)', () => {
+  const source = readFileSync(join(REPO_ROOT, 'dashboard', 'index.html'), 'utf8');
+  const matches = findMatches(source, TOP_LEVEL_FUNCTION_RE);
+  assert.deepEqual(
+    matches,
+    [],
+    `Found ${matches.length} top-level function declaration(s) in dashboard/index.html — each must ` +
+      `move into a dashboard/static/*.mjs module (Constitution Principle VIII):\n` +
+      matches.map((m) => `  line ${m.line}: ${m.text}`).join('\n'),
+  );
+});
+
+test('dashboard/index.html has zero non-module, non-vendor <script> tags (010 FR-010)', () => {
+  const source = readFileSync(join(REPO_ROOT, 'dashboard', 'index.html'), 'utf8');
+  const matches = findMatches(source, NON_MODULE_SCRIPT_RE);
+  assert.deepEqual(
+    matches,
+    [],
+    `Found ${matches.length} classic (non-module, non-vendor) <script> tag(s) in dashboard/index.html:\n` +
       matches.map((m) => `  line ${m.line}: ${m.text}`).join('\n'),
   );
 });
