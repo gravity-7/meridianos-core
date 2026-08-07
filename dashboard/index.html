@@ -883,6 +883,7 @@ button:active { transform: translateY(0); box-shadow: none; }
 import { esc, relTime, formatSpend, formatNumber, shortModel, badgeFor, outcomeBadge } from './static/dashboard-utils.mjs';
 import { renderParked } from './static/escalation-actions.mjs';
 import { renderFounderUsage, renderProviderCost } from './static/spend-budget.mjs';
+import './static/optimization.mjs';
 // Same-origin CSRF/local-process guard (postmortem security P1): the server injects a per-boot
 // token into __AIOS_TOKEN__ below; we attach it to every same-origin request via a fetch wrapper
 // so no individual fetch call needs to know about it. A cross-origin page can neither read this
@@ -1534,61 +1535,6 @@ registerPollHandler(fetchMcpConfig);
 registerPollHandler(fetchIdeStatus);
 registerPollHandler(fetchSubscriptions);
 
-// 009 — Dashboard Modernization (US3/FR-008): analytics/budget/optimization register on the poll
-// dispatcher instead of reassigning `poll` — see poll-dispatcher.mjs.
-registerPollHandler(fetchOptimization);
-
-// ─── P5: Optimization (T060) ────────────────────────────────────────────────
-
-async function fetchOptimization() {
-  try {
-    const r = await fetch('/api/analytics/optimization/recommendations?status=active').then(r=>r.json());
-    const recs = r.recommendations || [];
-    $('optSummary').textContent = '· '+recs.length+' active recommendation(s)';
-    if (recs.length === 0) {
-      $('optList').innerHTML = '<span style="color:var(--text-muted)">No recommendations yet. Requires 7+ days of usage data.</span>';
-      return;
-    }
-    let html = '';
-    for (const rec of recs.slice(0, 5)) {
-      html += `<div class="row" style="justify-content:space-between">
-        <span><strong>${rec.task_type}</strong>: ${rec.current_model} → ${rec.recommended_model}</span>
-        <span style="color:var(--text-success)">Save ~$${rec.estimated_weekly_savings}/wk</span>
-        <span style="font-size:11px">confidence: ${Math.round((rec.confidence||0)*100)}%</span>
-        <button onclick="applyOpt('${rec.id}')" style="font-size:11px;padding:2px 8px">Apply</button>
-        <button onclick="dismissOpt('${rec.id}')" style="font-size:11px;padding:2px 8px">Dismiss</button>
-      </div>`;
-    }
-    $('optList').innerHTML = html;
-  } catch (e) {
-    reportError('fetchOptimization', e, { panelEl: $('optList'), severity: 'info' });
-  }
-}
-
-async function applyOpt(id) {
-  try {
-    await fetch('/api/analytics/optimization/apply', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-aios-token': '__AIOS_TOKEN__' },
-      body: JSON.stringify({ id }),
-    });
-    fetchOptimization();
-  } catch(e) { alert('Failed: '+e.message); }
-}
-window.applyOpt = applyOpt;
-
-async function dismissOpt(id) {
-  const reason = prompt('Reason for dismissal?') || '';
-  try {
-    await fetch('/api/analytics/optimization/dismiss', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-aios-token': '__AIOS_TOKEN__' },
-      body: JSON.stringify({ id, reason }),
-    });
-    fetchOptimization();
-  } catch(e) { alert('Failed: '+e.message); }
-}
-window.dismissOpt = dismissOpt;
 
 // 008 — End-User Configurability: Settings/Observability workspace visibility toggle. The Muuri
 // grid computes item positions from layout at init time, so it must only ever be initialized
