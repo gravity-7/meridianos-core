@@ -180,7 +180,7 @@ const sharedContext = `
 ### PR Description
 ${prBody.slice(0, 1000)}
 
-### Spec Context (${SPEC_DIR})
+### Spec Context (${resolvedSpecDir})
 ${truncate(spec, MAX_SPEC_LINES)}
 
 ### Constitution Principles (abbreviated)
