@@ -36,23 +36,23 @@
 1. **Verify header format:**
    ```bash
    # Correct format
-   curl -H "Authorization: Bearer <your-jwt-token>" http://localhost:4320/api/projects
+   curl -H "Authorization: Bearer <your-jwt-token>" http://localhost:4317/api/projects
 
    # Incorrect format
-   curl -H "Authorization: <your-jwt-token>" http://localhost:4320/api/projects
+   curl -H "Authorization: <your-jwt-token>" http://localhost:4317/api/projects
    ```
 
 2. **Check token expiration:**
    ```bash
    # Refresh your token
-   curl -X POST http://localhost:4320/api/auth/refresh \
+   curl -X POST http://localhost:4317/api/auth/refresh \
      -H "Authorization: Bearer <expired-token>"
    ```
 
 3. **Regenerate token:**
    ```bash
    # Login again
-   curl -X POST http://localhost:4320/api/auth/login \
+   curl -X POST http://localhost:4317/api/auth/login \
      -H "Content-Type: application/json" \
      -d '{"email":"user@example.com","password":"password"}'
    ```
@@ -67,7 +67,7 @@
 
 1. **Refresh the token:**
    ```bash
-   curl -X POST http://localhost:4320/api/auth/refresh \
+   curl -X POST http://localhost:4317/api/auth/refresh \
      -H "Authorization: Bearer <your-token>"
    ```
 
@@ -125,18 +125,18 @@
 1. **Verify project ID:**
    ```bash
    # List all projects
-   curl http://localhost:4320/api/projects \
+   curl http://localhost:4317/api/projects \
      -H "Authorization: Bearer <your-token>"
 
    # Use correct project ID from the list
-   curl http://localhost:4320/api/projects/<correct-id> \
+   curl http://localhost:4317/api/projects/<correct-id> \
      -H "Authorization: Bearer <your-token>"
    ```
 
 2. **Check project status:**
    ```bash
    # Get project details
-   curl http://localhost:4320/api/projects/<id> \
+   curl http://localhost:4317/api/projects/<id> \
      -H "Authorization: Bearer <your-token>"
 
    # Check if project exists and is accessible
@@ -158,17 +158,17 @@
 
 1. **Check license status:**
    ```bash
-   curl http://localhost:4320/api/billing/license \
+   curl http://localhost:4317/api/billing/license \
      -H "Authorization: Bearer <your-token>"
    ```
 
 2. **Upgrade license:**
    ```bash
    # Get pricing plans
-   curl http://localhost:4320/api/billing/pricing
+   curl http://localhost:4317/api/billing/pricing
 
    # Create checkout session
-   curl -X POST http://localhost:4320/api/billing/checkout \
+   curl -X POST http://localhost:4317/api/billing/checkout \
      -H "Authorization: Bearer <your-token>" \
      -H "Content-Type: application/json" \
      -d '{"plan":"pro"}'
@@ -176,7 +176,7 @@
 
 3. **Check tier limits:**
    ```bash
-   curl http://localhost:4320/api/billing/limits \
+   curl http://localhost:4317/api/billing/limits \
      -H "Authorization: Bearer <your-token>"
    ```
 
@@ -190,14 +190,14 @@
 
 1. **List available templates:**
    ```bash
-   curl http://localhost:4320/api/projects/templates \
+   curl http://localhost:4317/api/projects/templates \
      -H "Authorization: Bearer <your-token>"
    ```
 
 2. **Use correct template ID:**
    ```bash
    # Correct template IDs: saas-web-app, mobile-app, cli-tool, etc.
-   curl -X POST http://localhost:4320/api/projects \
+   curl -X POST http://localhost:4317/api/projects \
      -H "Authorization: Bearer <your-token>" \
      -H "Content-Type: application/json" \
      -d '{
@@ -250,11 +250,18 @@
 - 401 Unauthorized error
 - Error message: "License key validation failed"
 
+**Likely cause if this started happening after a routine restart**: `licensing/license-key.mjs`
+generates its RSA signing keypair in memory on first use and does not currently persist it to
+disk. Every process restart mints a fresh keypair, so any license key signed before that restart
+fails signature verification afterward — this is a known gap, not necessarily a problem with the
+key itself. Re-issue the license (or restart the checkout flow) rather than assuming the key is
+corrupt.
+
 **Solutions:**
 
 1. **Validate license key:**
    ```bash
-   curl -X POST http://localhost:4320/api/billing/license/validate \
+   curl -X POST http://localhost:4317/api/billing/license/validate \
      -H "Authorization: Bearer <your-token>" \
      -H "Content-Type: application/json" \
      -d '{"license_key":"<your-license-key>"}'
@@ -262,13 +269,13 @@
 
 2. **Check license status:**
    ```bash
-   curl http://localhost:4320/api/billing/license \
+   curl http://localhost:4317/api/billing/license \
      -H "Authorization: Bearer <your-token>"
    ```
 
 3. **Refresh license:**
    ```bash
-   curl -X POST http://localhost:4320/api/billing/license/refresh \
+   curl -X POST http://localhost:4317/api/billing/license/refresh \
      -H "Authorization: Bearer <your-token>"
    ```
 
@@ -282,7 +289,7 @@
 
 1. **Get subscription details:**
    ```bash
-   curl http://localhost:4320/api/billing/subscription \
+   curl http://localhost:4317/api/billing/subscription \
      -H "Authorization: Bearer <your-token>"
    ```
 
@@ -308,13 +315,13 @@
 1. **Check invitation expiration:**
    ```bash
    # List invitations
-   curl http://localhost:4320/api/auth/invitations \
+   curl http://localhost:4317/api/auth/invitations \
      -H "Authorization: Bearer <admin-token>"
    ```
 
 2. **Create new invitation:**
    ```bash
-   curl -X POST http://localhost:4320/api/auth/invitations \
+   curl -X POST http://localhost:4317/api/auth/invitations \
      -H "Authorization: Bearer <admin-token>" \
      -H "Content-Type: application/json" \
      -d '{
@@ -324,8 +331,8 @@
      }'
    ```
 
-3. **Use invitation within 7 days:**
-   - Invitations expire after 7 days
+3. **Use invitation within 24 hours:**
+   - Invitations expire after 24 hours (`auth/user-store.mjs`)
    - Create a new invitation if expired
 
 ### Issue: "Member not found"
@@ -338,7 +345,7 @@
 
 1. **List project members:**
    ```bash
-   curl http://localhost:4320/api/projects/<project-id>/members \
+   curl http://localhost:4317/api/projects/<project-id>/members \
      -H "Authorization: Bearer <your-token>"
    ```
 
@@ -370,14 +377,14 @@
 2. **Check activity logger:**
    ```bash
    # Verify activity logger is running
-   curl http://localhost:4320/api/activity/stats \
+   curl http://localhost:4317/api/activity/stats \
      -H "Authorization: Bearer <your-token>"
    ```
 
 3. **Check project ID:**
    ```bash
    # Verify project exists
-   curl http://localhost:4320/api/projects/<project-id> \
+   curl http://localhost:4317/api/projects/<project-id> \
      -H "Authorization: Bearer <your-token>"
    ```
 
@@ -405,14 +412,15 @@
 2. **Verify report type:**
    ```bash
    # List available report types
-   curl http://localhost:4320/api/compliance/reports \
+   curl http://localhost:4317/api/compliance/reports \
      -H "Authorization: Bearer <your-token>"
    ```
 
 3. **Check report format:**
    ```bash
-   # Supported formats: csv, json, pdf
-   curl -X POST http://localhost:4320/api/compliance/reports/soc2 \
+   # Supported formats: csv, json (PDF export methods exist in the report classes but
+   # aren't wired to any route yet — requesting "pdf" falls through to the JSON response)
+   curl -X POST http://localhost:4317/api/compliance/reports/soc2 \
      -H "Authorization: Bearer <your-token>" \
      -H "Content-Type: application/json" \
      -d '{
@@ -431,7 +439,7 @@
 
 1. **List generated reports:**
    ```bash
-   curl http://localhost:4320/api/compliance/reports \
+   curl http://localhost:4317/api/compliance/reports \
      -H "Authorization: Bearer <your-token>"
    ```
 
@@ -462,7 +470,7 @@
 
 1. **Check rate limit headers:**
    ```bash
-   curl -I http://localhost:4320/api/projects \
+   curl -I http://localhost:4317/api/projects \
      -H "Authorization: Bearer <your-token>"
 
    # Check X-RateLimit-* headers
@@ -481,7 +489,7 @@
 3. **Use pagination:**
    ```bash
    # Use limit and offset parameters
-   curl http://localhost:4320/api/projects?limit=10&offset=0 \
+   curl http://localhost:4317/api/projects?limit=10&offset=0 \
      -H "Authorization: Bearer <your-token>"
    ```
 
@@ -608,6 +616,15 @@
 
 ## OAuth SSO Issues
 
+**Before troubleshooting a specific error below**: OAuth SSO login does not currently complete
+end-to-end regardless of configuration. `dashboard/server.mjs`'s OAuth handlers call
+`auth/oauth-provider.mjs` methods with the wrong argument count (and one method,
+`exchangeCodeForTokens`, that doesn't exist — the real method is `exchangeCode`), and there is no
+session store backing the authorize→callback round trip on this server's raw `node:http` stack, so
+"check if session cookie is set" below will never find one. Use email/password login or an API key
+until this is fixed in code — see [KNOWN-ISSUES.md](KNOWN-ISSUES.md). The sections below are kept
+for when that's fixed and for diagnosing config-level problems once it is.
+
 ### Issue: "OAuth provider not configured"
 
 **Symptoms:**
@@ -650,7 +667,7 @@
 1. **Check state parameter:**
    ```bash
    # Verify state is passed correctly
-   curl "http://localhost:4320/api/auth/oauth/google/authorize?state=xyz" \
+   curl "http://localhost:4317/api/auth/oauth/google/authorize?state=xyz" \
      -H "Authorization: Bearer <your-token>"
    ```
 

@@ -2,7 +2,7 @@
 
 **Version**: 1.0.0  
 **Last Updated**: 2026-08-02  
-**Base URL**: `http://localhost:4320/api`
+**Base URL**: `http://localhost:4317/api`
 
 ## Table of Contents
 
@@ -968,6 +968,13 @@ Authorization: Bearer <token>
 ---
 
 ## OAuth SSO
+
+> ⚠️ **Not functional end-to-end today.** The routes below exist and are documented as designed,
+> but `handleOAuthAuthorize`/`handleOAuthCallback` currently call `auth/oauth-provider.mjs`
+> methods with mismatched arguments (and one non-existent method name), and there's no session
+> store backing the authorize→callback round trip on this server's raw `node:http` stack. A login
+> attempt will not currently complete. See [KNOWN-ISSUES.md](KNOWN-ISSUES.md). Use
+> `POST /api/auth/login` (email/password) or an API key until this is fixed.
 
 ### GET /api/auth/oauth/{provider}/authorize
 Generate OAuth authorization URL.

@@ -74,6 +74,14 @@ prompt/response content) to a cloud control plane every 30-300 seconds (configur
 any policy changes an operator pushes down. See
 [data-model.md](../specs/007-ecosystem-distribution/data-model.md) for the full privacy model.
 
+This is a **separate, optional, centrally-operated** deployment, not something every MeridianOS
+install talks to — a fleet operator runs `cloud-control-plane.mjs`/`cloud-server.mjs` once, and
+individual operators' `local-agent.mjs` opt in to phoning home to it. `cloud-control-plane.mjs`'s
+own header documents Cloudflare Workers + D1 as the intended production target; as shipped it only
+runs as a local Node `node:http` + `node:sqlite` dev server (`cloud-server.mjs`, no `wrangler.toml`
+yet) — fine for evaluating the feature or running it on your own always-on machine, but not yet a
+one-command Workers deployment.
+
 ## Troubleshooting
 
 | Symptom | Where to look |

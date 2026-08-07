@@ -43,3 +43,84 @@ OpenCode uses file-based configuration (`opencode.json`) with `{env:VAR}` interp
 ### Antigravity (agy)
 
 Antigravity uses `AGY_BASE_URL` env var for endpoint override. The gateway injection sets this to the gateway URL. No known bypass paths when the env var is correctly set.
+
+## OAuth SSO Login Does Not Complete
+
+**Added**: 2026-08-07 | **Found during**: a documentation accuracy pass, not a dedicated security review
+
+### Description
+
+OAuth SSO (Azure AD, Google Workspace, GitHub) has UI, routes, and a provider module, but the
+authorize→callback flow does not currently complete for any provider:
+
+- `dashboard/server.mjs`'s `handleOAuthAuthorize` calls `oauthProvider.getAuthorizeUrl(state)` with
+  one argument against a `getAuthorizeUrl(providerName, state)` signature in
+  `auth/oauth-provider.mjs` — the provider name is silently dropped.
+- `handleOAuthCallback` calls `oauthProvider.exchangeCodeForTokens(code)`, a method that does not
+  exist on `OAuthProvider` (the real method is `exchangeCode(providerName, code)`).
+- `getUserInfo(tokens.access_token)` is called with one argument against
+  `getUserInfo(providerName, accessToken)`.
+- `verifyIdToken` references a bare `jwt` identifier that is never imported in the file.
+- Both handlers read/write `req.session` — the dashboard is a raw `node:http` server with no
+  session middleware or store, so nothing set during `/authorize` can survive to the separate
+  `/callback` request regardless of the above.
+
+### Impact
+
+Clicking "Sign in with Google/GitHub/Azure AD" will not successfully authenticate a user. Every
+other auth path (email/password JWT login, invitation-based account creation, API keys) is
+unaffected.
+
+### Detection
+
+Attempting an OAuth login will error or hang at the callback step; the specific symptom depends on
+which of the mismatches above is hit first.
+
+### Mitigation
+
+Use email/password login or an API key. If OAuth is a hard requirement, this needs a code fix
+before it can be relied on — it is not a configuration problem, so double-checking client
+ID/secret/redirect URI (as the config-focused advice in
+[troubleshooting-multi-tenant.md](troubleshooting-multi-tenant.md#oauth-sso-issues) covers) will
+not resolve it on its own.
+
+### Permanent Fix
+
+Fix the four call-signature mismatches in `dashboard/server.mjs`'s OAuth handlers, add a session
+store (or switch to a stateless approach — e.g. a signed state parameter that round-trips through
+the redirect instead of server-side session storage), and import `jsonwebtoken` (or the project's
+existing JWT helper) where `verifyIdToken` needs it.
+
+## License Keys Invalidated on Every Restart
+
+**Added**: 2026-08-07 | **Found during**: a documentation accuracy pass, not a dedicated security review
+
+### Description
+
+`licensing/license-key.mjs`'s `LicenseKey.initializeKeys()` generates its RSA-2048 signing keypair
+in memory on first use and never persists it to disk — unlike `auth/jwt.mjs`'s JWT secret, which
+is written to `.ai/auth/jwt-secret` with `0600` permissions. Every process restart mints a fresh
+keypair.
+
+### Impact
+
+Any license key signed before a restart fails signature verification after it — `LicenseKey`'s own
+round-trip (`generate()` then `validate()`) only holds within a single process lifetime. Note this
+affects the *new-purchase validation* path specifically; day-to-day feature gating
+(`LicenseValidator.checkFeature`/`getLimits`) trusts the `licenses` database row directly and does
+not re-invoke this check, so an already-activated license keeps working — it's re-validating or
+issuing a license across a restart that breaks.
+
+### Detection
+
+"License key validation failed" shortly after a restart, for a key that worked before it.
+
+### Mitigation
+
+Re-issue the license (repeat checkout, or regenerate via the billing panel) after any restart that
+might have occurred since it was issued, rather than assuming the key itself is corrupt.
+
+### Permanent Fix
+
+Persist the RSA keypair the same way `auth/jwt.mjs` persists its secret — generate once, write to
+a `0600` file under `.ai/auth/`, and load it on subsequent boots instead of regenerating.

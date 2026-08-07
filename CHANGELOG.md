@@ -60,11 +60,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - "Team Collaboration" dashboard UI: a "👥 Team" toolbar button opens a lazy-loaded workspace (`dashboard/static/team-bootstrap.mjs`) showing per-project members, an invite-member modal, and an activity feed, wired to the real member/activity/invitation API; task comments are now attached to the existing spec-review modal, backed by `/api/tasks/:id/comments`
 - A minimal per-user JWT session helper (`dashboard/static/auth-client.mjs`, inline sign-in prompt + `localStorage` token) — the dashboard previously had no client-side login flow at all, so none of the per-user (not shared-secret) endpoints below were reachable from the UI
 
+#### Phase 10 Polish (T194–T202)
+- User documentation for multi-tenant platform features (`docs/user-guide.md`)
+- Integration tests for edge cases: control-plane crash recovery, concurrent `policy.yaml`
+  writes, and license-server-unreachable degradation (`tests/integration/test-edge-cases.mjs`)
+- Database backup and restore (`db-backup.mjs`, `scripts/backup-db.mjs`), wired into
+  `ProjectManager.backupDatabase()`/`restoreDatabase()`
+- Configuration hot-reload for non-critical `policy.yaml` settings while a project is running
+  (`config-hot-reload.mjs`), gated to a whitelist that excludes security-sensitive fields
+- Opt-in, local-only usage telemetry (`telemetry.mjs`) — no data leaves the machine unless the
+  operator explicitly enables it and ships it themselves
+- Final cross-story integration test exercising US1–US7 together against one control-plane DB
+  (`tests/integration/test-final-integration.mjs`)
+- Performance test for 10+ concurrently-running projects (`tests/performance/test-concurrent-projects.perf.mjs`)
+- Security audit (`docs/security-audit.md`) plus a re-runnable automated scanner
+  (`scripts/security-audit.mjs`)
+
 ### Fixed
 - Despite being listed as shipped in [1.0.0], Team Collaboration (US3) was non-functional end-to-end: `handleLogin`/`handleCreateUser` were referenced by the route table but never defined (every dashboard auth request threw `ReferenceError`), `APITokenManager` never created its own `api_tokens` table, `ActivityLogger.getProjectFeed()`/`getStats()` had camelCase/snake_case and double-counted-params bugs that silently broke project filtering, `InvitationManager.accept()` required a bearer JWT the invitee couldn't have yet (creating their account IS what accept() does), and `ReviewerAssigner` — imported by both `dashboard/server.mjs` and `runner.mjs` (T122) — didn't exist anywhere in the codebase. Also: `package.json`'s `test`/`test:ci` globs (`tests/integration/*.test.mjs`) excluded all 22 pre-existing `tests/integration/test-*.mjs` files from ever running, which is how all of the above shipped without a single test catching it. Fixed all of the above; added 3 new HTTP-level test files (`test-auth-http.mjs`, `test-reviewer-assignment.mjs`, `test-team-collaboration-http.mjs`, 47 tests) plus regression fixes to `test-activity-feed.mjs`; reconciled `schema/control-plane-schema.sql`, `schema/project-schema.sql`, and `specs/006-multi-tenant-platform/data-model.md` against the real runtime schema.
 - A pre-existing merge artifact in `dashboard/server.mjs` had left two colliding `handleGetTaskComments` declarations and an orphaned code fragment (missing function signature) that made the file fail to parse; resolved by renaming the project-scoped handler and restoring the orphaned body to its actual owner (`handleGetReviewAssignments`)
 - `model-registry.mjs`'s `upsertModel` could never actually persist a discovered model: `deprecated: modelData.deprecated ?? 0` let a literal JS `false` (the shape every discovery adapter returns) through unconverted, and better-sqlite3 cannot bind a raw boolean — every real call silently failed and was swallowed by the caller's try/catch. Found via a new end-to-end test exercising `discoverAllModels()` against a real database (003 — Provider & Model Agnosticism, T072 edge-case hardening), something no prior test had done.
 - `dashboard/server.mjs`'s Settings/Observability workspace panels (Muuri drag-resize, provider-spend breakdown) each shipped with a bug caught only by live-browser verification, not unit tests: a `ResizeObserver` callback passed a raw DOM element to Muuri's `refreshItems()` (which requires Item instances), silently throwing on every real resize; and the provider-spend panel read `/api/ledger/spend-by-provider`'s response as if it WERE the breakdown map, instead of its actual `{ok, available, providers}` wrapper shape.
+- Stale `'running'` project rows left behind by a control-plane crash are now reconciled to
+  `'stopped'`/`down` on the next start (`ProjectManager.reconcileAfterCrash()`), instead of
+  reporting a phantom running project with no process behind it
+- `writePolicy()` now serializes concurrent writers with a short-lived lock file, closing a
+  lost-update race when two processes edit `policy.yaml` at the same time
+- Database backups now lock their output file to `0600` on POSIX instead of inheriting the
+  process umask (security-audit.md §6)
 
 ## [1.0.0] - 2026-08-02
 
@@ -341,38 +364,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Updated core functionality
 - Improved stability
-
----
-
-## [Unreleased]
-
-### Added
-
-**Phase 10 Polish (T194–T202)**
-- User documentation for multi-tenant platform features (`docs/user-guide.md`)
-- Integration tests for edge cases: control-plane crash recovery, concurrent `policy.yaml`
-  writes, and license-server-unreachable degradation (`tests/integration/test-edge-cases.mjs`)
-- Database backup and restore (`db-backup.mjs`, `scripts/backup-db.mjs`), wired into
-  `ProjectManager.backupDatabase()`/`restoreDatabase()`
-- Configuration hot-reload for non-critical `policy.yaml` settings while a project is running
-  (`config-hot-reload.mjs`), gated to a whitelist that excludes security-sensitive fields
-- Opt-in, local-only usage telemetry (`telemetry.mjs`) — no data leaves the machine unless the
-  operator explicitly enables it and ships it themselves
-- Final cross-story integration test exercising US1–US7 together against one control-plane DB
-  (`tests/integration/test-final-integration.mjs`)
-- Performance test for 10+ concurrently-running projects (`tests/performance/test-concurrent-projects.perf.mjs`)
-- Security audit (`docs/security-audit.md`) plus a re-runnable automated scanner
-  (`scripts/security-audit.mjs`)
-
-### Fixed
-
-- Stale `'running'` project rows left behind by a control-plane crash are now reconciled to
-  `'stopped'`/`down` on the next start (`ProjectManager.reconcileAfterCrash()`), instead of
-  reporting a phantom running project with no process behind it
-- `writePolicy()` now serializes concurrent writers with a short-lived lock file, closing a
-  lost-update race when two processes edit `policy.yaml` at the same time
-- Database backups now lock their output file to `0600` on POSIX instead of inheriting the
-  process umask (security-audit.md §6)
 
 ---
 
