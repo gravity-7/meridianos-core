@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -65,6 +66,16 @@ function findMatches(source, re) {
     matches.push({ line, text: m[0].replace(/\s+/g, ' ').trim() });
   }
   return matches;
+}
+
+// Syntax-only check (`node --check`, no execution) for a module whose top-level code touches the
+// DOM (document.getElementById(...).addEventListener(...) etc.) — a plain dynamic `import()` would
+// throw `document is not defined` in plain Node before it ever got to check syntax. Modules with no
+// such top-level DOM access (dashboard-utils.mjs) use a real dynamic import instead, matching the
+// client-error-log.mjs/poll-dispatcher.mjs precedent above — it exercises more than just parsing.
+function assertModuleSyntaxValid(relPath) {
+  const absPath = join(REPO_ROOT, ...relPath.split('/'));
+  execFileSync(process.execPath, ['--check', absPath], { stdio: 'pipe' });
 }
 
 function listDashboardStaticFiles() {
@@ -122,6 +133,10 @@ test('dashboard/static/dashboard-utils.mjs is syntactically valid and exports th
   for (const name of ['esc', 'relTime', 'formatSpend', 'formatNumber', 'shortModel', 'badgeFor', 'outcomeBadge']) {
     assert.equal(typeof utils[name], 'function', `expected ${name} to be exported as a function`);
   }
+});
+
+test('dashboard/static/escalation-actions.mjs is syntactically valid (010 US2)', () => {
+  assert.doesNotThrow(() => assertModuleSyntaxValid('dashboard/static/escalation-actions.mjs'));
 });
 
 test('dashboard/index.html has zero `poll = async function` reassignments', () => {
