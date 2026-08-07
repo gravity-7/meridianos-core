@@ -288,9 +288,10 @@ async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 
       args = ["--print", "--output-format", "text"];
     } else if (name === "antigravity") {
       cmd = "agy";
-      // The review prompt is streamed below through stdin. Passing it in argv can exceed
-      // Windows' command-line limit for large PR diffs.
-      args = ["--print", "--add-dir", REPO_ROOT, "--dangerously-skip-permissions", "--print-timeout", "30m", "--output-format", "text"];
+      // `agy --print` requires a positional prompt. Keep it short enough for Windows and
+      // direct the reviewer to read the full instruction file through its read-only tool.
+      const bootstrapPrompt = `Read and follow the complete PR review instructions in ${promptFile}. Do not ask for further instructions. Return only the requested review, including its Verdict line.`;
+      args = ["--add-dir", REPO_ROOT, "--dangerously-skip-permissions", "--print-timeout", "30m", "--output-format", "text", "--print", bootstrapPrompt];
     } else {
       resolve({ agent: name, verdict: "ERROR", output: "", error: `Unknown agent: ${name}`, posted: false });
       return;
@@ -364,8 +365,9 @@ async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 
         finish("TIMEOUT", "", err.message, true);
       });
 
-      // Feed prompt to stdin for both agents
-      child.stdin.write(prompt);
+      // Claude accepts the complete prompt through stdin. Antigravity receives a short
+      // positional bootstrap prompt above and reads the saved file with read_file.
+      if (name === "claude") child.stdin.write(prompt);
       child.stdin.end();
     } catch (err) {
       finish("ERROR", "", err.message, false);

@@ -43,7 +43,7 @@ output_format: |
 
 ## Headless CLI Review Process
 
-The review dispatcher is `node scripts/dispatch-review.mjs <PR_NUMBER>`. It resolves the matching `specs/<PR branch>/` directory when present, streams the review prompt through stdin to avoid Windows command-line limits, and launches `agy` with the repository added as its workspace.
+The review dispatcher is `node scripts/dispatch-review.mjs <PR_NUMBER>`. It resolves the matching `specs/<PR branch>/` directory when present, saves the complete instructions in a review artifact, and gives `agy` a short positional prompt directing it to read that artifact. This avoids Windows command-line limits while preserving a complete, independent review context.
 
 Before a headless Antigravity review can inspect repository files, ensure `${HOME}/.gemini/config/config.json` contains this least-privilege grant under `userSettings.globalPermissionGrants.allow`:
 
