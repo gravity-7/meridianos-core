@@ -11,6 +11,9 @@
      dashboard/static/vendor/VERSIONS.md) — the workspace's charting/grid/node-graph libraries. -->
 <link rel="stylesheet" href="static/vendor/uplot.min.css">
 <link rel="stylesheet" href="static/vendor/litegraph.css">
+<!-- 009 — Dashboard Modernization (US5/FR-010): validated categorical chart-color tokens, layered
+     on top of (not replacing) this file's own chrome/status tokens below. -->
+<link rel="stylesheet" href="static/design-tokens.css">
 <style>
 :root {
   /* Light Mode - Premium palette */
@@ -603,10 +606,9 @@ button:active { transform: translateY(0); box-shadow: none; }
     <div id="adminWorkspaceContainer"></div>
   </div>
 
-  <div class="card live" id="escalationsPanel" style="display:none; border-color:var(--border-strong); margin-bottom:1.5rem; background:var(--surface-1)">
-    <div class="h" style="color:var(--text-primary)">needs you <span style="font-weight:400;color:var(--text-muted);margin-left:4px">· action required</span></div>
-    <div id="escalationsList"></div>
-  </div>
+  <!-- 009 — Dashboard Modernization (US4/FR-009): "needs you" (escalation status) merged with
+       "safety & governance" (the levers that gate what produces those escalations) into one
+       Settings & Observability workspace panel — see dashboard/static/governance-panel.mjs. -->
 
   <div class="card live" id="parkedPanel" style="display:none; margin-bottom:1.5rem">
     <div class="h" id="parkedHeader" style="cursor:pointer;user-select:none" onclick="toggleParked()">snoozed / skipped <span id="parkedCount" style="font-weight:400;color:var(--text-muted)"></span><span id="parkedCaret" style="float:right;color:var(--text-muted)">▸</span></div>
@@ -630,15 +632,13 @@ button:active { transform: translateY(0); box-shadow: none; }
       <div class="tile" id="kpiTopProvider"><div class="h" style="margin:0;font-size:11px">Top Provider</div><div style="font-size:14px;font-weight:600" id="kvTopProvider">—</div></div>
       <div class="tile" id="kpiTopModel"><div class="h" style="margin:0;font-size:11px">Top Model</div><div style="font-size:14px;font-weight:600" id="kvTopModel">—</div></div>
     </div>
-    <div class="grid" style="grid-template-columns:2fr 1fr">
-      <div class="tile" style="min-height:200px">
-        <div class="h" style="margin:0 0 8px;font-size:12px">Spend Over Time</div>
-        <canvas id="analyticsTimeseries" style="width:100%;height:200px"></canvas>
-      </div>
-      <div class="tile" style="min-height:200px">
-        <div class="h" style="margin:0 0 8px;font-size:12px">By Provider</div>
-        <canvas id="analyticsDonut" style="width:100%;height:200px"></canvas>
-      </div>
+    <!-- 009 — Dashboard Modernization (US1/FR-001/FR-002): the Spend Over Time / By Provider canvas
+         charts that used to live here are superseded by the themed Cost Over Time / Provider Spend
+         Breakdown panels in the Settings & Observability workspace (see settingsNavBtn) — same data,
+         one rendering path (uPlot) instead of two. The KPI tiles above are NOT duplicated anywhere
+         else and stay here. -->
+    <div style="text-align:center;padding:10px;font-size:12px;color:var(--text-muted)">
+      📈 Charts moved to <a href="#" onclick="toggleSettingsWorkspace(); return false;" style="color:var(--text-accent)">Settings & Observability</a> — themed, interactive, one rendering path instead of two.
     </div>
     <div id="analyticsLoading" style="display:none;text-align:center;color:var(--text-muted);padding:20px">Loading analytics...</div>
     <div id="analyticsEmpty" style="display:none;text-align:center;color:var(--text-muted);padding:20px">Connect a provider and run your first task to see spend analytics.</div>
@@ -669,13 +669,14 @@ button:active { transform: translateY(0); box-shadow: none; }
     <div id="optList" style="font-size:12px"></div>
   </div>
 
+  <!-- 009 — Dashboard Modernization (US1/US4/FR-001/FR-009): the roster-driven usage tiles that
+       used to render here (budgetGrid) and the editable cap sliders that used to live in a separate
+       "budget & limits" card further down are now ONE merged panel — Settings & Observability
+       workspace → "Agent Budget" (dashboard/static/agent-budget-panel.mjs) — instead of two
+       distant, duplicate-data grids. founderUsage is genuinely unique (not duplicated anywhere)
+       and stays here. -->
   <div class="live">
-    <div class="h">compute budget</div>
-    <!-- Roster-driven (§4b-ii): one 5h + one week tile per agent in config.domain.agents, built by
-         renderBudgetCards() from /api/status's budget.mayClaim keys. Scales to N agents/providers;
-         was previously 4 tiles hardcoded to claude/antigravity. -->
-    <div class="grid" id="budgetGrid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"></div>
-    <div id="founderUsage" style="font-size:12px;color:var(--text-muted);margin-top:8px">founder usage · —</div>
+    <div id="founderUsage" style="font-size:12px;color:var(--text-muted)">founder usage · —</div>
   </div>
 
   <div class="live">
@@ -683,55 +684,19 @@ button:active { transform: translateY(0); box-shadow: none; }
     <div class="grid" id="providerCostGrid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"></div>
   </div>
 
-  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
-    <div class="card live">
-      <div class="h">active now</div>
-      <!-- Roster-driven: populated by renderActiveList() from the same s.budget-derived roster
-           used by renderBudgetCards()/renderAgentBudgetControls(); was previously two rows
-           hardcoded to claude/antigravity (id="activeclaude"/"activeanti"). -->
-      <div id="activeList"></div>
-    </div>
-    <div class="card live">
-      <div class="h">next in queue <span id="qcount" style="color:var(--text-muted);font-weight:400"></span></div>
-      <div id="queueList"></div>
-      <button id="qtoggle" style="margin-top:8px;display:none">show all</button>
-    </div>
-  </div>
-
-  <div class="card live">
-    <div class="h">recent runs<span style="color:var(--text-muted);font-weight:400"> · runs/log.jsonl · click a run to open its session</span></div>
-    <div id="runnote" style="font-size:11px;color:var(--text-muted);min-height:15px;margin-bottom:2px"></div>
-    <div id="runsList"></div>
-  </div>
-
-  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
-    <div class="card live" id="healthCard">
-      <div class="h">system health</div>
-      <div id="healthList"></div>
-    </div>
-    <div class="card live" id="runnerCard">
-      <div class="h">runner &amp; schedule</div>
-      <div id="runnerList"></div>
-    </div>
-  </div>
-  
-  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
-    <div class="card live" id="verifierCard">
-      <div class="h">verification queue</div>
-      <div id="verifierList"></div>
-    </div>
-    <div class="card live" id="plannerCard">
-      <div class="h">planner &amp; backlog</div>
-      <div id="plannerList"></div>
-    </div>
-  </div>
+  <!-- 009 — Dashboard Modernization (US2/FR-004): active now, next in queue, recent runs, system
+       health, verification queue, and planner & backlog moved into the Settings & Observability
+       workspace's "Task & Agent Workflow" panel — see task-workflow-panel.mjs. Runner & schedule's
+       STATUS display moved there too; its CONTROLS ("work & scheduling" below) stay here — see that
+       file's scope-note doc comment for why the two aren't fully merged. -->
 
   <div class="card" id="ctrls">
     <div class="h">budget &amp; limits</div>
-    <div class="grid" id="agentBudgetTiles" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
-      <!-- Roster-driven: populated by renderAgentBudgetControls() from config.domain.agents -->
-    </div>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(350px,1fr));margin-top:12px">
+    <!-- 009 — Dashboard Modernization (US1/FR-001): the per-agent cap sliders that used to render
+         here (agentBudgetTiles) moved into the merged "Agent Budget" workspace panel alongside
+         their usage tiles — see the "compute budget" comment above. The controls below are global
+         (not per-agent) policy settings, genuinely distinct, and stay here. -->
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(350px,1fr))">
       <div class="lev g"><label>warn at</label><input type="range" id="warn" min="50" max="95" step="5" style="flex:1"><output id="outWarn">—</output></div>
       <div class="lev g"><label>per-task cap</label><input type="range" id="ptask" min="20000" max="400000" step="10000" style="flex:1"><output id="outPtask">—</output></div>
       <div class="lev g"><label>at warn, downgrade model</label><span class="sw"><input type="checkbox" id="autodown"><i></i></span></div>
@@ -760,51 +725,12 @@ button:active { transform: translateY(0); box-shadow: none; }
     </div>
   </div>
 
-  <div class="card" id="gov">
-    <div class="h">safety &amp; governance <span style="color:var(--text-muted);font-weight:400">· what needs you first</span></div>
-    <div class="lev g"><label>deploy</label><select id="govDeploy" style="flex:1"><option value="block_and_ask">block &amp; ask</option><option value="notify_only">notify only</option><option value="allow">allow</option></select></div>
-    <div class="lev g"><label>external send</label><select id="govSend" style="flex:1"><option value="block_and_ask">block &amp; ask</option><option value="notify_only">notify only</option><option value="allow">allow</option></select></div>
-    <div class="lev g"><label>spend money</label><select id="govSpend" style="flex:1"><option value="block_and_ask">block &amp; ask</option><option value="notify_only">notify only</option><option value="allow">allow</option></select></div>
-    <div class="lev g"><label>schema change</label><select id="govSchema" style="flex:1"><option value="block_and_ask">block &amp; ask</option><option value="notify_only">notify only</option><option value="allow">allow</option></select></div>
-    <div class="lev g"><label>auto-merge PRs</label><select id="autoMerge" style="flex:1"><option value="founder_only">founder-only</option><option value="peer_agent_review">peer-agent review</option><option value="verifier_gated">verifier-gated</option></select></div>
-    <div class="lev g"><label>escalation channel</label><select id="esc" style="flex:1"><option value="digest">digest file only</option><option value="push">push only</option><option value="push_digest">push + digest</option></select></div>
-    <div class="lev g"><label>webhook URL</label><span style="flex:1;font-size:11px;color:var(--text-muted)">secret — set via <code>AIOS_ESCALATION_WEBHOOK</code> env or <code>.ai/secrets/escalation-webhook</code> (never stored in policy.yaml)</span></div>
-    <div class="lev g"><label>work stealing</label><span class="sw"><input type="checkbox" id="workSteal" aria-label="Work stealing toggle"><i></i></span><span style="font-size:11px;color:var(--text-muted);margin-left:4px">idle agent may claim the other's tasks</span></div>
-  </div>
+  <!-- 009 — Dashboard Modernization (US4/FR-009): merged into the "Safety & Governance" workspace
+       panel alongside "needs you" — see governance-panel.mjs and the comment above. -->
 
-  <div class="card live" id="capMatrixCard">
-    <div class="h">capability matrix <span style="color:var(--text-muted);font-weight:400">· read-only · edit policy.yaml to change</span></div>
-    <div id="capMatrixBody" style="font-size:12px;color:var(--text-muted);padding:.4rem 0">loading…</div>
-  </div>
-
-  <div class="card live" id="providersCard">
-    <div class="h">providers <span style="color:var(--text-muted);font-weight:400">· managed via policy.yaml</span>
-      <button onclick="toggleAddProvider()" style="font-size:11px;padding:4px 8px;margin-left:auto">＋ Add Provider</button>
-    </div>
-    <div id="addProviderForm" style="display:none;padding:.6rem;margin-bottom:.4rem;background:var(--bg-secondary);border-radius:6px">
-      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-        <div style="flex:1;min-width:140px">
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:2px">Provider</label>
-          <select id="addProvSelect" style="width:100%;padding:4px 6px;font-size:12px;background:var(--bg);color:var(--text-primary);border:1px solid var(--border);border-radius:4px"></select>
-        </div>
-        <div style="flex:1;min-width:140px">
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:2px">API Key</label>
-          <input id="addProvKey" type="password" placeholder="sk-…" style="width:100%;padding:4px 6px;font-size:12px;background:var(--bg);color:var(--text-primary);border:1px solid var(--border);border-radius:4px">
-        </div>
-        <button onclick="submitAddProvider()" style="font-size:11px;padding:6px 12px;white-space:nowrap">Save</button>
-        <button onclick="toggleAddProvider()" style="font-size:11px;padding:6px 8px;white-space:nowrap;background:var(--bg)">Cancel</button>
-      </div>
-      <div id="addProvMsg" style="font-size:11px;margin-top:4px;display:none"></div>
-    </div>
-    <div id="providersList" style="font-size:12px;color:var(--text-muted);padding:.4rem 0">loading…</div>
-  </div>
-
-  <div class="card live" id="modelsCard">
-    <div class="h">models <span style="color:var(--text-muted);font-weight:400">· auto-discovered</span>
-      <button onclick="refreshModels()" style="font-size:11px;padding:4px 8px;margin-left:auto">⟳ Refresh Models</button>
-    </div>
-    <div id="modelsList" style="font-size:12px;color:var(--text-muted);padding:.4rem 0">loading…</div>
-  </div>
+  <!-- 009 — Dashboard Modernization (US2/FR-004): capability matrix, providers, and models moved
+       into the Settings & Observability workspace's "Providers & Models" panel — see
+       providers-models-panel.mjs. Task categories (below) stays here — not part of T029's scope. -->
 
   <div class="card live" id="taskCategoriesCard">
     <div class="h">task categories <span style="color:var(--text-muted);font-weight:400">· live counts by task_type (constitution §11)</span></div>
@@ -909,9 +835,13 @@ button:active { transform: translateY(0); box-shadow: none; }
   </div>
 </div>
 
-<!-- ── P4: Subscription Plans Panel ────────────────────────────────────── -->
+<!-- ── P4: AI Provider Subscriptions Panel ─────────────────────────────── -->
+<!-- 009 — Dashboard Modernization (US6/FR-012): renamed from "Subscription Plans" — that name
+     collided with the unrelated `billing-panel.mjs` (the platform's own SaaS license tier). This
+     panel is specifically about AI-provider subscriptions (Claude Pro, Copilot, Anti-Gravity)
+     proxied through the gateway, not the platform's own billing. -->
 <div class="card live" id="subscriptionsPanel">
-  <div class="h">💳 Subscription Plans</div>
+  <div class="h">💳 AI Provider Subscriptions</div>
   <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Manage subscription-based AI plans (Claude Pro, Copilot, Anti-Gravity) alongside BYO-key API traffic.</div>
   <div id="subscriptionsList" style="margin-bottom:12px"></div>
   <div id="apiKeysList" style="margin-bottom:12px"></div>
@@ -963,6 +893,29 @@ const AIOS_TOKEN = "__AIOS_TOKEN__";
     if (url.startsWith('/')) { init = { ...init, headers: { ...(init.headers || {}), 'x-aios-token': AIOS_TOKEN } }; }
     return _fetch(input, init);
   };
+})();
+// 009 — Dashboard Modernization (US3/FR-006/FR-008): dynamic-imported since this is a classic
+// (non-module) script — same established pattern as toggleTeamWorkspace()/toggleAdminWorkspace()
+// below. registerPollHandler() queues calls made before the real dispatcher module has resolved:
+// every registration call site below runs as part of this script's synchronous execution, and a
+// dynamic import's promise can never settle within that same synchronous tick (a JS spec
+// guarantee), so without a queue every one of those calls would silently hit the placeholder and
+// be dropped. reportError/runPollHandlers get safe synchronous fallbacks for the same brief window
+// so nothing below can ever hit "X is not a function".
+const _pendingPollHandlers = [];
+let reportError = (source, err) => console.error(`[${source}]`, err);
+let registerPollHandler = (fn) => _pendingPollHandlers.push(fn);
+let runPollHandlers = async () => {};
+(async () => {
+  const [errLog, dispatcher] = await Promise.all([
+    import('./static/client-error-log.mjs'),
+    import('./static/poll-dispatcher.mjs'),
+  ]);
+  reportError = errLog.reportError;
+  registerPollHandler = dispatcher.registerPollHandler;
+  runPollHandlers = dispatcher.runPollHandlers;
+  for (const fn of _pendingPollHandlers) registerPollHandler(fn);
+  _pendingPollHandlers.length = 0;
 })();
 const $=id=>document.getElementById(id);
 const fmt=n=>n==null?'—':(n>=1e6?(n/1e6).toFixed(1)+'M':Math.round(n/1000)+'k');
@@ -1088,53 +1041,12 @@ function skipEsc(task) {
   postAction('/api/task', { id: task, action: 'skip', reason: reason || undefined });
 }
 
-function renderEscalations(escList) {
-  const el = $('escalationsList'), panel = $('escalationsPanel');
-  if (!escList || !escList.length) {
-    panel.style.display = 'block';
-    el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0;text-align:center">you\'re all caught up</div>';
-    return;
-  }
-  panel.style.display = 'block';
-  el.innerHTML = escList.map(e => {
-    const sevColor = e.severity === 'info' ? 'var(--text-accent)' : (e.severity === 'warn' ? 'var(--text-warning)' : 'var(--text-danger)');
-    const t = e.ts ? relTime(e.ts) + ' ago' : '—';
-    let btn = '';
-    if (e.task) {
-      // Any escalation tied to a task → open that task's summary so the founder can read/decide.
-      // Blocked tasks also get Approve/Snooze/Skip (park the §6 hold without approving it).
-      const open = `<button onclick="openSpec('${esc(e.task)}', defaultSpecPath('${esc(e.task)}'), '${esc(e.detail||'')}', '${esc(e.status||'')}', '${esc(e.owner||'')}')" style="font-size:11px;padding:4px 8px">Open task</button>`;
-      let controls = '';
-      if (e.kind === 'task_blocked') {
-        controls = ` <button onclick="unblockEsc('${esc(e.task)}')" style="font-size:11px;padding:4px 8px;color:var(--text-success);border-color:var(--text-success)">Approve</button>`
-          + ` <select onchange="if(this.value) snoozeEsc('${esc(e.task)}', this.value, this)" style="font-size:11px;padding:3px 4px" title="Snooze for…">
-              <option value="">Snooze…</option>
-              <option value="1">1d</option>
-              <option value="7">7d</option>
-              <option value="30">30d</option>
-            </select>`
-          + ` <button onclick="skipEsc('${esc(e.task)}')" style="font-size:11px;padding:4px 8px">Skip</button>`;
-      }
-      btn = open + controls;
-    } else if (e.action && e.action.endpoint) {
-      const ep = encodeURIComponent(e.action.endpoint);
-      const pay = e.action.payload ? encodeURIComponent(JSON.stringify(e.action.payload)) : '';
-      btn = `<button onclick="actEsc('${esc(e.id)}', '${ep}', '${pay}')" style="font-size:11px;padding:4px 8px">${esc(e.action.label)}</button>`;
-    } else btn = `<button onclick="actEsc('${esc(e.id)}', '', '')" style="font-size:11px;padding:4px 8px">Dismiss</button>`;
-      
-    return `<div class="row" style="border-left:3px solid ${sevColor}; padding-left:12px; align-items:flex-start">
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="font-size:13px;font-weight:500">${esc(e.title)}</span>
-          <span class="mono" style="font-size:11px;color:var(--text-muted)">${t}</span>
-          ${e.task ? `<span class="model">${esc(e.task)}</span>` : ''}
-        </div>
-        <div style="font-size:12px;color:var(--text-secondary);margin-top:4px">${esc(e.detail)}</div>
-      </div>
-      <div style="margin-left:12px">${btn}</div>
-    </div>`;
-  }).join('');
-}
+// 009 — Dashboard Modernization (US4/FR-009): renderEscalations() (the "needs you" list renderer)
+// removed along with its now-gone #escalationsList/#escalationsPanel elements — the same escList
+// rendering logic now lives in governance-panel.mjs's escalationsHtml(), which still calls
+// openSpec()/unblockEsc()/snoozeEsc()/skipEsc()/actEsc() below via plain onclick attributes (these
+// are classic top-level function declarations, so they're already `window` properties reachable
+// from any module's generated HTML, not just this file's own).
 
 let parkedOpen = false;
 function toggleParked() {
@@ -1171,121 +1083,12 @@ function renderParked(list) {
   }).join('');
 }
 
-function renderHealth(health) {
-  const el = $('healthList');
-  if (!health) { el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">all agents healthy</div>'; return; }
-  let htm = '';
-  const wd = health.watchdog;
-  if (wd) htm += `<div class="row"><div style="flex:1"><span style="font-size:13px">Watchdog</span></div><span class="badge ${wd.running ? 'b-ok' : 'b-danger'}">${wd.running ? 'running' : 'stopped'}</span><span class="mono" style="font-size:11px;color:var(--text-muted)">next tick: ${wd.nextTickTs ? new Date(wd.nextTickTs).toLocaleTimeString() : '—'}</span></div>`;
-  
-  if (health.agents) {
-    for (const [name, a] of Object.entries(health.agents)) {
-      const stateBadge = a.state==='active'?'b-ok':(a.state==='idle'?'b-muted':(a.state==='halted'?'b-warn':'b-danger'));
-      htm += `<div class="row" style="flex-wrap:wrap">
-        <div style="flex:1;min-width:120px"><span style="font-size:13px">${esc(name)}</span></div>
-        <span class="badge ${stateBadge}">${esc(a.state)}</span>
-          <span class="mono" style="font-size:11px;color:var(--text-muted)">${a.heartbeatAgeSec != null ? 'last ♥ '+a.heartbeatAgeSec+'s ago' : ''}${a.reason ? ' · '+esc(a.reason) : (a.state==='idle' && !a.leaseTask ? ' · no claimable tasks' : '')}</span>
-        ${a.leaseTask ? `<div style="width:100%;font-size:11px;color:var(--text-muted);margin-top:4px">Lease: <span class="model">${esc(a.leaseTask)}</span> expires in ${a.leaseExpiresTs ? Math.max(0, Math.floor((new Date(a.leaseExpiresTs)-Date.now())/1000)) : 0}s</div>` : ''}
-      </div>`;
-    }
-  }
-  
-  if (health.slaBreaches && health.slaBreaches.length) {
-    htm += `<div style="margin-top:12px;font-size:12px;font-weight:600;color:var(--text-danger)">SLA Breaches</div>`;
-    htm += health.slaBreaches.map(b => `<div class="row" style="background:var(--bg-danger);border-radius:4px;padding:4px 8px;margin-top:4px"><span class="model" style="color:var(--text-danger);border-color:var(--text-danger)">${esc(b.task)}</span><span style="font-size:11px;margin-left:8px;color:var(--text-danger)">reaped ${b.reapCount}x</span></div>`).join('');
-  }
-  if (health.reaps && health.reaps.length) {
-    htm += `<div style="margin-top:12px;font-size:12px;font-weight:500;color:var(--text-secondary)">Recent Reaps</div>`;
-    htm += health.reaps.map(r => `<div class="row" style="padding:4px 0"><span class="mono" style="font-size:11px;color:var(--text-muted);min-width:55px">${new Date(r.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span><span class="model">${esc(r.task)}</span><span style="font-size:11px;color:var(--text-muted);margin-left:auto">${r.owner || '—'}${r.reapCount ? ', reaped '+r.reapCount+'×' : ''}</span></div>`).join('');
-  }
-  el.innerHTML = htm;
-}
-
-function renderRunner(runner) {
-  const el = $('runnerList');
-  if (!runner || !runner.enabled) { el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">manual only — scheduler off</div>'; return; }
-  
-  const nextInSec = runner.nextRunTs ? Math.max(0, Math.floor((new Date(runner.nextRunTs) - Date.now()) / 1000)) : 0;
-  let htm = `<div class="row" style="align-items:center">
-    <div style="flex:1"><div style="font-size:13px">Cadence: <strong>${esc(runner.cadence)}</strong></div><div style="font-size:11px;color:var(--text-muted);margin-top:2px">next in ${Math.floor(nextInSec/60)}m ${nextInSec%60}s · last ${relTime(runner.lastRunTs)} ago</div></div>
-    <button onclick="postAction('/api/run-now', {})" style="font-size:11px;padding:4px 8px">Run now</button>
-  </div>`;
-  
-  if (runner.holdReason) htm += `<div style="margin-top:8px"><span class="badge b-warn">held: ${esc(runner.holdReason)}</span></div>`;
-  
-  if (runner.quietHours && runner.quietHours.enabled) {
-    const qh = runner.quietHours;
-    htm += `<div class="row" style="margin-top:8px;background:var(--surface-1);border-radius:4px;padding:8px">
-      <div style="flex:1;font-size:12px">Quiet hours: <span style="color:var(--text-secondary)">${qh.sleepingNow ? 'sleeping' : 'active now'}</span></div>
-      <span class="mono" style="font-size:11px;color:var(--text-muted)">${esc(qh.from)} – ${esc(qh.to)}</span>
-    </div>`;
-  }
-  
-  if (runner.maxRunsPerWindow > 0) {
-    const pct = Math.min(100, (runner.runsThisWindow / runner.maxRunsPerWindow) * 100);
-    htm += `<div style="margin-top:12px"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary)"><span>runs this window</span><span>${runner.runsThisWindow} / ${runner.maxRunsPerWindow}</span></div><div class="meter" style="height:4px;margin-top:4px"><span style="width:${pct}%"></span></div></div>`;
-  }
-  el.innerHTML = htm;
-}
-
-function renderVerifier(verifier) {
-  const el = $('verifierList');
-  if (!verifier || (!verifier.pending?.length && !verifier.recent?.length)) { el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">nothing awaiting verification</div>'; return; }
-  
-  let htm = `<div style="margin-bottom:12px"><span class="badge b-muted" style="text-transform:none">mode: ${esc(verifier.mode)}</span></div>`;
-  if (verifier.pending && verifier.pending.length) {
-    htm += verifier.pending.map(p => {
-      const checks = p.checks.map(c => `<span class="badge ${c.status==='pass'?'b-ok':(c.status==='fail'?'b-danger':'b-warn')}" title="${esc(c.detail)}">${esc(c.name)}</span>`).join(' ');
-      const canApprove = verifier.mode !== 'founder_only';
-      return `<div class="row" style="flex-wrap:wrap">
-        <div style="flex:1;min-width:100%">
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:13px;font-weight:500">${esc(p.task)}</span>
-            <span class="badge ${outcomeBadge(p.verdict)}">${esc(p.verdict)}</span>
-          </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">PR #${p.pr} · by ${esc(p.agent)} · ${relTime(p.submittedTs)} ago</div>
-          <div style="margin-top:6px">${checks}</div>
-        </div>
-        ${canApprove ? `<div style="display:flex;gap:6px;margin-top:8px;width:100%"><button onclick="postAction('/api/verify', {task:'${esc(p.task)}', action:'approve'})" style="font-size:11px;padding:4px 8px;color:var(--text-success);border-color:var(--text-success)">Approve</button><button onclick="postAction('/api/verify', {task:'${esc(p.task)}', action:'reject'})" style="font-size:11px;padding:4px 8px;color:var(--text-danger);border-color:var(--text-danger)">Reject</button></div>` : ''}
-      </div>`;
-    }).join('');
-  } else htm += '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no pending PRs</div>';
-  
-  if (verifier.recent && verifier.recent.length) {
-    htm += `<div style="margin-top:12px;font-size:12px;font-weight:500;color:var(--text-secondary)">Recent Verdicts</div>`;
-    htm += verifier.recent.slice(0, 5).map(r => `<div class="row" style="padding:4px 0"><span class="badge ${outcomeBadge(r.verdict)}">${esc(r.verdict)}</span><span class="model" style="margin-left:8px">${esc(r.task)}</span><span style="font-size:11px;color:var(--text-muted);margin-left:auto">${relTime(r.ts)} ago</span></div>`).join('');
-  }
-  el.innerHTML = htm;
-}
-
-function renderPlanner(planner) {
-  const el = $('plannerList');
-  if (!planner || (planner.backlogDepth === 0 && !planner.epics?.length && !planner.proposals?.length)) { el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">backlog clear</div>'; return; }
-  
-  let htm = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><span style="font-size:12px;color:var(--text-secondary)">Backlog depth: ${planner.backlogDepth}</span><span class="mono" style="font-size:11px;color:var(--text-muted)">planned ${relTime(planner.lastPlannedTs)} ago</span></div>`;
-  if (planner.epics && planner.epics.length) {
-    htm += `<div style="font-size:12px;font-weight:600;margin-bottom:6px">Epics</div>`;
-    htm += planner.epics.map(e => {
-      const pct = e.childrenTotal > 0 ? (e.childrenReady / e.childrenTotal) * 100 : 0;
-      return `<div class="row" style="display:block">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:13px;font-weight:500">${esc(e.id)}</span><span class="badge ${badgeFor(e.status)}">${esc(e.status)}</span></div>
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">${esc(e.title)}</div>
-        <div style="display:flex;align-items:center;gap:8px"><div class="meter" style="flex:1;margin:0"><span style="width:${pct}%"></span></div><span style="font-size:11px;color:var(--text-muted)">${e.childrenReady}/${e.childrenTotal} ready</span></div>
-      </div>`;
-    }).join('');
-  }
-  if (planner.proposals && planner.proposals.length) {
-    htm += `<div style="margin-top:12px;font-size:12px;font-weight:600;margin-bottom:6px">Fresh Proposals</div>`;
-    htm += planner.proposals.map(p => {
-      return `<div class="row" style="flex-wrap:wrap">
-        <div style="width:100%;display:flex;justify-content:space-between;align-items:center"><span style="font-size:13px;font-weight:500">${esc(p.title)}</span><span class="badge ${p.status==='accepted'?'b-ok':'b-accent'}">${esc(p.status)}</span></div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Epic: <span class="model">${esc(p.fromEpic)}</span> · Prio: ${p.priority}</div>
-        ${p.resources && p.resources.length ? `<div style="margin-top:6px;width:100%">${p.resources.map(r=>`<span class="model" style="font-size:10px">${esc(r)}</span>`).join(' ')}</div>` : ''}
-      </div>`;
-    }).join('');
-  }
-  el.innerHTML = htm;
-}
+// 009 — Dashboard Modernization (US2/FR-004): renderHealth()/renderRunner()/renderVerifier()/
+// renderPlanner() removed along with their now-gone #healthList/#runnerList/#verifierList/
+// #plannerList targets — this content now renders in task-workflow-panel.mjs, which keeps its own
+// copies of this same HTML-generation logic (self-contained, per every other workspace panel's
+// established convention) while still reusing postAction()/relTime()/etc. from here where those
+// are genuinely shared, interactive-handler globals rather than pure render logic.
 
 let currentTheme = localStorage.getItem('aios-theme') || 'auto';
 const rootElement = document.documentElement;
@@ -1312,46 +1115,14 @@ const LEVERS=[
   ['conc','work.max_parallel','num'],['wip','work.wip_per_agent','num'],['prio','work.priority_floor','num'],
   ['ttl','work.lease_ttl_min','num'],['maxruns','work.max_runs_per_5h','num'],['sched','schedule.cadence','str'],
   ['qhEnable','quiet_hours.enabled','bool'],['qhFrom','quiet_hours.from','str'],['qhTo','quiet_hours.to','str'],
-  ['govDeploy','sensitive_actions.deploy','str'],['govSend','sensitive_actions.external_send','str'],
-  ['govSpend','sensitive_actions.spend_money','str'],['govSchema','sensitive_actions.schema_change','str'],
-  ['autoMerge','auto_merge','str'],['esc','escalation.channel','str'],
-  ['workSteal','work_stealing','bool'],
+  // 009 — Dashboard Modernization (US4/FR-009): govDeploy/govSend/govSpend/govSchema/autoMerge/esc(select)/
+  // workSteal LEVERS entries removed along with their now-gone DOM elements — those levers save through
+  // governance-panel.mjs's own saveLever() now (see that file).
 ];
-// Roster-driven agent budget controls: build tiles + lever entries dynamically.
-// Called from the poll loop when agents change.
-let _lastRoster = [];
-function renderAgentBudgetControls(agents, policy) {
-  if (!agents || agents.length === 0) return;
-  const tilesEl = $('agentBudgetTiles');
-  if (!tilesEl || agents.join(',') === _lastRoster.join(',')) return;
-  _lastRoster = [...agents];
-
-  // Remove old dynamic lever entries (those matching agent-specific cap paths)
-  const keep = LEVERS.filter(l => !l[1].match(/^agent_budget\.\w+\.per_/));
-  LEVERS.length = 0; LEVERS.push(...keep);
-
-  tilesEl.innerHTML = '';
-  for (const agent of agents) {
-    const tile = document.createElement('div');
-    tile.className = 'tile';
-    const idCap5 = 'cap5_' + agent, idCapW = 'capW_' + agent;
-    const model = getPath(policy, `agent_models.${agent}.default`);
-    tile.innerHTML =
-      `<div style="font-size:13px;font-weight:500;margin-bottom:6px">${esc(agent)}</div>
-       ${model ? `<div class="lev"><label>model</label><span class="model">${esc(model)}</span></div>` : ''}
-       <div class="lev"><label>5h cap</label><input type="range" id="${idCap5}" min="500000" max="5000000" step="100000" style="flex:1"><output id="out5_${agent}">—</output></div>
-       <div class="lev"><label>week cap</label><input type="range" id="${idCapW}" min="5000000" max="30000000" step="500000" style="flex:1"><output id="outW_${agent}">—</output></div>`;
-    tilesEl.appendChild(tile);
-    LEVERS.push([idCap5, `agent_budget.${agent}.per_5h_tokens`, 'num']);
-    LEVERS.push([idCapW, `agent_budget.${agent}.per_week_tokens`, 'num']);
-  }
-  // Attach change listeners to new sliders
-  for (const agent of agents) {
-    const el5 = $('cap5_' + agent), elW = $('capW_' + agent);
-    if (el5) el5.oninput = () => { const o = $('out5_' + agent); if (o) o.textContent = fmt(+el5.value); setDirty(true); };
-    if (elW) elW.oninput = () => { const o = $('outW_' + agent); if (o) o.textContent = fmt(+elW.value); setDirty(true); };
-  }
-}
+// 009 — Dashboard Modernization (US1/FR-001): renderAgentBudgetControls() (dynamic per-agent cap
+// sliders + LEVERS entries) removed — that UI now lives in agent-budget-panel.mjs, which manages
+// its own saves directly via POST /api/policy rather than this file's shared LEVERS/dirty/save()
+// mechanism (see that file's doc comment for why, matching settings-panels.mjs's precedent).
 const getPath=(o,p)=>p.split('.').reduce((a,k)=>a&&a[k],o);
 function shortModel(v){ if(!v) return '—'; return String(v).replace('claude-','').replace(/-/g,' ').replace('opus 4 8','opus 4.8').replace('haiku 4 5','haiku 4.5'); }
 function badgeFor(s){ return s==='in-progress'?'b-accent':(s==='blocked'?'b-warn':(s==='done'?'b-ok':'b-muted')); }
@@ -1374,13 +1145,9 @@ function populateControls(policy){
 function collectLevers(){ const u={}; for(const [id,path,kind] of LEVERS){ const el=$(id); if(!el) continue; u[path]=kind==='bool'?el.checked:(kind==='num'?+el.value:el.value); } return u; }
 
 function syncReadouts(){
-  // Dynamic: iterate all agent cap sliders (id = cap5_<agent> or capW_<agent>)
-  for (const el of document.querySelectorAll('#agentBudgetTiles input[type=range]')) {
-    const agent = el.id.replace(/^cap[5W]_/, '');
-    const suffix = el.id.startsWith('cap5_') ? '5_' : 'W_';
-    const out = $('out' + suffix + agent);
-    if (out) out.textContent = fmt(+el.value);
-  }
+  // 009 — Dashboard Modernization (US1/FR-001): the per-agent cap-slider readout loop that used to
+  // run here is gone along with agentBudgetTiles itself — agent-budget-panel.mjs updates its own
+  // slider outputs directly (see wireAgentCard()'s 'input' listener there).
   if ($('outWarn')) $('outWarn').textContent=$('warn').value+'%';
   if ($('outPtask') && $('ptask')) $('outPtask').textContent=fmt(+$('ptask').value);
   if ($('outConc')) $('outConc').textContent=$('conc').value;
@@ -1406,32 +1173,9 @@ function renderFounderUsage(b){
   const parts=roster.map(a=>`${esc(a)} ${pair(b[a]&&b[a].founder)}`);
   el.innerHTML=`founder usage (read-only, ${esc(b.attribution==='total'?'counted in the gauges above':'not gated')}) · ${parts.join(' · ')}`;
 }
-function resetIn(ts){ if(!ts) return ''; const ms=Date.parse(ts)-Date.now(); if(ms<=0) return ' · resetting…'; const h=Math.floor(ms/3600000), m=Math.floor(ms%3600000/60000); return ' · resets in '+(h?h+'h ':'')+m+'m'; }
-// Roster-driven budget cards (§4b-ii): one 5h + one week tile per agent in the roster, instead of
-// the old hardcoded claude/antigravity pair. The roster comes from budget.mayClaim's keys — built
-// 1:1 with config.domain.agents inside budgetStatus() (budget.mjs), so it's always in sync and
-// scales to N agents without any client-side agent-name literals.
-function budgetTile(agent, label, w, resetAt){
-  const pct = w && w.pct != null ? w.pct : '—';
-  const barWidth = Math.min((w && w.pct) || 0, 100);
-  const barColor = stateColor(w && w.state);
-  const sub = w ? (fmt(w.used)+' / '+fmt(w.cap)+resetIn(resetAt)) : '— / —';
-  return `<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">${esc(agent)} · ${label}</div>`+
-    `<div style="display:flex;align-items:baseline;gap:4px"><span style="font-size:24px;font-weight:500">${pct}</span><span style="font-size:13px;color:var(--text-muted)">%</span></div>`+
-    `<div class="meter"><span style="width:${barWidth}%;background:${barColor}"></span></div>`+
-    `<div class="mono" style="font-size:11px;color:var(--text-muted)">${sub}</div></div>`;
-}
-function renderBudgetCards(budget){
-  const el=$('budgetGrid'); if(!el||!budget) return;
-  const roster=Object.keys(budget.mayClaim||{});
-  if(!roster.length){ el.innerHTML='<div style="font-size:12px;color:var(--text-muted)">no agents in roster</div>'; return; }
-  const resets=budget.resets||{};
-  el.innerHTML=roster.map(agent=>{
-    const windows=(budget[agent]&&budget[agent].windows)||[];
-    const w5=windows.find(w=>w.window==='5h'), wk=windows.find(w=>w.window==='week');
-    return budgetTile(agent,'5h',w5,resets[agent+'_5h_at']) + budgetTile(agent,'week',wk,resets[agent+'_week_at']);
-  }).join('');
-}
+// 009 — Dashboard Modernization (US1/FR-001): budgetTile()/renderBudgetCards() (the read-only
+// per-agent usage tiles this repo used to call "compute budget") removed — that display now lives
+// in agent-budget-panel.mjs's usageTile(), merged with the cap sliders it used to be split from.
 function renderProviderCost(last7d){
   const el=$('providerCostGrid'); if(!el) return;
   const entries=Object.entries(last7d||{}).sort((a,b)=>(b[1].cost||0)-(a[1].cost||0));
@@ -1452,80 +1196,10 @@ function copySession(sess, agent) {
     setTimeout(() => el.style.display = 'none', 2000);
   });
 }
-// Roster-driven (matches renderBudgetCards()/renderAgentBudgetControls()): builds one row per
-// agent in the live roster into a single container instead of writing into per-agent elements
-// keyed by a hardcoded prefix. The old renderActive(prefix,...) did `$('active'+prefix)`, which
-// only ever resolved for the two ids baked into the static HTML (activeclaude/activeanti) — once
-// the roster became config-driven (e.g. builder/reviewer), that lookup returned null and the
-// `el.innerHTML=...` assignment threw, aborting render() before it reached renderQueue/renderRuns/
-// renderHealth/renderRunner/renderVerifier/renderPlanner/renderCapabilityMatrix/renderTaskCategories/
-// renderSystemLog/populateControls further down the same synchronous call chain.
-function activeRowHtml(name,a,ha){
-  if(a && a.active){
-    const sess = a.active.session || '';
-    return `<div class="row active-row" data-agent="${esc(name)}" data-sess="${esc(sess)}" style="cursor:pointer" title="Click to copy session resume command"><span class="badge ${badgeFor(a.active.status)}">${esc(a.active.status)}</span>`+
-      `<div style="flex:1;min-width:0"><div class="mono" style="font-size:13px">${esc(a.active.task)}</div>`+
-      `<div style="font-size:11px;color:var(--text-muted)">${esc(name)} · session <span class="mono" style="cursor:pointer;text-decoration:underline dotted;color:var(--text-accent)" title="Click to copy resume command" onclick="copySession('${esc(sess)}','${esc(name)}')">${esc(sess.slice(0,8))}</span> · ${a.active.heartbeatAgeSec}s ago</div></div>`+
-      `<span class="model">${esc(shortModel(a.model))}</span></div>`;
-  } else {
-    const idleReason = (ha && ha.reason) ? ha.reason : 'no lease';
-    const isSessionLimit = idleReason === 'session_limit';
-    const resetAt = ha && ha.sessionResetAt;
-    let reasonLabel, reasonColor;
-    if (isSessionLimit) {
-      reasonLabel = resetAt ? `session limit · resets ${esc(resetAt)}` : 'session limit';
-      reasonColor = 'var(--text-warn, #c97c2e)';
-    } else {
-      reasonColor = 'var(--text-secondary)';
-      reasonLabel = {
-        ready: 'ready · awaiting runner',
-        max_runs: 'run cap reached · awaiting window reset',
-        quiet_hours: 'quiet hours · sleeping',
-        no_eligible_task: 'no eligible task',
-        wip_per_agent: 'WIP limit reached',
-        max_parallel: 'max parallel reached',
-        budget_halt: 'budget exhausted',
-        kill_switch: 'kill switch ON',
-        below_priority_floor: 'below priority floor',
-      }[idleReason] || (idleReason.startsWith('sensitive_action:') ? 'awaiting approval: '+idleReason.slice(17) : idleReason);
-    }
-    return `<div class="row active-row" data-agent="${esc(name)}"><span class="badge ${isSessionLimit ? 'b-warn' : 'b-muted'}">idle</span>`+
-      `<div style="flex:1;min-width:0"><div style="font-size:13px;color:${reasonColor}">${reasonLabel}</div>`+
-      `<div style="font-size:11px;color:var(--text-muted)">${esc(name)} · waiting</div></div>`+
-      `<span class="model">${esc(shortModel(a&&a.model))}</span></div>`;
-  }
-}
-function renderActiveList(roster, agentsMap, haMap){
-  const el=$('activeList'); if(!el) return;
-  if(!roster || !roster.length){ el.innerHTML='<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no agents in roster</div>'; return; }
-  el.innerHTML = roster.map(name => activeRowHtml(name, agentsMap && agentsMap[name], haMap && haMap[name])).join('');
-  el.querySelectorAll('.active-row').forEach(row=>{
-    const sess = row.getAttribute('data-sess');
-    row.onclick = sess ? ()=>copySession(sess, row.getAttribute('data-agent')) : null;
-  });
-}
-
-function renderQueue(q){
-  const el=$('queueList');
-  if(!q.length){ el.innerHTML='<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">queue empty - nothing eligible</div>'; $('qcount').textContent=''; $('qtoggle').style.display='none'; return; }
-  el.innerHTML=q.map((t,i)=>{
-    const sp=t.spec||defaultSpecPath(t.id);
-    let mb = '';
-    if(t.routing) {
-      if(t.owner === 'claude' && t.routing.claude && t.routing.claude.model) mb = `<span class="model" style="margin:0 6px">${esc(shortModel(t.routing.claude.model))}</span>`;
-      else if(t.owner === 'antigravity' && t.routing.antigravity && t.routing.antigravity.model) mb = `<span class="model" style="margin:0 6px">${esc(shortModel(t.routing.antigravity.model))}</span>`;
-      else if(t.owner === 'both') {
-        if(t.routing.claude && t.routing.claude.model) mb += `<span class="model" style="margin:0 2px" title="Claude">${esc(shortModel(t.routing.claude.model))}</span>`;
-        if(t.routing.antigravity && t.routing.antigravity.model) mb += `<span class="model" style="margin:0 6px 0 2px" title="Antigravity">${esc(shortModel(t.routing.antigravity.model))}</span>`;
-      }
-    }
-    return `<div class="row${i>=2?' qmore':''} run" data-clickable data-id="${esc(t.id)}" data-spec="${esc(sp)}"><span class="mono" style="font-size:12px;color:var(--text-muted);min-width:16px">${i+1}</span><div style="flex:1;min-width:0"><span class="mono" style="font-size:13px">${esc(t.id)}</span></div><span class="badge ${badgeFor(t.status)}">${esc(t.status)}</span>${mb}<span style="font-size:11px;color:var(--text-muted)">${esc(t.owner)}</span>${EXT}</div>`;
-  }).join('');
-  el.querySelectorAll('.row[data-clickable]').forEach(row=>row.onclick=()=>openSpec(row.getAttribute('data-id'), row.getAttribute('data-spec')));
-  $('qcount').textContent='· '+q.length+' eligible';
-  if(q.length>2){ $('qtoggle').style.display=''; if(!$('queueList').classList.contains('qopen')) $('qtoggle').textContent='show all '+q.length; } else $('qtoggle').style.display='none';
-}
-
+// 009 — Dashboard Modernization (US2/FR-004): activeRowHtml()/renderActiveList()/renderQueue()
+// removed along with their now-gone #activeList/#queueList/#qcount/#qtoggle targets — this content
+// now renders in task-workflow-panel.mjs (self-contained copies of this HTML-generation logic,
+// reusing copySession()/openSpec() from here as shared globals, per that file's own doc comment).
 function defaultSpecPath(id){ return '.ai/features/'+id+'/spec.md'; }
 let specDirty=false;
 // `taskStatus`/`taskOwner` are only passed when opening from an escalation/parked-task control
@@ -1635,47 +1309,26 @@ $('specBounce').addEventListener('click', async function() {
 });
 $('specOverlay').addEventListener('click',(e)=>{ if(e.target.id==='specOverlay') closeSpec(); });
 document.addEventListener('keydown',(e)=>{ if(e.key==='Escape' && $('specOverlay').style.display==='flex') closeSpec(); });
-function renderRuns(runs){
-  const el=$('runsList');
-  if(!runs.length){ el.innerHTML='<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no runs yet — the runner has not fired</div>'; return; }
-  el.innerHTML=runs.map(r=>{
-    const t=r.ts?new Date(r.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):'—';
-    return `<div class="row run" data-sess="${esc(r.session||'')}" data-app="${esc(r.agent||'')}" style="align-items:flex-start"><span class="mono" style="font-size:12px;color:var(--text-muted);min-width:46px">${t}</span><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:13px">${esc(r.agent||'—')}</span>${r.model?`<span class="model">${esc(shortModel(r.model))}</span>`:''}<span class="badge ${outcomeBadge(r.outcome)}">${esc(r.outcome)}</span>${r.tokens?`<span class="mono" style="font-size:11px;color:var(--text-muted)">${fmt(r.tokens)} tok</span>`:''}</div><div style="font-size:12px;color:var(--text-muted);margin-top:2px">${r.task?`<span class="mono">${esc(r.task)}</span> — `:''}${esc(r.note||'')}${r.session?` · <span class="mono">${esc(String(r.session).slice(0,8))}</span>`:''}</div></div>${EXT}</div>`;
-  }).join('');
-  el.querySelectorAll('.run').forEach(row=>row.onclick=()=>{ 
-    const s=row.getAttribute('data-sess'); 
-    const app=row.getAttribute('data-app');
-    if(s){ 
-      $('runnote').textContent = '→ copied resume command for session '+s.slice(0,8); 
-      copySession(s, app); 
-    } else { 
-      $('runnote').textContent = 'no session recorded for this run'; 
-    } 
-  });
-}
+// 009 — Dashboard Modernization (US2/FR-004): renderRuns() removed along with its now-gone
+// #runsList/#runnote targets — see task-workflow-panel.mjs.
 
 function render(s){
-  renderBudgetCards(s.budget);
+  // 009 — Dashboard Modernization (US1/FR-001): renderBudgetCards()/renderAgentBudgetControls()
+  // used to render here — removed along with their now-dead markup (see "compute budget"/"budget &
+  // limits" comments above); that data now renders in the Settings & Observability workspace's
+  // merged "Agent Budget" panel (agent-budget-panel.mjs), which fetches its own data independently.
   renderFounderUsage(s.budget);
   renderProviderCost(s.budget.providerUsage && s.budget.providerUsage.last7d);
   $('clock').textContent=new Date(s.ts).toLocaleTimeString();
   kill=!!s.kill_switch; $('dot').style.background=kill?'#e34948':'#0ca30c';
-
-  // Roster-driven: build agent budget controls and active tiles
-  const roster = Object.keys(s.budget || {}).filter(k => !['kill_switch','attribution','resets','mayClaim','providerUsage'].includes(k));
-  renderAgentBudgetControls(roster, s.policy || {});
-
-  const ha = s.health && s.health.agents ? s.health.agents : {};
-  renderActiveList(roster, s.agents, ha);
-  renderQueue(s.queue||[]);
-  renderRuns(s.runs||[]);
-  renderEscalations(s.escalations);
+  // 009 — Dashboard Modernization (US2/FR-004): renderActiveList/renderQueue/renderRuns/
+  // renderEscalations/renderHealth/renderRunner/renderVerifier/renderPlanner used to run here — all
+  // now render inside their respective workspace panels (task-workflow-panel.mjs,
+  // governance-panel.mjs), each fetching /api/status independently rather than depending on this
+  // poll cycle's `s`.
   renderParked(s.parked||[]);
-  renderHealth(s.health);
-  renderRunner(s.runner);
-  renderVerifier(s.verifier);
-  renderPlanner(s.planner);
-  renderCapabilityMatrix(s.capability_matrix, s.work_stealing);
+  // 009 — Dashboard Modernization (US2/FR-004): renderCapabilityMatrix() used to run here — capability
+  // matrix now renders inside providers-models-panel.mjs, which fetches /api/status independently.
   renderTaskCategories(s.taskCategories);
   renderSystemLog(s.systemLog||[]);
   if(!controlsInit){ populateControls(s.policy||{}); controlsInit=true; }
@@ -1693,10 +1346,15 @@ async function poll(){
     render(s); 
     if(!kill)$('dot').style.background='#0ca30c'; 
   }
-  catch(e){ $('dot').style.background='#e34948'; $('clock').textContent='offline'; }
-  // Fetch providers and models every poll (lighter-weight, separate from /api/status)
-  fetchProviders().catch(() => {});
-  fetchModels().catch(() => {});
+  catch(e){ $('dot').style.background='#e34948'; $('clock').textContent='offline'; reportError('poll', e); }
+  // 009 — Dashboard Modernization (US2/FR-004): fetchProviders()/fetchModels() used to be called
+  // here every poll — providers-models-panel.mjs now fetches both independently (on open, not on
+  // every 10s tick, since these change far less often than task/agent status does).
+  // 009 — Dashboard Modernization (US3/FR-008): every feature that used to chain onto poll via
+  // reassign the global poll variable itself (search git history/PR for the old pattern) now
+  // registers here instead — see poll-dispatcher.mjs. Each handler's failure is isolated and reported individually;
+  // one throwing never stops or delays the others.
+  await runPollHandlers();
 }
 async function save(){
   try{ const r=await fetch('/api/policy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(collectLevers())});
@@ -1704,9 +1362,26 @@ async function save(){
     if(j.ok){ setDirty(false); $('saved').style.display='inline-flex'; } else { $('dirty').textContent='save failed: '+j.error; }
   }catch(e){ $('dirty').textContent='save failed: '+e.message; $('dirty').style.display='inline'; }
 }
-async function toggleKill(){ kill=$('kill').checked; applyKill(); try{ await fetch('/api/policy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})}); }catch(e){} }
+async function toggleKill(){
+  const previousKill = kill;
+  kill=$('kill').checked; applyKill();
+  try{
+    await fetch('/api/policy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});
+  }catch(e){
+    reportError('toggleKill', e);
+    // The write failed — the checkbox must not silently show a state that was never actually
+    // persisted server-side. This is the master kill switch; a UI/server mismatch here is exactly
+    // the kind of thing that must never be silent (this was previously an empty catch block).
+    kill = previousKill; $('kill').checked = kill; applyKill();
+    alert('Failed to update the kill switch — the change was NOT saved. ' + e.message);
+  }
+}
 
-['ctrls','work','gov'].forEach(cid=>{ const c=$(cid); const h=()=>{ setDirty(true); syncReadouts(); }; c.addEventListener('input',h); c.addEventListener('change',h); });
+// 009 — Dashboard Modernization (US4/FR-009): 'gov' removed from this list — the #gov card it
+// referenced no longer exists (governance levers moved to governance-panel.mjs, which wires its own
+// listeners directly). Leaving it in would null-deref on every page load, exactly the class of bug
+// this phase's US3 work exists to catch instead of silently break everything downstream.
+['ctrls','work'].forEach(cid=>{ const c=$(cid); const h=()=>{ setDirty(true); syncReadouts(); }; c.addEventListener('input',h); c.addEventListener('change',h); });
 ['qhEnable','qhFrom','qhTo'].forEach(id=>$(id).addEventListener('change',(e)=>{ renderQuiet(); setDirty(true); }));
 $('save').addEventListener('click',save);
 
@@ -1721,215 +1396,12 @@ function renderSystemLog(events) {
   }).join('');
 }
 
-// ─── Providers tab (US8 T065) ───────────────────────────────────────────────
-
-async function fetchProviders() {
-  try {
-    const r = await fetch('/api/providers');
-    const j = await r.json();
-    if (j.ok) renderProviders(j.providers);
-    else $('providersList').innerHTML = '<div style="font-size:12px;color:var(--text-danger)">Failed to load providers</div>';
-  } catch (e) {
-    $('providersList').innerHTML = '<div style="font-size:12px;color:var(--text-danger)">Failed to load providers: ' + esc(e.message) + '</div>';
-  }
-}
-
-function renderProviders(providers) {
-  const el = $('providersList');
-  if (!providers || !providers.length) {
-    el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no providers configured — run <code>node gateway/cli.mjs provider add --auto</code> to auto-detect</div>';
-    return;
-  }
-  const healthDot = (status) => {
-    const color = status === 'ok' ? 'var(--text-success)' : (status === 'degraded' ? 'var(--text-warning)' : (status === 'down' ? 'var(--text-danger)' : 'var(--text-muted)'));
-    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:4px" title="${esc(status)}"></span>`;
-  };
-  let htm = '<div style="display:grid;grid-template-columns:auto">';
-  for (const p of providers) {
-    const h = p.health || {};
-    const status = h.status || 'unknown';
-    const latency = h.latencyMs != null ? h.latencyMs + 'ms' : '—';
-    htm += `<div class="row" style="align-items:center">
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          ${healthDot(status)}
-          <span style="font-size:13px;font-weight:500">${esc(p.displayName || p.name)}</span>
-          <span class="model" style="font-size:10px">${esc(p.wire)}</span>
-          <span class="badge ${status === 'ok' ? 'b-ok' : (status === 'degraded' ? 'b-warn' : (status === 'down' ? 'b-danger' : 'b-muted'))}">${esc(status)}</span>
-        </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(p.baseUrl || 'local')} · latency: ${latency}</div>
-      </div>
-      <button onclick="testProvider('${esc(p.name)}')" style="font-size:11px;padding:4px 8px;margin-left:8px">Test Connection</button>
-    </div>`;
-  }
-  htm += '</div>';
-  el.innerHTML = htm;
-}
-
-async function testProvider(name) {
-  try {
-    const r = await fetch('/api/providers/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: name }) });
-    const j = await r.json();
-    const status = j.ok ? '✓ OK' : '✗ FAILED';
-    const detail = j.errorCode ? ` [${j.errorCode}] ${j.errorMessage || ''}` : '';
-    alert(`${name}: ${status} (${j.latencyMs}ms)${detail}`);
-  } catch (e) {
-    alert(`${name}: Test failed — ${e.message}`);
-  }
-}
-
-// ─── Add Provider form (US8 T078) ───────────────────────────────────────────
-
-const KNOWN_PROVIDERS = [
-  { name: 'anthropic', display: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY' },
-  { name: 'openai', display: 'OpenAI', keyEnv: 'OPENAI_API_KEY' },
-  { name: 'deepseek', display: 'DeepSeek', keyEnv: 'DEEPSEEK_KEY' },
-  { name: 'openrouter', display: 'OpenRouter', keyEnv: 'OPENROUTER_KEY' },
-  { name: 'ollama', display: 'Ollama', keyEnv: 'OLLAMA_HOST' },
-  { name: 'groq', display: 'Groq', keyEnv: 'GROQ_API_KEY' },
-  { name: 'together', display: 'Together', keyEnv: 'TOGETHER_API_KEY' },
-  { name: 'fireworks', display: 'Fireworks', keyEnv: 'FIREWORKS_API_KEY' },
-  { name: 'google-ai', display: 'Google Gemini', keyEnv: 'GOOGLE_AI_API_KEY' },
-  { name: 'mistral', display: 'Mistral', keyEnv: 'MISTRAL_API_KEY' },
-  { name: 'cohere', display: 'Cohere', keyEnv: 'COHERE_API_KEY' },
-  { name: 'perplexity', display: 'Perplexity', keyEnv: 'PPLX_API_KEY' },
-  { name: 'xai', display: 'xAI', keyEnv: 'XAI_API_KEY' },
-  { name: 'azure-openai', display: 'Azure OpenAI', keyEnv: 'AZURE_OPENAI_API_KEY' },
-  { name: 'aws-bedrock', display: 'AWS Bedrock', keyEnv: 'AWS_ACCESS_KEY_ID' },
-];
-
-function populateProviderSelect() {
-  const sel = $('addProvSelect');
-  sel.innerHTML = '<option value="">— select provider —</option>' +
-    KNOWN_PROVIDERS.map(p => `<option value="${esc(p.name)}">${esc(p.display)} (${esc(p.keyEnv)})</option>`).join('');
-}
-
-function toggleAddProvider() {
-  const form = $('addProviderForm');
-  const visible = form.style.display !== 'none';
-  form.style.display = visible ? 'none' : 'block';
-  if (!visible) {
-    populateProviderSelect();
-    $('addProvKey').value = '';
-    $('addProvMsg').style.display = 'none';
-  }
-}
-
-async function submitAddProvider() {
-  const name = $('addProvSelect').value;
-  const apiKey = $('addProvKey').value;
-  const msg = $('addProvMsg');
-  if (!name) { msg.style.display = 'block'; msg.style.color = 'var(--text-danger)'; msg.textContent = 'Select a provider'; return; }
-  if (!apiKey) { msg.style.display = 'block'; msg.style.color = 'var(--text-danger)'; msg.textContent = 'API key required'; return; }
-  msg.style.display = 'block'; msg.style.color = 'var(--text-accent)'; msg.textContent = 'Saving…';
-  try {
-    const provider = KNOWN_PROVIDERS.find(p => p.name === name);
-    const r = await fetch('/api/providers', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, keyEnv: provider?.keyEnv || '', apiKey, source: 'dashboard' }),
-    });
-    const j = await r.json();
-    if (j.ok) {
-      msg.style.color = 'var(--text-success)'; msg.textContent = `✓ ${j.provider?.displayName || name} added`;
-      setTimeout(() => { toggleAddProvider(); fetchProviders(); }, 1200);
-    } else {
-      msg.style.color = 'var(--text-danger)'; msg.textContent = '✗ ' + (j.error || 'Unknown error');
-    }
-  } catch (e) {
-    msg.style.color = 'var(--text-danger)'; msg.textContent = '✗ ' + e.message;
-  }
-}
-
-// ─── Models tab (US8 T066) ──────────────────────────────────────────────────
-
-async function fetchModels() {
-  try {
-    const r = await fetch('/api/models');
-    const j = await r.json();
-    if (j.ok) renderModels(j.models);
-    else $('modelsList').innerHTML = '<div style="font-size:12px;color:var(--text-danger)">Failed to load models</div>';
-  } catch (e) {
-    $('modelsList').innerHTML = '<div style="font-size:12px;color:var(--text-danger)">Failed to load models: ' + esc(e.message) + '</div>';
-  }
-}
-
-function renderModels(models) {
-  const el = $('modelsList');
-  if (!models || !models.length) {
-    el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no models discovered — click "Refresh Models" to discover from configured providers</div>';
-    return;
-  }
-  // Group by provider
-  const grouped = {};
-  for (const m of models) {
-    const prov = m.provider || 'unknown';
-    if (!grouped[prov]) grouped[prov] = [];
-    grouped[prov].push(m);
-  }
-  let htm = '';
-  for (const [provider, providerModels] of Object.entries(grouped)) {
-    htm += `<div style="font-weight:600;font-size:13px;margin:12px 0 6px;color:var(--text-primary)">${esc(provider)} <span style="font-weight:400;color:var(--text-muted);font-size:11px">(${providerModels.length} models)</span></div>`;
-    for (const m of providerModels) {
-      const tier = m.tier_assigned ? `<span class="badge ${m.tier_assigned === 'best' ? 'b-ok' : (m.tier_assigned === 'medium' ? 'b-accent' : 'b-muted')}">${esc(m.tier_assigned)}</span>` : '';
-      const ctx = m.context_window != null ? `${(m.context_window / 1000).toFixed(0)}k` : '—';
-      const inp = m.pricing_input_per_m != null ? `$${Number(m.pricing_input_per_m).toFixed(1)}` : '—';
-      const out = m.pricing_output_per_m != null ? `$${Number(m.pricing_output_per_m).toFixed(1)}` : '—';
-      const dep = m.deprecated ? '<span class="badge b-warn" style="font-size:10px">deprecated</span>' : '';
-      htm += `<div class="row" style="align-items:center">
-        <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-            <span class="mono" style="font-size:12px">${esc(m.model_id)}</span>
-            ${dep}
-            ${tier}
-          </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">
-            ctx: ${ctx} · in: ${inp}/M · out: ${out}/M
-            ${m.pricing_source ? ` · src: ${esc(m.pricing_source)}` : ''}
-          </div>
-        </div>
-      </div>`;
-    }
-  }
-  el.innerHTML = htm;
-}
-
-async function refreshModels() {
-  try {
-    const r = await fetch('/api/models/refresh', { method: 'POST' });
-    const j = await r.json();
-    if (j.ok) {
-      $('modelsList').innerHTML = '<div style="font-size:12px;color:var(--text-accent);padding:.4rem 0">Model refresh started… this may take up to 60 seconds. Models will appear here when done.</div>';
-      // Poll for models after a delay
-      setTimeout(fetchModels, 15000);
-      setTimeout(fetchModels, 30000);
-      setTimeout(fetchModels, 60000);
-    }
-  } catch (e) {
-    alert('Model refresh failed: ' + e.message);
-  }
-}
-
-function renderCapabilityMatrix(matrix, workStealing) {
-  const el = $('capMatrixBody');
-  if (!matrix || typeof matrix !== 'object') { el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no capability_matrix in policy.yaml</div>'; return; }
-  const entries = Object.entries(matrix);
-  if (!entries.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">matrix is empty</div>'; return; }
-  const agentPill = (name) => name === 'claude'
-    ? '<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:500;padding:3px 8px;border-radius:999px;background:var(--bg-accent);color:var(--text-accent);border:1px solid rgba(59,130,246,0.2)">claude</span>'
-    : '<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:500;padding:3px 8px;border-radius:999px;background:var(--bg-success);color:var(--text-success);border:1px solid rgba(22,163,74,0.2)">antigravity</span>';
-  const lockIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted);flex:none"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
-  let htm = '<div style="display:grid;grid-template-columns:minmax(100px,auto) 1fr;gap:6px 16px;align-items:center">';
-  for (const [cat, agents] of entries) {
-    const isExclusive = Array.isArray(agents) && agents.length === 1;
-    const pills = Array.isArray(agents) ? agents.map(agentPill).join(' ') : esc(String(agents));
-    htm += `<div style="font-size:13px;font-weight:500;color:var(--text-secondary);display:flex;align-items:center;gap:4px">${isExclusive ? lockIcon : ''}${esc(cat)}</div>`;
-    htm += `<div style="display:flex;flex-wrap:wrap;gap:4px">${pills}</div>`;
-  }
-  htm += '</div>';
-  htm += `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--text-secondary)">work stealing</span><span class="badge ${workStealing ? 'b-ok' : 'b-muted'}">${workStealing ? 'on' : 'off'}</span><span style="font-size:11px;color:var(--text-muted)">${workStealing ? 'idle agent may claim the other\'s eligible tasks' : 'agents only claim their own tasks'}</span></div>`;
-  el.innerHTML = htm;
-}
+// 009 — Dashboard Modernization (US2/FR-004): fetchProviders()/renderProviders()/testProvider()/
+// KNOWN_PROVIDERS/populateProviderSelect()/toggleAddProvider()/submitAddProvider()/fetchModels()/
+// renderModels()/refreshModels()/renderCapabilityMatrix() removed along with their now-gone
+// #providersList/#modelsList/#capMatrixBody/#addProviderForm targets — this content now renders in
+// providers-models-panel.mjs (self-contained copies of this HTML-generation logic, per every other
+// workspace panel's established convention).
 function renderTaskCategories(categories) {
   const el = $('taskCategoriesBody');
   if (!categories || typeof categories !== 'object') { el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no task categories data</div>'; return; }
@@ -1947,7 +1419,9 @@ function renderTaskCategories(categories) {
   el.innerHTML = htm;
 }
 $('kill').addEventListener('change',toggleKill);
-$('qtoggle').addEventListener('click',()=>{ const open=$('queueList').classList.toggle('qopen'); const n=$('queueList').children.length; $('qtoggle').textContent=open?'show less':'show all '+n; });
+// 009 — Dashboard Modernization (US2/FR-004): the #qtoggle "show all"/"show less" listener removed
+// along with the #qtoggle button and #queueList itself — next-in-queue now renders (unpaginated,
+// no queue-length-based UI needed) in task-workflow-panel.mjs.
 
 const CMD_LIST = ['validate','list','run --dry','tick','plan','render','verify --dry','reap','seed'];
 const CMD_ICONS = {validate:'✓',list:'☰','run --dry':'▶',tick:'⟳',plan:'◈',render:'⎙','verify --dry':'⚑',reap:'✂',seed:'⬢'};
@@ -2019,7 +1493,12 @@ async function restartDaemon() {
     try {
       const s = await fetch('/api/status', { cache: 'no-store' });
       if (s.ok) { clearInterval(reconnect); label.textContent = 'daemon back up ✓'; startPolling(); }
-    } catch { /* still down */ }
+    } catch (e) {
+      // Expected during most of this loop — the daemon is mid-restart, so "still down" on any given
+      // 2s tick is normal, not an error worth reporting 40 times. Only report once we've actually
+      // given up (below), so the log has the one signal that matters instead of restart-loop noise.
+      if (tries > 40) reportError('restartDaemon-reconnect', e, { severity: 'info' });
+    }
     if (tries > 40) { clearInterval(reconnect); label.textContent = 'daemon did not come back — check .ai/runs/restart.log'; }
   }, 2000);
 }
@@ -2027,21 +1506,16 @@ initCmdButtons();
 
 const POLL_MS=10000;
 let pollTimer=null;
-// Note: `poll` gets reassigned further down (search `const _origPoll = poll;`) as later panels
-// (IDE/MCP connect, analytics, budget) chain their own fetches onto it. setInterval/addEventListener
-// capture a callback *value* at registration time, not a live binding — registering the bare `poll`
-// identifier here would freeze this timer and the refresh button onto today's (pre-chaining)
-// definition forever, silently skipping every fetch those later wrappers add. Wrapping in closures
-// makes each call re-read the current `poll` binding instead.
-// The `poll();` call right here still runs before any of those later reassignments have executed
-// (this function is invoked once, synchronously, near the top of the script), so it always uses
-// today's not-yet-chained `poll` — same reason it's fine for the base status/health/queue/runs
-// panels (which render instantly off this first call) but leaves IDE/MCP/analytics/budget panels
-// waiting for the first setInterval tick (up to POLL_MS later) before they get their first fetch.
-// queueMicrotask defers a second call until the rest of this synchronous script — including every
-// later `poll = ...` reassignment — has finished running, so that second call sees the fully
-// chained poll and those panels populate immediately instead of after a ~10s delay.
-function startPolling(){ if(pollTimer) return; poll(); queueMicrotask(()=>poll()); pollTimer=setInterval(()=>poll(),POLL_MS); }
+// 009 — Dashboard Modernization (US3/FR-008): `poll` is now defined exactly once, above, and never
+// reassigned — every feature that used to chain onto it by reassigning the global poll variable
+// itself now registers through poll-dispatcher.mjs's registerPollHandler() instead (see the bridge near the
+// top of this script). setInterval/addEventListener still capture `poll` in a closure (`()=>poll()`
+// rather than the bare identifier) purely so a future redefinition can't silently freeze them onto a
+// stale reference the way the old reassignment chain once did to itself — poll() reading
+// runPollHandlers()'s live handler list at call time means every registration is picked up on the
+// very next tick regardless of when it was registered, so the old queueMicrotask "second call to
+// pick up later reassignments" workaround is no longer needed.
+function startPolling(){ if(pollTimer) return; poll(); pollTimer=setInterval(()=>poll(),POLL_MS); }
 function stopPolling(){ clearInterval(pollTimer); pollTimer=null; }
 $('refresh').addEventListener('click',()=>poll());
 document.addEventListener('visibilitychange',()=>{ document.hidden ? stopPolling() : startPolling(); });
@@ -2171,7 +1645,12 @@ async function fetchIdeStatus() {
       $('copilotNote').textContent = j.copilotStatusNote || '';
       $('copilotPrivacy').style.display = 'block';
     }
-  } catch { /* Copilot monitoring requires gateway */ }
+  } catch (e) {
+    // Copilot monitoring requires the gateway feature — panel staying hidden on failure is still
+    // correct UX (no misleading "unavailable" banner for a feature most installs don't use), but the
+    // failure itself is still worth a low-severity report for diagnosability.
+    reportError('fetchIdeStatus', e, { severity: 'info' });
+  }
 }
 
 // ─── P4: Subscription Plans Panel ───────────────────────────────────────────
@@ -2201,7 +1680,9 @@ async function fetchSubscriptions() {
 
     // Combined total
     $('combinedTotal').textContent = 'Combined monthly: ' + formatSpend(j.combinedMonthlyTotal || 0);
-  } catch { /* subscriptions unavailable */ }
+  } catch (e) {
+    reportError('fetchSubscriptions', e, { panelEl: $('subscriptionsList') });
+  }
 }
 
 function reportBrokenSub(providerName) {
@@ -2262,16 +1743,15 @@ $('subSaveBtn').addEventListener('click', async () => {
   }
 });
 
-// ─── P4: Poll new panels alongside existing poll ────────────────────────────
+// ─── 009 — Dashboard Modernization (US3/FR-008): IDE/MCP/subscriptions panels register on the poll
+// dispatcher instead of reassigning `poll` — see poll-dispatcher.mjs. Each of these already handles
+// its own errors internally (visible fallback text set in its own catch), and runPollHandlers()
+// reports anything that still escapes, so no per-call .catch() wrapper is needed here anymore. ───
 
-const _origPoll = poll;
-poll = async function() {
-  await _origPoll();
-  fetchIdeDetect().catch(() => {});
-  fetchMcpConfig().catch(() => {});
-  fetchIdeStatus().catch(() => {});
-  fetchSubscriptions().catch(() => {});
-};
+registerPollHandler(fetchIdeDetect);
+registerPollHandler(fetchMcpConfig);
+registerPollHandler(fetchIdeStatus);
+registerPollHandler(fetchSubscriptions);
 
 // ─── P5: Analytics Polling ─────────────────────────────────────────────────
 
@@ -2286,105 +1766,10 @@ function setAnalyticsRange(days, fetchNow = true) {
   if (fetchNow) fetchAnalytics();
 }
 
-// ─── HTML5 Canvas Chart Classes (T024) ──────────────────────────────────────
-
-class LineChart {
-  constructor(canvas) { this.canvas = canvas; this.ctx = canvas.getContext('2d'); }
-  render(series, opts={}) {
-    const {width, height} = this.canvas;
-    const ctx = this.ctx;
-    ctx.clearRect(0,0,width,height);
-    if (!series.length) return;
-    const pad = {top:10,right:20,bottom:30,left:50};
-    const w = width-pad.left-pad.right;
-    const h = height-pad.top-pad.bottom;
-
-    let maxCost = 0, pts = [];
-    for (const s of series) {
-      for (const d of s.data) { maxCost = Math.max(maxCost, d.cost||0); pts.push(d); }
-    }
-    if (maxCost===0) maxCost = 1;
-    const xScale = w / Math.max(1, pts.length-1);
-    const yScale = h / maxCost;
-
-    // Grid lines
-    ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--border').trim()||'#e2e8f0';
-    ctx.lineWidth = 0.5;
-    for (let i=0;i<=4;i++) {
-      const y = pad.top + h*(i/4);
-      ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(pad.left+w,y); ctx.stroke();
-      ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-muted').trim()||'#94a3b8';
-      ctx.font = '10px Inter,sans-serif';
-      ctx.fillText(formatSpend(maxCost*(1-i/4)), 2, y+3);
-    }
-
-    // Lines
-    const colors = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#8b5cf6'];
-    series.forEach((s, si) => {
-      ctx.strokeStyle = colors[si%colors.length];
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      s.data.forEach((d,i) => {
-        const x = pad.left + i*xScale;
-        const y = pad.top + h - (d.cost||0)*yScale;
-        i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-      });
-      ctx.stroke();
-    });
-  }
-}
-
-class DonutChart {
-  constructor(canvas) { this.canvas = canvas; this.ctx = canvas.getContext('2d'); }
-  render(items, opts={}) {
-    const {width, height} = this.canvas;
-    const ctx = this.ctx;
-    ctx.clearRect(0,0,width,height);
-    if (!items.length) return;
-    const cx = width/2, cy = height/2, outerR = Math.min(cx,cy)-10, innerR = outerR*0.55;
-
-    const totalCost = items.reduce((s,i) => s+(i.cost||0), 0);
-    // If no cost data, fall back to tokens so the chart is still meaningful
-    const useCost = totalCost > 0;
-    const getValue = (item) => useCost ? (item.cost||0) : (item.tokens||0);
-    let total = items.reduce((s,i) => s+getValue(i), 0);
-    if (total === 0) { // nothing to show at all
-      ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-muted').trim() || '#94a3b8';
-      ctx.font = '12px Inter,sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('No data', cx, cy+5);
-      return;
-    }
-
-    const colors = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#8b5cf6','#ec4899','#06b6d4','#84cc16'];
-    let angle = -Math.PI/2;
-    items.forEach((item, i) => {
-      const val = getValue(item);
-      const slice = (val/total)*Math.PI*2;
-      ctx.fillStyle = colors[i%colors.length];
-      ctx.beginPath();
-      ctx.arc(cx,cy,outerR,angle,angle+slice);
-      ctx.arc(cx,cy,innerR,angle+slice,angle,true);
-      ctx.fill();
-      // Label
-      const midAngle = angle+slice/2;
-      const lx = cx + Math.cos(midAngle)*outerR*0.75;
-      const ly = cy + Math.sin(midAngle)*outerR*0.75;
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 9px Inter,sans-serif';
-      ctx.textAlign = 'center';
-      const pct = Math.round((val/total)*100);
-      if (slice>0.2) ctx.fillText(pct+'%', lx, ly+3);
-      angle += slice;
-    });
-    // Center text — show cost if available, otherwise token count
-    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-primary').trim();
-    ctx.font = 'bold 14px Inter,sans-serif';
-    ctx.textAlign = 'center';
-    const centerLabel = useCost ? formatSpend(totalCost) : formatNumber(total)+' tok';
-    ctx.fillText(centerLabel, cx, cy+5);
-  }
-}
+// 009 — Dashboard Modernization (US1/FR-002): the hand-rolled LineChart/DonutChart canvas classes
+// that used to render here were removed — superseded by the themed uPlot panels in the Settings &
+// Observability workspace (observability-panels.mjs). See fetchAnalytics() below for the KPI-tile
+// logic that stayed, and dashboard-source-quality.test.mjs for the regression guard.
 
 // ─── Analytics Fetch & Render (T026) ────────────────────────────────────────
 
@@ -2396,11 +1781,12 @@ async function fetchAnalytics() {
     $('analyticsEmpty').style.display='none';
     $('analyticsError').style.display='none';
 
-    const [ovr,tsr,brr] = await Promise.all([
-      fetch(`/api/analytics/overview?from=${from}&to=${to}`).then(r=>r.json()),
-      fetch(`/api/analytics/timeseries?from=${from}&to=${to}&groupBy=provider`).then(r=>r.json()),
-      fetch(`/api/analytics/breakdown?dimension=provider&from=${from}&to=${to}&limit=8`).then(r=>r.json()),
-    ]);
+    // 009 — Dashboard Modernization (US1/FR-002): only `overview` is fetched now — timeseries/
+    // breakdown were fetched solely to feed the removed LineChart/DonutChart canvases; that same
+    // data is now rendered by the themed uPlot panels in the Settings & Observability workspace,
+    // which fetch it themselves (observability-panels.mjs). Fetching it here too would just be
+    // redundant network traffic for data nothing on this page uses anymore.
+    const ovr = await fetch(`/api/analytics/overview?from=${from}&to=${to}`).then(r=>r.json());
 
     $('analyticsLoading').style.display='none';
 
@@ -2417,13 +1803,6 @@ async function fetchAnalytics() {
     $('kvCalls').textContent = formatNumber(ovr.totalApiCalls||0);
     $('kvTopProvider').textContent = ovr.topProvider ? `${ovr.topProvider.name} (${ovr.topProvider.pct}%)` : '—';
     $('kvTopModel').textContent = ovr.topModel ? ovr.topModel.name.split('-').slice(0,3).join('-') : '—';
-
-    // Charts
-    const tsCanvas = document.getElementById('analyticsTimeseries');
-    if (tsCanvas) new LineChart(tsCanvas).render(tsr.series||[]);
-
-    const donutCanvas = document.getElementById('analyticsDonut');
-    if (donutCanvas) new DonutChart(donutCanvas).render(brr.items||[]);
 
   } catch(e) {
     $('analyticsLoading').style.display='none';
@@ -2452,14 +1831,11 @@ function formatNumber(n) {
   return String(n);
 }
 
-// Add analytics to polls
-const _origPoll2 = poll;
-poll = async function() {
-  await _origPoll2();
-  fetchAnalytics().catch(()=>{});
-  fetchBudget().catch(()=>{});
-  fetchOptimization().catch(()=>{});
-};
+// 009 — Dashboard Modernization (US3/FR-008): analytics/budget/optimization register on the poll
+// dispatcher instead of reassigning `poll` — see poll-dispatcher.mjs.
+registerPollHandler(fetchAnalytics);
+registerPollHandler(fetchBudget);
+registerPollHandler(fetchOptimization);
 
 // ─── P5: Budget Intelligence (T042) ────────────────────────────────────────
 
@@ -2495,8 +1871,8 @@ async function fetchBudget() {
         $('pauseSpendBtn').style.color = 'var(--text-danger)';
         $('pauseReason').textContent = '';
       }
-    } catch { /* spend-pause endpoint may not be available */ }
-  } catch { /* budget not available */ }
+    } catch (e) { reportError('fetchBudget-spendPause', e, { severity: 'info' }); }
+  } catch (e) { reportError('fetchBudget', e); }
 }
 
 async function toggleSpendPause() {
@@ -2529,8 +1905,8 @@ async function testAlert() {
     try {
       const ar = await fetch('/api/analytics/alerts/config').then(r=>r.json());
       $('alertsSummary').textContent = '· '+(ar.channels||[]).length+' channel(s), '+(ar.rules||[]).length+' rule(s)';
-    } catch {}
-  } catch(e) { $('testAlertResult').textContent = '✗ '+e.message; }
+    } catch (e) { reportError('testAlert-refreshConfig', e, { severity: 'info' }); }
+  } catch(e) { $('testAlertResult').textContent = '✗ '+e.message; reportError('testAlert', e); }
 }
 
 // ─── P5: Optimization (T060) ────────────────────────────────────────────────
@@ -2555,7 +1931,9 @@ async function fetchOptimization() {
       </div>`;
     }
     $('optList').innerHTML = html;
-  } catch { /* optimization not available */ }
+  } catch (e) {
+    reportError('fetchOptimization', e, { panelEl: $('optList'), severity: 'info' });
+  }
 }
 
 async function applyOpt(id) {
@@ -2631,6 +2009,18 @@ function toggleAdminWorkspace() {
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
   showAdminWorkspace();
 }
+
+// 009 — Dashboard Modernization (US2/FR-003): the panel-grid workspace is now the default view on
+// page load instead of a hidden overlay behind the "⚙ Settings" nav button. Placed here — the true
+// end of the script, after every `let`/function declaration above has executed — rather than near
+// startPolling() earlier in the file: showSettingsWorkspace() is a hoisted function declaration
+// (safe to call early), but its body reads `_settingsWorkspaceInitialized`, a `let` binding that is
+// NOT usable until its own declaration line runs (the temporal dead zone). Calling it too early
+// threw `ReferenceError: Cannot access '_settingsWorkspaceInitialized' before initialization` —
+// caught live, not by any static check, the same way the original audit's headline bug was.
+// toggleSettingsWorkspace() (bound to the nav button) still works as a collapse/expand shortcut
+// afterward — this only changes the INITIAL state, not the toggle behavior.
+showSettingsWorkspace();
 </script>
 
 <!-- 008 — End-User Configurability: vendored, framework-free static assets (see
