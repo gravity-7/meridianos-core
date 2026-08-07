@@ -884,6 +884,7 @@ import { esc, relTime, formatSpend, formatNumber, shortModel, badgeFor, outcomeB
 import { renderParked } from './static/escalation-actions.mjs';
 import { renderFounderUsage, renderProviderCost } from './static/spend-budget.mjs';
 import { renderSystemLog } from './static/daemon-console.mjs';
+import { populateControls } from './static/policy-levers.mjs';
 import './static/optimization.mjs';
 import './static/ide-integration.mjs';
 import './static/subscriptions.mjs';
@@ -933,7 +934,7 @@ const fmt=n=>n==null?'—':(n>=1e6?(n/1e6).toFixed(1)+'M':Math.round(n/1000)+'k'
 window.fmt = fmt;
 const stateColor=s=>s==='halt'?'#e34948':(s==='warn'?'#eda100':'#0ca30c');
 const EXT='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted);flex:none"><path d="M15 3h6v6M10 14L21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
-let controlsInit=false, dirty=false, kill=false;
+let controlsInit=false;
 
 const SAMPLE_STATUS = {
   "health": {
@@ -1005,56 +1006,10 @@ const SAMPLE_STATUS = {
 // are genuinely shared, interactive-handler globals rather than pure render logic.
 
 
-const LEVERS=[
-  ['warn','agent_budget.warn_pct','num'],['ptask','agent_budget.per_task_tokens','num'],
-  ['autodown','agent_budget.auto_downgrade_at_warn','bool'],['attrib','agent_budget.attribution','str'],
-  ['conc','work.max_parallel','num'],['wip','work.wip_per_agent','num'],['prio','work.priority_floor','num'],
-  ['ttl','work.lease_ttl_min','num'],['maxruns','work.max_runs_per_5h','num'],['sched','schedule.cadence','str'],
-  ['qhEnable','quiet_hours.enabled','bool'],['qhFrom','quiet_hours.from','str'],['qhTo','quiet_hours.to','str'],
-  // 009 — Dashboard Modernization (US4/FR-009): govDeploy/govSend/govSpend/govSchema/autoMerge/esc(select)/
-  // workSteal LEVERS entries removed along with their now-gone DOM elements — those levers save through
-  // governance-panel.mjs's own saveLever() now (see that file).
-];
 // 009 — Dashboard Modernization (US1/FR-001): renderAgentBudgetControls() (dynamic per-agent cap
 // sliders + LEVERS entries) removed — that UI now lives in agent-budget-panel.mjs, which manages
 // its own saves directly via POST /api/policy rather than this file's shared LEVERS/dirty/save()
 // mechanism (see that file's doc comment for why, matching settings-panels.mjs's precedent).
-const getPath=(o,p)=>p.split('.').reduce((a,k)=>a&&a[k],o);
-
-function setDirty(v){ dirty=v; $('dirty').style.display=v?'inline':'none'; if(v) $('saved').style.display='none'; }
-function applyKill(){ $('aios').classList.toggle('killed',kill); $('killbanner').style.display=kill?'flex':'none'; $('dot').style.background=kill?'#e34948':'#0ca30c'; }
-
-function populateControls(policy){
-  for(const [id,path,kind] of LEVERS){
-    const el=$(id); if(!el) continue;
-    const v=getPath(policy,path); if(v==null) continue;
-    if(kind==='bool'){ el.checked=!!v; }
-    else { if(el.tagName==='SELECT' && ![...el.options].some(o=>o.value===String(v))){ const o=document.createElement('option'); o.value=String(v); o.textContent=String(v); el.appendChild(o); } el.value=v; }
-  }
-  kill=!!policy.kill_switch; $('kill').checked=kill; applyKill();
-  syncReadouts(); renderQuiet();
-}
-function collectLevers(){ const u={}; for(const [id,path,kind] of LEVERS){ const el=$(id); if(!el) continue; u[path]=kind==='bool'?el.checked:(kind==='num'?+el.value:el.value); } return u; }
-
-function syncReadouts(){
-  // 009 — Dashboard Modernization (US1/FR-001): the per-agent cap-slider readout loop that used to
-  // run here is gone along with agentBudgetTiles itself — agent-budget-panel.mjs updates its own
-  // slider outputs directly (see wireAgentCard()'s 'input' listener there).
-  if ($('outWarn')) $('outWarn').textContent=$('warn').value+'%';
-  if ($('outPtask') && $('ptask')) $('outPtask').textContent=fmt(+$('ptask').value);
-  if ($('outConc')) $('outConc').textContent=$('conc').value;
-  if ($('outWip')) $('outWip').textContent=$('wip').value;
-  if ($('outTtl')) $('outTtl').textContent=$('ttl').value;
-  if ($('outMaxruns')) $('outMaxruns').textContent=$('maxruns').value;
-}
-const inWin=(h,f,e)=> f===e?false:(f<e?(h>=f&&h<e):(h>=f||h<e));
-function renderQuiet(){
-  const on=$('qhEnable').checked, from=$('qhFrom').value||'00:00', to=$('qhTo').value||'00:00';
-  const f=parseInt(from,10)||0, e=parseInt(to,10)||0, nh=new Date().getHours(), strip=$('qhStrip');
-  strip.innerHTML='';
-  for(let h=0;h<24;h++){ const c=document.createElement('div'); c.style.flex='1'; c.style.height='18px'; c.style.borderRadius='3px'; const q=on&&inWin(h,f,e); c.style.background=q?'var(--surface-0)':'var(--bg-accent)'; if(q)c.style.border='.5px solid var(--border)'; if(h===nh)c.style.boxShadow='inset 0 0 0 2px var(--text-primary)'; strip.appendChild(c); }
-  $('qhStatus').textContent = !on ? 'always on — no quiet window' : (inWin(nh,f,e)?('sleeping — resumes at '+to):('active now · agents sleep '+from+'–'+to));
-}
 
 // 009 — Dashboard Modernization (US1/FR-001): budgetTile()/renderBudgetCards() (the read-only
 // per-agent usage tiles this repo used to call "compute budget") removed — that display now lives
@@ -1074,7 +1029,7 @@ function render(s){
   renderFounderUsage(s.budget);
   renderProviderCost(s.budget.providerUsage && s.budget.providerUsage.last7d);
   $('clock').textContent=new Date(s.ts).toLocaleTimeString();
-  kill=!!s.kill_switch; $('dot').style.background=kill?'#e34948':'#0ca30c';
+  window.kill=!!s.kill_switch; $('dot').style.background=window.kill?'#e34948':'#0ca30c';
   // 009 — Dashboard Modernization (US2/FR-004): renderActiveList/renderQueue/renderRuns/
   // renderEscalations/renderHealth/renderRunner/renderVerifier/renderPlanner used to run here — all
   // now render inside their respective workspace panels (task-workflow-panel.mjs,
@@ -1098,7 +1053,7 @@ async function poll(){
       }
     }
     render(s); 
-    if(!kill)$('dot').style.background='#0ca30c'; 
+    if(!window.kill)$('dot').style.background='#0ca30c';
   }
   catch(e){ $('dot').style.background='#e34948'; $('clock').textContent='offline'; reportError('poll', e); }
   // 009 — Dashboard Modernization (US2/FR-004): fetchProviders()/fetchModels() used to be called
@@ -1116,34 +1071,6 @@ async function poll(){
 // this is the "moved code needs to call back into not-yet-moved code" direction of the same
 // module-scope-stops-exposing-window-globals problem.
 window.poll = poll;
-async function save(){
-  try{ const r=await fetch('/api/policy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(collectLevers())});
-    const j=await r.json();
-    if(j.ok){ setDirty(false); $('saved').style.display='inline-flex'; } else { $('dirty').textContent='save failed: '+j.error; }
-  }catch(e){ $('dirty').textContent='save failed: '+e.message; $('dirty').style.display='inline'; }
-}
-async function toggleKill(){
-  const previousKill = kill;
-  kill=$('kill').checked; applyKill();
-  try{
-    await fetch('/api/policy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});
-  }catch(e){
-    reportError('toggleKill', e);
-    // The write failed — the checkbox must not silently show a state that was never actually
-    // persisted server-side. This is the master kill switch; a UI/server mismatch here is exactly
-    // the kind of thing that must never be silent (this was previously an empty catch block).
-    kill = previousKill; $('kill').checked = kill; applyKill();
-    alert('Failed to update the kill switch — the change was NOT saved. ' + e.message);
-  }
-}
-
-// 009 — Dashboard Modernization (US4/FR-009): 'gov' removed from this list — the #gov card it
-// referenced no longer exists (governance levers moved to governance-panel.mjs, which wires its own
-// listeners directly). Leaving it in would null-deref on every page load, exactly the class of bug
-// this phase's US3 work exists to catch instead of silently break everything downstream.
-['ctrls','work'].forEach(cid=>{ const c=$(cid); const h=()=>{ setDirty(true); syncReadouts(); }; c.addEventListener('input',h); c.addEventListener('change',h); });
-['qhEnable','qhFrom','qhTo'].forEach(id=>$(id).addEventListener('change',(e)=>{ renderQuiet(); setDirty(true); }));
-$('save').addEventListener('click',save);
 
 // 009 — Dashboard Modernization (US2/FR-004): fetchProviders()/renderProviders()/testProvider()/
 // KNOWN_PROVIDERS/populateProviderSelect()/toggleAddProvider()/submitAddProvider()/fetchModels()/
@@ -1167,7 +1094,6 @@ function renderTaskCategories(categories) {
   htm += '</div>';
   el.innerHTML = htm;
 }
-$('kill').addEventListener('change',toggleKill);
 // 009 — Dashboard Modernization (US2/FR-004): the #qtoggle "show all"/"show less" listener removed
 // along with the #qtoggle button and #queueList itself — next-in-queue now renders (unpaginated,
 // no queue-length-based UI needed) in task-workflow-panel.mjs.
@@ -1193,7 +1119,6 @@ window.stopPolling = stopPolling;
 $('refresh').addEventListener('click',()=>poll());
 document.addEventListener('visibilitychange',()=>{ document.hidden ? stopPolling() : startPolling(); });
 startPolling();
-setInterval(renderQuiet,60000);
 
 
 // ─── 009 — Dashboard Modernization (US3/FR-008): IDE/MCP/subscriptions panels register on the poll

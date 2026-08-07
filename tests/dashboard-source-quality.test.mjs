@@ -159,6 +159,10 @@ test('dashboard/static/daemon-console.mjs is syntactically valid (010 US7)', () 
   assert.doesNotThrow(() => assertModuleSyntaxValid('dashboard/static/daemon-console.mjs'));
 });
 
+test('dashboard/static/policy-levers.mjs is syntactically valid (010 US8)', () => {
+  assert.doesNotThrow(() => assertModuleSyntaxValid('dashboard/static/policy-levers.mjs'));
+});
+
 test('dashboard/index.html has zero `poll = async function` reassignments', () => {
   const source = readFileSync(join(REPO_ROOT, 'dashboard', 'index.html'), 'utf8');
   const matches = findMatches(source, POLL_REASSIGN_RE);
