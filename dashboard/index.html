@@ -884,6 +884,7 @@ import { esc, relTime, formatSpend, formatNumber, shortModel, badgeFor, outcomeB
 import { renderParked } from './static/escalation-actions.mjs';
 import { renderFounderUsage, renderProviderCost } from './static/spend-budget.mjs';
 import './static/optimization.mjs';
+import './static/ide-integration.mjs';
 // Same-origin CSRF/local-process guard (postmortem security P1): the server injects a per-boot
 // token into __AIOS_TOKEN__ below; we attach it to every same-origin request via a fetch wrapper
 // so no individual fetch call needs to know about it. A cross-origin page can neither read this
@@ -1301,139 +1302,6 @@ document.addEventListener('visibilitychange',()=>{ document.hidden ? stopPolling
 startPolling();
 setInterval(renderQuiet,60000);
 
-// ─── P4: IDE Connect Panel ──────────────────────────────────────────────────
-
-async function fetchIdeDetect() {
-  try {
-    const r = await fetch('/api/ide/detect');
-    const j = await r.json();
-    if (j.ides) renderIdeCards(j.ides);
-    else $('ideDetectStatus').textContent = 'Detection unavailable.';
-  } catch {
-    $('ideDetectStatus').textContent = 'Detection unavailable — is the daemon running?';
-  }
-}
-
-function renderIdeCards(ides) {
-  if (!ides || !ides.length) return;
-  const installed = ides.filter(i => i.installed);
-  $('ideDetectStatus').textContent = installed.length + ' of ' + ides.length + ' supported IDEs detected';
-
-  const cardsEl = $('ideCards');
-  let htm = '';
-  for (const ide of ides) {
-    const statusIcon = ide.installed ? '✓ Installed' : '✗ Not found';
-    const statusColor = ide.installed ? 'var(--text-success)' : 'var(--text-muted)';
-    htm += `<div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-        <span style="font-weight:500">${esc(ide.displayName)}</span>
-        <span style="font-size:11px;color:${statusColor}">${statusIcon}</span>
-        ${ide.installed && ide.detectionMethod ? `<span class="badge b-muted" style="font-size:10px">${esc(ide.detectionMethod)}</span>` : ''}
-      </div>
-      ${ide.installed ? `
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button onclick="fetchIdeConfig('${esc(ide.ideName)}')" style="font-size:11px;padding:4px 8px">View Config</button>
-          <button onclick="testIdeConn('${esc(ide.ideName)}')" style="font-size:11px;padding:4px 8px">Test Connection</button>
-        </div>
-        <pre id="ideCfg-${esc(ide.ideName)}" style="display:none;margin-top:8px;padding:8px;background:var(--surface-1);border-radius:4px;font-size:11px;max-height:120px;overflow:auto"></pre>
-        <span id="ideTest-${esc(ide.ideName)}" style="display:block;margin-top:6px;font-size:11px;color:var(--text-muted)"></span>
-      ` : ''}
-    </div>`;
-  }
-
-  if (!installed.length) {
-    $('ideNoIdes').style.display = 'block';
-    htm += '<div style="font-size:12px;color:var(--text-muted);text-align:center;padding:8px">No IDEs detected. Use the generic proxy above.</div>';
-  } else {
-    $('ideNoIdes').style.display = 'none';
-  }
-  cardsEl.innerHTML = htm;
-}
-
-async function fetchIdeConfig(ideName) {
-  const pre = $('ideCfg-' + ideName);
-  if (pre.style.display === 'block') { pre.style.display = 'none'; return; }
-  try {
-    const r = await fetch('/api/ide/config/' + ideName);
-    const j = await r.json();
-    pre.textContent = j.content || JSON.stringify(j, null, 2);
-    pre.style.display = 'block';
-    if (j.instructions) {
-      pre.textContent = '// ' + j.instructions.replace(/\n/g, '\n// ') + '\n\n' + pre.textContent;
-    }
-  } catch {
-    pre.textContent = 'Failed to load config.';
-    pre.style.display = 'block';
-  }
-}
-window.fetchIdeConfig = fetchIdeConfig;
-
-async function testIdeConn(ideName) {
-  const el = $('ideTest-' + ideName);
-  el.textContent = 'Testing…';
-  try {
-    const r = await fetch('/api/ide/test/' + ideName, { method: 'POST' });
-    const j = await r.json();
-    el.textContent = j.ok ? `✓ Connected (${j.latencyMs}ms)` : `✗ ${j.errorCode}: ${j.errorMessage || 'Test failed'}`;
-    el.style.color = j.ok ? 'var(--text-success)' : 'var(--text-danger)';
-  } catch {
-    el.textContent = '✗ Test request failed.';
-    el.style.color = 'var(--text-danger)';
-  }
-}
-window.testIdeConn = testIdeConn;
-
-// ─── P4: MCP Config Panel ───────────────────────────────────────────────────
-
-async function fetchMcpConfig() {
-  try {
-    const r = await fetch('/api/mcp/config');
-    const j = await r.json();
-    $('mcpConfigJson').textContent = JSON.stringify(j.config, null, 2);
-  } catch {
-    $('mcpConfigJson').textContent = 'Failed to load MCP config. Is the daemon running?';
-  }
-}
-$('mcpCopyBtn').addEventListener('click', () => {
-  const text = $('mcpConfigJson').textContent;
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = $('mcpCopyBtn');
-    btn.textContent = '✓ Copied!';
-    setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
-  });
-});
-
-// ─── P4: IDE Traffic Status (Copilot Panel) ─────────────────────────────────
-
-async function fetchIdeStatus() {
-  try {
-    const r = await fetch('/api/ide/status?period=week');
-    const j = await r.json();
-    if (j.byIde && j.byIde.length > 0) {
-      $('copilotPanel').style.display = 'block';
-      const badge = $('copilotStatusBadge');
-      const statusColors = {
-        working: { bg: 'var(--bg-success)', color: 'var(--text-success)', text: '✓ Copilot Working' },
-        partial: { bg: 'var(--bg-warning)', color: 'var(--text-warning)', text: '⚠️ Partial Coverage' },
-        unavailable: { bg: 'var(--bg-danger)', color: 'var(--text-danger)', text: '✗ Copilot Unavailable' },
-        unknown: { bg: 'var(--surface-1)', color: 'var(--text-muted)', text: '— Copilot Status Unknown' },
-      };
-      const s = statusColors[j.copilotStatus] || statusColors.unknown;
-      badge.style.background = s.bg;
-      badge.style.color = s.color;
-      badge.textContent = s.text;
-
-      $('copilotNote').textContent = j.copilotStatusNote || '';
-      $('copilotPrivacy').style.display = 'block';
-    }
-  } catch (e) {
-    // Copilot monitoring requires the gateway feature — panel staying hidden on failure is still
-    // correct UX (no misleading "unavailable" banner for a feature most installs don't use), but the
-    // failure itself is still worth a low-severity report for diagnosability.
-    reportError('fetchIdeStatus', e, { severity: 'info' });
-  }
-}
-
 // ─── P4: Subscription Plans Panel ───────────────────────────────────────────
 
 async function fetchSubscriptions() {
@@ -1530,9 +1398,6 @@ $('subSaveBtn').addEventListener('click', async () => {
 // its own errors internally (visible fallback text set in its own catch), and runPollHandlers()
 // reports anything that still escapes, so no per-call .catch() wrapper is needed here anymore. ───
 
-registerPollHandler(fetchIdeDetect);
-registerPollHandler(fetchMcpConfig);
-registerPollHandler(fetchIdeStatus);
 registerPollHandler(fetchSubscriptions);
 
 
