@@ -885,6 +885,7 @@ import { renderParked } from './static/escalation-actions.mjs';
 import { renderFounderUsage, renderProviderCost } from './static/spend-budget.mjs';
 import './static/optimization.mjs';
 import './static/ide-integration.mjs';
+import './static/subscriptions.mjs';
 // Same-origin CSRF/local-process guard (postmortem security P1): the server injects a per-boot
 // token into __AIOS_TOKEN__ below; we attach it to every same-origin request via a fetch wrapper
 // so no individual fetch call needs to know about it. A cross-origin page can neither read this
@@ -1302,104 +1303,11 @@ document.addEventListener('visibilitychange',()=>{ document.hidden ? stopPolling
 startPolling();
 setInterval(renderQuiet,60000);
 
-// ─── P4: Subscription Plans Panel ───────────────────────────────────────────
-
-async function fetchSubscriptions() {
-  try {
-    const r = await fetch('/api/subscriptions');
-    const j = await r.json();
-
-    // Render subscription plans
-    const subEl = $('subscriptionsList');
-    if (j.subscriptions && j.subscriptions.length) {
-      subEl.innerHTML = j.subscriptions.map(s => `
-        <div class="row" style="align-items:center">
-          <div style="flex:1">
-            <span style="font-weight:500">${esc(s.planName)}</span>
-            <span class="badge b-ok">Active</span>
-            <span style="font-size:12px;color:var(--text-muted);margin-left:8px">$${s.monthlyCostUsd}/mo · env: ${esc(s.tokenEnv || '—')}</span>
-            ${s.lastVerified ? `<span style="font-size:11px;color:var(--text-muted);margin-left:4px">Last verified: ${esc(s.lastVerified)}</span>` : ''}
-          </div>
-          <button onclick="reportBrokenSub('${esc(s.providerName)}')" style="font-size:10px;padding:3px 6px" title="Report broken token extraction">Report broken</button>
-        </div>
-      `).join('');
-    } else {
-      subEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">No subscription plans configured.</div>';
-    }
-
-    // Combined total
-    $('combinedTotal').textContent = 'Combined monthly: ' + formatSpend(j.combinedMonthlyTotal || 0);
-  } catch (e) {
-    reportError('fetchSubscriptions', e, { panelEl: $('subscriptionsList') });
-  }
-}
-
-function reportBrokenSub(providerName) {
-  const url = 'https://github.com/gravity-7/meridianos-core/issues/new?title=Subscription%20token%20extraction%20broken:%20' + encodeURIComponent(providerName) + '&labels=bug,docs';
-  window.open(url, '_blank');
-}
-window.reportBrokenSub = reportBrokenSub;
-
-// ─── P4: Add Subscription Modal ─────────────────────────────────────────────
-
-$('addSubscriptionBtn').addEventListener('click', () => {
-  $('addSubModal').style.display = 'flex';
-  $('subKeyEnv').value = '';
-  $('subLegalCheck').checked = false;
-  $('subSaveError').style.display = 'none';
-});
-
-$('subCancelBtn').addEventListener('click', () => {
-  $('addSubModal').style.display = 'none';
-});
-
-$('subSaveBtn').addEventListener('click', async () => {
-  const planType = $('subPlanType').value;
-  const keyEnv = $('subKeyEnv').value.trim();
-  const legalAccepted = $('subLegalCheck').checked;
-  const errEl = $('subSaveError');
-
-  if (!keyEnv) { errEl.textContent = 'Environment variable name is required.'; errEl.style.display = 'block'; return; }
-  if (!legalAccepted) { errEl.textContent = 'You must accept the legal disclaimer before saving.'; errEl.style.display = 'block'; return; }
-
-  const planCosts = { 'Claude Pro': 20, 'GitHub Copilot': 10, 'Anti-Gravity': 0 };
-  errEl.style.display = 'none';
-
-  try {
-    const r = await fetch('/api/subscriptions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        providerName: 'subscription-' + planType.toLowerCase().replace(/\s+/g, '-'),
-        planName: planType,
-        keyEnv,
-        monthlyCostUsd: planCosts[planType] || 0,
-        wire: 'anthropic',
-        baseUrl: 'https://api.anthropic.com',
-        legalAccepted: true,
-      }),
-    });
-    const j = await r.json();
-    if (j.ok) {
-      $('addSubModal').style.display = 'none';
-      fetchSubscriptions();
-    } else {
-      errEl.textContent = j.error || 'Save failed.';
-      errEl.style.display = 'block';
-    }
-  } catch (e) {
-    errEl.textContent = 'Save failed: ' + e.message;
-    errEl.style.display = 'block';
-  }
-});
 
 // ─── 009 — Dashboard Modernization (US3/FR-008): IDE/MCP/subscriptions panels register on the poll
 // dispatcher instead of reassigning `poll` — see poll-dispatcher.mjs. Each of these already handles
 // its own errors internally (visible fallback text set in its own catch), and runPollHandlers()
 // reports anything that still escapes, so no per-call .catch() wrapper is needed here anymore. ───
-
-registerPollHandler(fetchSubscriptions);
-
 
 // 008 — End-User Configurability: Settings/Observability workspace visibility toggle. The Muuri
 // grid computes item positions from layout at init time, so it must only ever be initialized
