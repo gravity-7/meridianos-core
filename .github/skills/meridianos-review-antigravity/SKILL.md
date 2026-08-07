@@ -38,6 +38,15 @@ output_format: |
 
   ### Recommendation
   - [clear actionable next step]
+
 ---
-name: "meridianos-review-antigravity"
-description: "Antigravity (Gemini 3.1 Pro) review agent — independent PR code review against spec-kit artifacts"
+
+## Headless CLI Review Process
+
+The review dispatcher is `node scripts/dispatch-review.mjs <PR_NUMBER>`. It resolves the matching `specs/<PR branch>/` directory when present, streams the review prompt through stdin to avoid Windows command-line limits, and launches `agy` with the repository added as its workspace.
+
+Before a headless Antigravity review can inspect repository files, ensure `${HOME}/.gemini/config/config.json` contains this least-privilege grant under `userSettings.globalPermissionGrants.allow`:
+
+`read_file(<repository-root>)`
+
+For this repository the required value is `read_file(C:\projects\meridianos-core)`. The dispatcher validates this grant before launching Antigravity and reports the exact missing value if configuration is incomplete. The reviewer remains read-only: it may inspect the PR diff, feature artifacts, constitution, and repository files, but must not edit, commit, merge, or execute shell commands.
