@@ -139,6 +139,10 @@ test('dashboard/static/escalation-actions.mjs is syntactically valid (010 US2)',
   assert.doesNotThrow(() => assertModuleSyntaxValid('dashboard/static/escalation-actions.mjs'));
 });
 
+test('dashboard/static/spend-budget.mjs is syntactically valid (010 US3)', () => {
+  assert.doesNotThrow(() => assertModuleSyntaxValid('dashboard/static/spend-budget.mjs'));
+});
+
 test('dashboard/index.html has zero `poll = async function` reassignments', () => {
   const source = readFileSync(join(REPO_ROOT, 'dashboard', 'index.html'), 'utf8');
   const matches = findMatches(source, POLL_REASSIGN_RE);

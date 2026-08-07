@@ -882,6 +882,7 @@ button:active { transform: translateY(0); box-shadow: none; }
 <script type="module">
 import { esc, relTime, formatSpend, formatNumber, shortModel, badgeFor, outcomeBadge } from './static/dashboard-utils.mjs';
 import { renderParked } from './static/escalation-actions.mjs';
+import { renderFounderUsage, renderProviderCost } from './static/spend-budget.mjs';
 // Same-origin CSRF/local-process guard (postmortem security P1): the server injects a per-boot
 // token into __AIOS_TOKEN__ below; we attach it to every same-origin request via a fetch wrapper
 // so no individual fetch call needs to know about it. A cross-origin page can neither read this
@@ -921,6 +922,11 @@ let runPollHandlers = async () => {};
 })();
 const $=id=>document.getElementById(id);
 const fmt=n=>n==null?'—':(n>=1e6?(n/1e6).toFixed(1)+'M':Math.round(n/1000)+'k');
+// spend-budget.mjs's renderFounderUsage/renderProviderCost (US3) and policy-levers.mjs's
+// syncReadouts (US8) call this — fmt() itself stays here (a page-level display helper, not one of
+// the 64 migrated functions; deliberately not merged with dashboard-utils.mjs's formatNumber, see
+// that file's own doc comment), so already-moved modules reach it via this bridge instead.
+window.fmt = fmt;
 const stateColor=s=>s==='halt'?'#e34948':(s==='warn'?'#eda100':'#0ca30c');
 const EXT='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted);flex:none"><path d="M15 3h6v6M10 14L21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
 let controlsInit=false, dirty=false, kill=false;
@@ -1064,29 +1070,9 @@ function renderQuiet(){
   $('qhStatus').textContent = !on ? 'always on — no quiet window' : (inWin(nh,f,e)?('sleeping — resumes at '+to):('active now · agents sleep '+from+'–'+to));
 }
 
-function renderFounderUsage(b){
-  const el=$('founderUsage'); if(!el||!b) return;
-  const roster=Object.keys(b.mayClaim||{});
-  const anyFounder=roster.some(a=>b[a]&&b[a].founder);
-  if(!anyFounder){ el.textContent='founder usage · —'; return; }
-  const pair=(f)=>f?`<span class="mono">${fmt(f.last5h.billable)}</span> 5h / <span class="mono">${fmt(f.last7d.billable)}</span> wk`:'—';
-  const parts=roster.map(a=>`${esc(a)} ${pair(b[a]&&b[a].founder)}`);
-  el.innerHTML=`founder usage (read-only, ${esc(b.attribution==='total'?'counted in the gauges above':'not gated')}) · ${parts.join(' · ')}`;
-}
 // 009 — Dashboard Modernization (US1/FR-001): budgetTile()/renderBudgetCards() (the read-only
 // per-agent usage tiles this repo used to call "compute budget") removed — that display now lives
 // in agent-budget-panel.mjs's usageTile(), merged with the cap sliders it used to be split from.
-function renderProviderCost(last7d){
-  const el=$('providerCostGrid'); if(!el) return;
-  const entries=Object.entries(last7d||{}).sort((a,b)=>(b[1].cost||0)-(a[1].cost||0));
-  if(!entries.length){ el.innerHTML='<div style="font-size:12px;color:var(--text-muted)">no provider spend recorded</div>'; return; }
-  el.innerHTML=entries.map(([name,p])=>{
-    const costStr = p.cost>0 ? formatSpend(p.cost) : (p.costUnknownRuns>0 ? `— (${p.costUnknownRuns} runs unpriced)` : '$0.00');
-    return `<div class="tile"><div style="font-size:12px;color:var(--text-secondary)">${esc(name)}</div>`+
-      `<div style="display:flex;align-items:baseline;gap:4px"><span class="mono" style="font-size:22px;font-weight:500">${costStr}</span></div>`+
-      `<div class="mono" style="font-size:11px;color:var(--text-muted)">${fmt(p.billable)} tok · ${p.runs} run${p.runs===1?'':'s'}</div></div>`;
-  }).join('');
-}
 // 009 — Dashboard Modernization (US2/FR-004): activeRowHtml()/renderActiveList()/renderQueue()
 // removed along with their now-gone #activeList/#queueList/#qcount/#qtoggle targets — this content
 // now renders in task-workflow-panel.mjs (self-contained copies of this HTML-generation logic,
@@ -1548,159 +1534,9 @@ registerPollHandler(fetchMcpConfig);
 registerPollHandler(fetchIdeStatus);
 registerPollHandler(fetchSubscriptions);
 
-// ─── P5: Analytics Polling ─────────────────────────────────────────────────
-
-let analyticsRangeDays = 30;
-
-function setAnalyticsRange(days, fetchNow = true) {
-  analyticsRangeDays = days;
-  document.querySelectorAll('.ar-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector(`.ar-btn[data-range="${days}"]`)?.classList.add('active');
-  const labels = {1:'Today',7:'7 days',30:'30 days',90:'90 days'};
-  $('analyticsDateRange').textContent = '· last ' + (labels[days]||days+'d');
-  if (fetchNow) fetchAnalytics();
-}
-window.setAnalyticsRange = setAnalyticsRange;
-
-// 009 — Dashboard Modernization (US1/FR-002): the hand-rolled LineChart/DonutChart canvas classes
-// that used to render here were removed — superseded by the themed uPlot panels in the Settings &
-// Observability workspace (observability-panels.mjs). See fetchAnalytics() below for the KPI-tile
-// logic that stayed, and dashboard-source-quality.test.mjs for the regression guard.
-
-// ─── Analytics Fetch & Render (T026) ────────────────────────────────────────
-
-async function fetchAnalytics() {
-  const from = new Date(Date.now()-analyticsRangeDays*86400000).toISOString();
-  const to = new Date().toISOString();
-  try {
-    $('analyticsLoading').style.display='block';
-    $('analyticsEmpty').style.display='none';
-    $('analyticsError').style.display='none';
-
-    // 009 — Dashboard Modernization (US1/FR-002): only `overview` is fetched now — timeseries/
-    // breakdown were fetched solely to feed the removed LineChart/DonutChart canvases; that same
-    // data is now rendered by the themed uPlot panels in the Settings & Observability workspace,
-    // which fetch it themselves (observability-panels.mjs). Fetching it here too would just be
-    // redundant network traffic for data nothing on this page uses anymore.
-    const ovr = await fetch(`/api/analytics/overview?from=${from}&to=${to}`).then(r=>r.json());
-
-    $('analyticsLoading').style.display='none';
-
-    if (!ovr.totalSpend && !ovr.totalTokens && !ovr.totalApiCalls) {
-      $('analyticsEmpty').style.display='block';
-      return;
-    }
-
-    // KPI cards
-    $('kvTotalSpend').textContent = formatSpend(ovr.totalSpend||0);
-    $('kvChange').textContent = ovr.spendChangePct!=null ? (ovr.spendChangePct>=0?'+':'')+ovr.spendChangePct+'%' : '—';
-    $('kvChange').style.color = ovr.spendChangePct>0?'var(--text-danger)':(ovr.spendChangePct<0?'var(--text-success)':'');
-    $('kvTokens').textContent = formatNumber(ovr.totalTokens||0);
-    $('kvCalls').textContent = formatNumber(ovr.totalApiCalls||0);
-    $('kvTopProvider').textContent = ovr.topProvider ? `${ovr.topProvider.name} (${ovr.topProvider.pct}%)` : '—';
-    $('kvTopModel').textContent = ovr.topModel ? ovr.topModel.name.split('-').slice(0,3).join('-') : '—';
-
-  } catch(e) {
-    $('analyticsLoading').style.display='none';
-    $('analyticsError').style.display='block';
-    console.error('Analytics fetch error:', e);
-  }
-}
-
-// Auto-load on page open — must be here, AFTER analyticsRangeDays and setAnalyticsRange are defined.
-// fetchNow=false: the startup poll() cycle (see startPolling()) already fetches analytics once
-// fully chained, so fetching here too would just double the request on every page load.
-setAnalyticsRange(7, false);
-
-function exportAnalyticsCSV() {
-  const from = new Date(Date.now()-analyticsRangeDays*86400000).toISOString();
-  const to = new Date().toISOString();
-  const a = document.createElement('a');
-  a.href = `/api/analytics/export?from=${from}&to=${to}`;
-  a.download = `analytics-${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-}
-window.exportAnalyticsCSV = exportAnalyticsCSV;
-
 // 009 — Dashboard Modernization (US3/FR-008): analytics/budget/optimization register on the poll
 // dispatcher instead of reassigning `poll` — see poll-dispatcher.mjs.
-registerPollHandler(fetchAnalytics);
-registerPollHandler(fetchBudget);
 registerPollHandler(fetchOptimization);
-
-// ─── P5: Budget Intelligence (T042) ────────────────────────────────────────
-
-async function fetchBudget() {
-  try {
-    const r = await fetch('/api/analytics/budget').then(r=>r.json());
-    $('bvSpend').textContent = formatSpend(r.spendToDate||0);
-    $('bvForecast').textContent = formatSpend(r.projectedTotal||0);
-    $('bvBurn').textContent = 'burn: '+formatSpend(r.dailyBurnRate||0)+'/day';
-    $('bvPct').textContent = (r.pctUsed||0)+'% of $'+(r.budget?.amount||0);
-    $('budgetMeter').style.width = Math.min(100, r.pctUsed||0)+'%';
-    if (r.pctUsed > 90) $('budgetMeter').style.background = 'var(--fill-danger)';
-    else if (r.pctUsed > 70) $('budgetMeter').style.background = 'var(--text-warning)';
-
-    $('bvStatus').textContent = r.status||'on-track';
-    if (r.status === 'over-budget') $('bvStatus').style.color = 'var(--text-danger)';
-    else if (r.status === 'at-risk') $('bvStatus').style.color = 'var(--text-warning)';
-    else $('bvStatus').style.color = 'var(--text-success)';
-
-    $('budgetStatus').textContent = '· '+(r.status||'on-track')+' · '+formatSpend(r.spendToDate||0)+' / '+formatSpend(r.budget?.amount||0);
-
-    // Spend pause state
-    try {
-      const pr = await fetch('/api/analytics/spend-pause').then(r=>r.json());
-      if (pr.isPaused) {
-        $('pauseSpendBtn').textContent = '▶ Resume AI Spend';
-        $('pauseSpendBtn').style.background = 'var(--bg-success)';
-        $('pauseSpendBtn').style.color = 'var(--text-success)';
-        $('pauseReason').textContent = 'Paused: '+(pr.reason||'manual');
-      } else {
-        $('pauseSpendBtn').textContent = '⏸ Pause AI Spend';
-        $('pauseSpendBtn').style.background = 'var(--bg-danger)';
-        $('pauseSpendBtn').style.color = 'var(--text-danger)';
-        $('pauseReason').textContent = '';
-      }
-    } catch (e) { reportError('fetchBudget-spendPause', e, { severity: 'info' }); }
-  } catch (e) { reportError('fetchBudget', e); }
-}
-
-async function toggleSpendPause() {
-  const btn = $('pauseSpendBtn');
-  const isPaused = btn.textContent.includes('Resume');
-  const action = isPaused ? 'resume' : 'pause';
-  const reason = action === 'pause' ? prompt('Reason for pausing AI spend?') || 'Manual pause' : '';
-  try {
-    const r = await fetch('/api/analytics/spend-pause', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-aios-token': '__AIOS_TOKEN__' },
-      body: JSON.stringify({ action, reason }),
-    }).then(r=>r.json());
-    fetchBudget();
-  } catch(e) { alert('Failed: '+e.message); }
-}
-window.toggleSpendPause = toggleSpendPause;
-
-// ─── P5: Alerts (T052) ─────────────────────────────────────────────────────
-
-async function testAlert() {
-  $('testAlertResult').textContent = 'Sending...';
-  try {
-    const r = await fetch('/api/analytics/alerts/test', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-aios-token': '__AIOS_TOKEN__' },
-      body: '{}',
-    }).then(r=>r.json());
-    $('testAlertResult').textContent = r.ok ? '✓ Sent to '+r.results.length+' channel(s)' : '✗ '+r.error;
-    // Refresh alert history
-    try {
-      const ar = await fetch('/api/analytics/alerts/config').then(r=>r.json());
-      $('alertsSummary').textContent = '· '+(ar.channels||[]).length+' channel(s), '+(ar.rules||[]).length+' rule(s)';
-    } catch (e) { reportError('testAlert-refreshConfig', e, { severity: 'info' }); }
-  } catch(e) { $('testAlertResult').textContent = '✗ '+e.message; reportError('testAlert', e); }
-}
-window.testAlert = testAlert;
 
 // ─── P5: Optimization (T060) ────────────────────────────────────────────────
 
