@@ -117,6 +117,13 @@ test('dashboard/static/client-error-log.mjs and poll-dispatcher.mjs are syntacti
   assert.equal(typeof dispatcher.runPollHandlers, 'function');
 });
 
+test('dashboard/static/dashboard-utils.mjs is syntactically valid and exports the shared helpers (010 US1)', async () => {
+  const utils = await import('../dashboard/static/dashboard-utils.mjs');
+  for (const name of ['esc', 'relTime', 'formatSpend', 'formatNumber', 'shortModel', 'badgeFor', 'outcomeBadge']) {
+    assert.equal(typeof utils[name], 'function', `expected ${name} to be exported as a function`);
+  }
+});
+
 test('dashboard/index.html has zero `poll = async function` reassignments', () => {
   const source = readFileSync(join(REPO_ROOT, 'dashboard', 'index.html'), 'utf8');
   const matches = findMatches(source, POLL_REASSIGN_RE);

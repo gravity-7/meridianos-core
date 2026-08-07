@@ -880,6 +880,7 @@ button:active { transform: translateY(0); box-shadow: none; }
 </div>
 
 <script type="module">
+import { esc, relTime, formatSpend, formatNumber, shortModel, badgeFor, outcomeBadge } from './static/dashboard-utils.mjs';
 // Same-origin CSRF/local-process guard (postmortem security P1): the server injects a per-boot
 // token into __AIOS_TOKEN__ below; we attach it to every same-origin request via a fetch wrapper
 // so no individual fetch call needs to know about it. A cross-origin page can neither read this
@@ -985,15 +986,6 @@ const SAMPLE_STATUS = {
   ]
 };
 
-function relTime(iso){
-  if(!iso) return '—';
-  const sec = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 1000));
-  if(sec < 60) return sec + 's';
-  if(sec < 3600) return Math.floor(sec/60) + 'm';
-  if(sec < 86400) return Math.floor(sec/3600) + 'h';
-  return Math.floor(sec/86400) + 'd';
-}
-
 async function postAction(endpoint, payload) {
   try {
     const r = await fetch(endpoint, { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(payload) });
@@ -1018,12 +1010,6 @@ function unblockEsc(task) {
   postAction('/api/task', { id: task, action: 'unblock' });
 }
 window.unblockEsc = unblockEsc;
-
-function formatSpend(amount) {
-  if (amount === 0) return '$0.00';
-  if (amount < 0.01) return '$' + amount.toPrecision(2);
-  return '$' + amount.toFixed(2);
-}
 
 // Snooze/skip park a blocked task WITHOUT approving the underlying spend/external/deploy/schema
 // action — status stays 'blocked', it just stops nagging the escalation feed until it resurfaces
@@ -1124,10 +1110,6 @@ const LEVERS=[
 // its own saves directly via POST /api/policy rather than this file's shared LEVERS/dirty/save()
 // mechanism (see that file's doc comment for why, matching settings-panels.mjs's precedent).
 const getPath=(o,p)=>p.split('.').reduce((a,k)=>a&&a[k],o);
-function shortModel(v){ if(!v) return '—'; return String(v).replace('claude-','').replace(/-/g,' ').replace('opus 4 8','opus 4.8').replace('haiku 4 5','haiku 4.5'); }
-function badgeFor(s){ return s==='in-progress'?'b-accent':(s==='blocked'?'b-warn':(s==='done'?'b-ok':'b-muted')); }
-function outcomeBadge(o){ return o==='ok'?'b-ok':(o==='skipped'?'b-warn':((o==='failed'||o==='blocked')?'b-danger':'b-muted')); }
-function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
 function setDirty(v){ dirty=v; $('dirty').style.display=v?'inline':'none'; if(v) $('saved').style.display='none'; }
 function applyKill(){ $('aios').classList.toggle('killed',kill); $('killbanner').style.display=kill?'flex':'none'; $('dot').style.background=kill?'#e34948':'#0ca30c'; }
@@ -1836,12 +1818,6 @@ function exportAnalyticsCSV() {
   a.click();
 }
 window.exportAnalyticsCSV = exportAnalyticsCSV;
-
-function formatNumber(n) {
-  if (n>=1e6) return (n/1e6).toFixed(1)+'M';
-  if (n>=1e3) return (n/1e3).toFixed(1)+'K';
-  return String(n);
-}
 
 // 009 — Dashboard Modernization (US3/FR-008): analytics/budget/optimization register on the poll
 // dispatcher instead of reassigning `poll` — see poll-dispatcher.mjs.

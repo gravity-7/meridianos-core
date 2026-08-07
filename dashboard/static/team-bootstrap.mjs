@@ -7,6 +7,7 @@
  */
 import { renderTeamPanel } from './team-panel.mjs';
 import { getToken, getUser, authFetch, renderLoginPrompt, verifySession, clearSession } from './auth-client.mjs';
+import { esc as escapeHtml } from './dashboard-utils.mjs';
 
 let container;
 let currentProjectId = null;
@@ -142,13 +143,4 @@ function wireInteractions(body, projectId, canManage) {
       await loadProject(projectId, getUser());
     });
   });
-}
-
-function escapeHtml(unsafe) {
-  return (unsafe ?? '').toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }

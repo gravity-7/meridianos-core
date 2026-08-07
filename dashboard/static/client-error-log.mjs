@@ -7,6 +7,7 @@
  * having been open. The `x-aios-token` CSRF header is attached automatically by
  * `dashboard/index.html`'s global `fetch` wrapper — this module never touches it directly.
  */
+import { esc as escapeHtml } from './dashboard-utils.mjs';
 
 /**
  * @param {string} source - panel/function name; identifies where the error came from
@@ -39,13 +40,4 @@ function renderPanelError(panelEl, message, severity) {
     ? { bg: 'var(--bg-secondary)', color: 'var(--text-muted)', icon: 'ℹ' }
     : { bg: 'var(--bg-danger)', color: 'var(--text-danger)', icon: '⚠' };
   panelEl.innerHTML = `<div style="padding:12px;border-radius:var(--radius,6px);background:${tone.bg};color:${tone.color};font-size:12px;line-height:1.4">${tone.icon} ${escapeHtml(message)}</div>`;
-}
-
-function escapeHtml(unsafe) {
-  return (unsafe ?? '').toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }

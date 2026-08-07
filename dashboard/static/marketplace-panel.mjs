@@ -4,6 +4,7 @@
  * render+init pattern: a pure render function returning an HTML string, and an init function
  * wiring DOM event listeners against the SAME per-boot dashboard token every other panel uses.
  */
+import { esc as escapeHtml } from './dashboard-utils.mjs';
 
 export function renderMarketplacePanel(plugins = []) {
   return `
@@ -72,12 +73,6 @@ function renderRating(plugin) {
   }
   const widgetStars = [1, 2, 3, 4, 5].map((n) => `<span class="rate-star" data-plugin-id="${plugin.id}" data-stars="${n}">${n <= Math.round(plugin.rating ?? 0) ? '★' : '☆'}</span>`).join('');
   return `<span class="plugin-rating-widget" title="Rate this plugin">${widgetStars}</span>`;
-}
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text ?? '';
-  return div.innerHTML;
 }
 
 function dashToken() {
@@ -162,6 +157,9 @@ async function openConfigModal(pluginId) {
   const modal = document.getElementById('plugin-config-modal');
   document.getElementById('plugin-config-title').textContent = `Configure ${pluginId}`;
   const { config } = await api(`/api/plugins/${pluginId}/config`);
+  // Field values render into a double-quoted `value="..."` attribute below — escapeHtml (imported
+  // from dashboard-utils.mjs) must escape `"`, not just `&`/`<`/`>`, or a config value containing a
+  // literal quote breaks out of the attribute (010 US1 found this live, not hypothetical).
   const fieldsHtml = Object.entries(config ?? {}).map(([key, value]) => `
     <div class="form-group">
       <label for="cfg-${key}">${escapeHtml(key)}</label>

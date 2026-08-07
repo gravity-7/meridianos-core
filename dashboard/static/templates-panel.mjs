@@ -8,6 +8,7 @@
  * Project modal pre-filled) rather than a non-existent app router.
  */
 import { authFetch } from './auth-client.mjs';
+import { esc as escapeHtml } from './dashboard-utils.mjs';
 
 export function renderTemplatesPanel() {
   return `
@@ -84,15 +85,4 @@ function renderTemplateGrid(grid, templates, onUseTemplate) {
       if (typeof onUseTemplate === 'function') onUseTemplate(id);
     });
   });
-}
-
-function escapeHtml(unsafe) {
-  if (!unsafe) return '';
-  return unsafe
-    .toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }

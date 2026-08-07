@@ -17,6 +17,7 @@ import { renderApiKeysPanel, initApiKeysPanel, loadApiTokens } from './api-keys-
 import { renderBillingPanel, initBillingPanel } from './billing-panel.mjs';
 import { renderCompliancePanel, initCompliancePanel } from './compliance-panel.mjs';
 import { mountMarketplacePanel } from './marketplace-panel.mjs';
+import { esc as escapeHtml } from './dashboard-utils.mjs';
 
 const TABS = [
   { id: 'projects', label: '📁 Projects' },
@@ -102,13 +103,4 @@ async function selectTab(id) {
       await mountMarketplacePanel(content);
       break;
   }
-}
-
-function escapeHtml(unsafe) {
-  return (unsafe ?? '').toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
