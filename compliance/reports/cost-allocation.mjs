@@ -1,8 +1,11 @@
 import { getProjectManager } from '../../control-plane.mjs';
 
 export class CostAllocationReport {
-  constructor() {
-    this.projectManager = getProjectManager();
+  // Defaults to the shared singleton for real production use; tests inject their own isolated
+  // ProjectManager instead of touching the ambient repo-root `.ai/control-plane.db` (a file shared
+  // by every other test file that also hits control-plane.mjs — see tests/helpers/wipe-control-plane.mjs).
+  constructor(projectManager = getProjectManager()) {
+    this.projectManager = projectManager;
   }
 
   /**

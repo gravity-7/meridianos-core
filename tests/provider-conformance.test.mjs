@@ -5,9 +5,31 @@
  * and function signatures. Network-dependent tests (actual API calls)
  * are validated via manual quickstart scenarios rather than unit tests.
  */
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import { testProviderConnection } from '../provider-conformance.mjs';
+
+// A real local TCP server that accepts the connection but never responds — exercises
+// testProviderConnection's 5s AbortController timeout path deterministically. An earlier version of
+// this file pointed at a real-looking-but-unreachable external IP (10.255.255.1) to provoke the same
+// TIMEOUT/CONNECTION_FAILED classification: fetch()'s AbortSignal DID fire correctly at 5s, but the
+// underlying OS-level connect() to that black-holed address wasn't cleanly cancellable, leaving a
+// lingering socket handle that kept the whole `node --test` process alive for minutes past the
+// assertions actually passing — it hung the entire suite, not just this file. A loopback server that
+// actually accepts the connection has a real, cancellable socket, so the abort tears it down cleanly.
+let blackHole;
+let blackHoleUrl;
+
+before(async () => {
+  blackHole = net.createServer((socket) => { /* accept, never respond — provokes the abort-timeout path */ });
+  await new Promise((resolve) => blackHole.listen(0, '127.0.0.1', resolve));
+  blackHoleUrl = `http://127.0.0.1:${blackHole.address().port}`;
+});
+
+after(async () => {
+  await new Promise((resolve) => blackHole.close(resolve));
+});
 
 describe('Provider Conformance (US2)', () => {
   describe('Null baseUrl (no network)', () => {
@@ -37,7 +59,7 @@ describe('Provider Conformance (US2)', () => {
   describe('Error classification (non-routable address)', () => {
     it('classifies unreachable host as CONNECTION_FAILED', async () => {
       const result = await testProviderConnection(
-        { name: 'test', wire: 'openai', baseUrl: 'http://10.255.255.1:9999' },
+        { name: 'test', wire: 'openai', baseUrl: blackHoleUrl },
         'sk-test-key',
       );
 
@@ -50,7 +72,7 @@ describe('Provider Conformance (US2)', () => {
 
     it('reports latency even on failure', async () => {
       const result = await testProviderConnection(
-        { name: 'test', wire: 'generic-http', baseUrl: 'http://10.255.255.1:9999' },
+        { name: 'test', wire: 'generic-http', baseUrl: blackHoleUrl },
         null,
       );
 
@@ -60,7 +82,7 @@ describe('Provider Conformance (US2)', () => {
 
     it('includes error message on failure', async () => {
       const result = await testProviderConnection(
-        { name: 'test', wire: 'openai', baseUrl: 'http://10.255.255.1:9999' },
+        { name: 'test', wire: 'openai', baseUrl: blackHoleUrl },
         'sk-test-key',
       );
 
@@ -86,7 +108,7 @@ describe('Provider Conformance (US2)', () => {
 
     it('returns expected shape on failure', async () => {
       const result = await testProviderConnection(
-        { name: 'test', wire: 'openai', baseUrl: 'http://10.255.255.1:9999' },
+        { name: 'test', wire: 'openai', baseUrl: blackHoleUrl },
         'sk-test-key',
       );
 

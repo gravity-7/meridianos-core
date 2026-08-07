@@ -48,7 +48,15 @@ test('AC1: the CLI subprocess boots, prints a 127.0.0.1:<port> URL, and terminat
   const tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cli-ac1-'));
   const ledgerPath = join(tmpDir, 'ledger.db');
 
+  // Domain/agents resolution reads `<cwd>/.ai/policy.yaml`'s `agents:` field (config.mjs's
+  // resolveFromPolicy) — without this, startCli's createAios({root}) throws "a DomainPlugin is
+  // required" unless the ambient repo root the subprocess inherits happens to have a real .ai/
+  // (BUG-1: true on a dev machine with a live daemon, false on a fresh CI checkout).
+  mkdirSync(join(tmpDir, '.ai'), { recursive: true });
+  writeFileSync(join(tmpDir, '.ai', 'policy.yaml'), 'agents: [cliagent]\n');
+
   const child = spawn(process.execPath, [CLI_PATH, '--port', '0', '--ledger', ledgerPath], {
+    cwd: tmpDir,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -70,7 +78,9 @@ test('AC1: the CLI subprocess boots, prints a 127.0.0.1:<port> URL, and terminat
       check();
     });
     assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
-    assert.match(out, /tenant: pv/);
+    // No --tenant flag passed above → startCli's own default ('default'), not a leftover
+    // PV-specific assumption from before this repo's tenant-agnostic extraction (see config.mjs).
+    assert.match(out, /tenant: default/);
     assert.match(out, new RegExp(`ledger: ${ledgerPath.replace(/[\\.]/g, '\\$&')}`));
 
     const exitInfo = await new Promise((resolve) => {
@@ -162,6 +172,15 @@ before(async () => {
   policyPath = join(tmpDir, 'policy.yaml');
   ledgerPath = join(tmpDir, 'ledger.db');
 
+  // Domain/agents resolution reads `<root>/.ai/policy.yaml`'s `agents:` field (config.mjs's
+  // resolveFromPolicy) — independent of the --policy flag file below, which only feeds
+  // provider/budget config via loadPolicy(). Without this + the `root: tmpDir` flag passed to
+  // startCli() below, createAios({root}) throws "a DomainPlugin is required" unless the ambient
+  // repo root this test happens to run from has a real .ai/ (BUG-1: true on a dev machine with a
+  // live daemon, false on a fresh CI checkout).
+  mkdirSync(join(tmpDir, '.ai'), { recursive: true });
+  writeFileSync(join(tmpDir, '.ai', 'policy.yaml'), 'agents: [capagent]\n');
+
   // A real policy.yaml on disk — proves `--policy <path>` flows through `loadPolicy` (budget.mjs),
   // not just a pre-loaded JS object. A tiny per-5h cap (11 tokens, one call above one call's usage
   // of 10) so AC5 can cross it deterministically after exactly two allowed calls, same shape as
@@ -184,6 +203,7 @@ before(async () => {
   cli = await startCli({
     port: '0',
     tenant: 'acme',
+    root: tmpDir,
     policy: policyPath,
     ledger: ledgerPath,
     provider: 'deepseek',
