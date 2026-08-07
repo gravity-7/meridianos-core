@@ -61,28 +61,8 @@ The system will continue to read `tenant.yaml` as a fallback with a deprecation 
 
 ## Multi-Tenant Platform
 
-The Multi-Tenant Platform (v0.3.9 -> v0.4.0) introduces significant architectural changes:
-
-### 1. Control Plane DB
-
-A new SQLite database `.ai/control-plane.db` now tracks projects and users. You must run `node scripts/init-control-plane.mjs` once to initialize it.
-
-### 2. Project Isolation
-
-All agents and workspaces now run in isolated directories under their respective project roots. Legacy single-user configurations will be migrated to a default "default-project" if no project is specified.
-
-### 3. Authentication
-
-The dashboard now requires authentication. The first boot will output an admin temporary token to the console which you must use to set up your first admin account.
-
-### 4. Billing/Licensing
-
-If you deploy multiple agents beyond the Free Tier limits, ensure you have configured your valid `MERIDIANOS_LICENSE_KEY` environment variable.
-
-### 5. Rate Limits
-
-Adjust rate limits for public endpoints (optional)
-
-### 6. Logging
-
-Set up logging destinations
+This file covers only the `tenant.yaml` → `policy.yaml` config migration above. Moving an existing
+single-user install onto the multi-tenant control plane (control-plane database initialization,
+project isolation, authentication, billing/licensing, rate limits, logging) is a separate, larger
+migration with its own dedicated guide, backup strategy, and rollback plan — see
+[migration-multi-tenant.md](migration-multi-tenant.md).

@@ -16,6 +16,7 @@
  * LEVERS/dirty/save() mechanism.
  */
 import { registerPanel } from './settings-workspace.mjs';
+import { esc as escapeHtml, relTime } from './dashboard-utils.mjs';
 
 async function fetchJson(path, opts) {
   const res = await fetch(path, opts);
@@ -35,28 +36,6 @@ async function saveLever(update, statusEl) {
     statusEl.textContent = `Save failed: ${String(err.message ?? err)}`;
     return false;
   }
-}
-
-function escapeHtml(unsafe) {
-  return (unsafe ?? '').toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-function relTime(iso) {
-  if (!iso) return '—';
-  const ms = Date.now() - Date.parse(iso);
-  if (Number.isNaN(ms)) return '—';
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return s + 's';
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + 'm';
-  const h = Math.floor(m / 60);
-  if (h < 24) return h + 'h';
-  return Math.floor(h / 24) + 'd';
 }
 
 function escalationsHtml(escList) {

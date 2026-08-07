@@ -158,3 +158,44 @@ review):
    `shell-injection` warning whenever the flagged files change, and add it to CI as a non-blocking
    report (it already exits non-zero only on `critical` findings).
 5. Verify Stripe webhook signature validation explicitly (§5) — not covered in this pass.
+
+## Addendum — 2026-08-07
+
+Found during a documentation accuracy pass over the same scope (`auth/`, `licensing/`,
+`dashboard/server.mjs`), not a follow-up security review — recorded here rather than silently
+folded into the original findings above, which reflect the 2026-08-03 pass only.
+
+### 8. OAuth SSO authentication does not complete (functional gap, not itself a vulnerability)
+
+`dashboard/server.mjs`'s `handleOAuthAuthorize`/`handleOAuthCallback` call four
+`auth/oauth-provider.mjs` methods with mismatched arguments (one, `exchangeCodeForTokens`, doesn't
+exist — the real method is `exchangeCode(providerName, code)`), and rely on `req.session`, which
+nothing on this `node:http` server ever populates. Net effect: OAuth login cannot currently
+complete for any configured provider — full detail and the fix in
+[KNOWN-ISSUES.md](KNOWN-ISSUES.md#oauth-sso-login-does-not-complete). Flagged here rather than as a
+new numbered severity finding because it's an availability/correctness bug (the flow fails closed,
+with no partial-auth or credential-exposure state reachable), matching the framing already used in
+§7 above for similar functional bugs found incidentally.
+
+### 9. License-key signing keypair not persisted across restarts
+
+`licensing/license-key.mjs`'s `LicenseKey.initializeKeys()` generates its RSA-2048 keypair in
+memory and never writes it to disk, unlike `auth/jwt.mjs`'s file-backed, `0600`-permissioned JWT
+secret. Every restart invalidates every license key signed before it, for the *new-purchase
+validation* path specifically — day-to-day feature gating trusts the `licenses` table directly and
+is unaffected. Not a confidentiality/integrity issue (the private key never leaves the process
+either way), but an availability one worth fixing the same way the JWT secret already is. Detail
+in [KNOWN-ISSUES.md](KNOWN-ISSUES.md#license-keys-invalidated-on-every-restart).
+
+### 10. Three of four compliance reports return non-real data
+
+Out of scope for the original audit (it covered auth/authz/injection/secrets, not report
+correctness), but adjacent enough to note here since compliance reports are a control this
+platform's own audience relies on: only `compliance/reports/soc2.mjs` queries real
+`compliance_log`/`activity_log` data. `gdpr.mjs` returns a hardcoded 2-entry `dataFlows` array,
+`model-usage.mjs` returns a hardcoded 2-entry model list, and `cost-allocation.mjs` computes
+per-project cost via `Math.random()` — none derived from actual configuration or ledger data. This
+is a correctness/trust gap for an Enterprise-tier feature marketed as audit-ready, not a
+confidentiality or access-control issue, so it doesn't change the Summary table's severity counts
+above — but treat SOC2 as the only one of the four safe to hand to an actual auditor today. See
+[user-guide.md](user-guide.md#compliance-and-reporting).

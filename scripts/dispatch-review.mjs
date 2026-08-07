@@ -17,6 +17,7 @@
 
 import { execSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -44,7 +45,25 @@ if (!prNumber || isNaN(Number(prNumber))) {
 }
 
 const specArg = process.argv.find(a => a.startsWith("--spec="));
-const SPEC_DIR = specArg ? specArg.split("=")[1] : "specs/001-foundation-hardening";
+
+function resolveSpecDirectory(headRefName) {
+  if (specArg) return specArg.split("=")[1];
+  const branchSpecDir = join("specs", headRefName);
+  if (existsSync(join(REPO_ROOT, branchSpecDir, "spec.md"))) return branchSpecDir;
+  return "specs/001-foundation-hardening";
+}
+
+function verifyAntigravityReadGrant() {
+  const settingsPath = process.env.AGY_SETTINGS_PATH ?? join(homedir(), ".gemini", "config", "config.json");
+  const grant = `read_file(${REPO_ROOT})`;
+  try {
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    const grants = settings?.userSettings?.globalPermissionGrants?.allow ?? [];
+    return { ok: grants.includes(grant), settingsPath, grant };
+  } catch (error) {
+    return { ok: false, settingsPath, grant, error: error.message };
+  }
+}
 
 // ── Budget pre-flight ────────────────────────────────────────────────────────
 
@@ -127,14 +146,16 @@ console.log(`\n📋 Fetching PR #${prNumber} context...\n`);
 
 const prTitle = gh(`pr view ${prNumber} --json title --jq .title`).trim();
 const prBody = gh(`pr view ${prNumber} --json body --jq .body`).trim();
+const prHeadRef = gh(`pr view ${prNumber} --json headRefName --jq .headRefName`).trim();
 const prDiff = gh(`pr diff ${prNumber}`);
 const fileList = JSON.parse(gh(`pr view ${prNumber} --json files`)).files;
 const prFiles = fileList.map(f => f.path).join('\n');
+const resolvedSpecDir = resolveSpecDirectory(prHeadRef);
 
 // Load spec context
-const specPath = join(REPO_ROOT, SPEC_DIR, "spec.md");
-const planPath = join(REPO_ROOT, SPEC_DIR, "plan.md");
-const tasksPath = join(REPO_ROOT, SPEC_DIR, "tasks.md");
+const specPath = join(REPO_ROOT, resolvedSpecDir, "spec.md");
+const planPath = join(REPO_ROOT, resolvedSpecDir, "plan.md");
+const tasksPath = join(REPO_ROOT, resolvedSpecDir, "tasks.md");
 const constitutionPath = join(REPO_ROOT, ".specify", "memory", "constitution.md");
 
 const spec = existsSync(specPath) ? readFileSync(specPath, "utf8") : "(spec.md not found)";
@@ -159,7 +180,7 @@ const sharedContext = `
 ### PR Description
 ${prBody.slice(0, 1000)}
 
-### Spec Context (${SPEC_DIR})
+### Spec Context (${resolvedSpecDir})
 ${truncate(spec, MAX_SPEC_LINES)}
 
 ### Constitution Principles (abbreviated)
@@ -246,7 +267,7 @@ ensureDir(runDir);
 writeFileSync(join(runDir, "claude-review-prompt.md"), claudeReviewPrompt);
 writeFileSync(join(runDir, "antigravity-review-prompt.md"), antigravityReviewPrompt);
 writeFileSync(join(runDir, "pr-diff.txt"), prDiff);
-writeFileSync(join(runDir, "pr-context.json"), JSON.stringify({ prNumber, title: prTitle, specDir: SPEC_DIR, files: prFiles.split("\n") }, null, 2));
+writeFileSync(join(runDir, "pr-context.json"), JSON.stringify({ prNumber, title: prTitle, specDir: resolvedSpecDir, files: prFiles.split("\n") }, null, 2));
 
 console.log(`Review prompts saved to ${runDir}`);
 
@@ -267,11 +288,10 @@ async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 
       args = ["--print", "--output-format", "text"];
     } else if (name === "antigravity") {
       cmd = "agy";
-      // agy uses -p for the prompt (no chat subcommand, no --prompt-file).
-      // --dangerously-skip-permissions bypasses interactive permission prompts.
-      // --print-timeout ensures the agent doesn't hang indefinitely.
-      const agyPrompt = readFileSync(promptFile, "utf8");
-      args = ["--print", agyPrompt, "--dangerously-skip-permissions", "--print-timeout", "30m", "--output-format", "text"];
+      // `agy --print` requires a positional prompt. Keep it short enough for Windows and
+      // direct the reviewer to read the full instruction file through its read-only tool.
+      const bootstrapPrompt = `Read and follow the complete PR review instructions in ${promptFile}. Do not ask for further instructions. Return only the requested review, including its Verdict line.`;
+      args = ["--add-dir", REPO_ROOT, "--dangerously-skip-permissions", "--print-timeout", "30m", "--output-format", "text", "--print", bootstrapPrompt];
     } else {
       resolve({ agent: name, verdict: "ERROR", output: "", error: `Unknown agent: ${name}`, posted: false });
       return;
@@ -321,7 +341,8 @@ async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 
         
         // Parse verdict from output
         const verdictMatch = output.match(/Verdict:\s*(✅\s*APPROVE|⚠️\s*CHANGES[^\n]*|❌\s*REJECT)/);
-        const verdict = verdictMatch ? verdictMatch[1].trim() : (code === 0 ? "UNKNOWN" : "ERROR");
+        const permissionDenied = /jetski: no output produced|permission.*denied/i.test(output);
+        const verdict = permissionDenied ? "ERROR" : (verdictMatch ? verdictMatch[1].trim() : (code === 0 ? "UNKNOWN" : "ERROR"));
 
         // Save output
         writeFileSync(join(runDirPath, `${name}-review-output.md`), output);
@@ -344,8 +365,9 @@ async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 
         finish("TIMEOUT", "", err.message, true);
       });
 
-      // Feed prompt to stdin for both agents
-      child.stdin.write(prompt);
+      // Claude accepts the complete prompt through stdin. Antigravity receives a short
+      // positional bootstrap prompt above and reads the saved file with read_file.
+      if (name === "claude") child.stdin.write(prompt);
       child.stdin.end();
     } catch (err) {
       finish("ERROR", "", err.message, false);
@@ -382,7 +404,7 @@ console.log("║   MeridianOS Parallel PR Review Dispatch     ║");
 console.log("╠══════════════════════════════════════════════╣");
 console.log(`║   PR:     #${prNumber}`);
 console.log(`║   Title:  ${prTitle.slice(0, 45)}`);
-console.log(`║   Spec:   ${SPEC_DIR}`);
+console.log(`║   Spec:   ${resolvedSpecDir}`);
 console.log(`║   Files:  ${prFiles.split("\n").length} changed`);
 console.log("╠══════════════════════════════════════════════╣");
 console.log(`║   Budget threshold: ${BUDGET_EXHAUSTION_PCT}% of 5H cap`);
@@ -401,7 +423,13 @@ if (budget.claude && !budget.claude.exhausted) {
 }
 
 if (budget.antigravity && !budget.antigravity.exhausted) {
-  agents.push("antigravity");
+  const antigravityGrant = verifyAntigravityReadGrant();
+  if (antigravityGrant.ok) {
+    agents.push("antigravity");
+  } else {
+    console.log(`⏭️  Antigravity skipped — missing headless read grant: ${antigravityGrant.grant}`);
+    console.log(`   Configure ${antigravityGrant.settingsPath} or set AGY_SETTINGS_PATH.\n`);
+  }
 } else if (budget.antigravity) {
   console.log(`⏭️  Antigravity skipped — 5H budget at ${budget.antigravity.pct}% (threshold: ${BUDGET_EXHAUSTION_PCT}%)\n`);
 }

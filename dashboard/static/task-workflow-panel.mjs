@@ -26,6 +26,7 @@
 import { registerPanel } from './settings-workspace.mjs';
 import { registerPollHandler } from './poll-dispatcher.mjs';
 import { reportError } from './client-error-log.mjs';
+import { esc as escapeHtml, relTime, shortModel, badgeFor, outcomeBadge } from './dashboard-utils.mjs';
 
 async function fetchJson(path) {
   const res = await fetch(path);
@@ -34,46 +35,11 @@ async function fetchJson(path) {
   return body;
 }
 
-function escapeHtml(unsafe) {
-  return (unsafe ?? '').toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-function relTime(iso) {
-  if (!iso) return '—';
-  const ms = Date.now() - Date.parse(iso);
-  if (Number.isNaN(ms)) return '—';
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return s + 's';
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + 'm';
-  const h = Math.floor(m / 60);
-  if (h < 24) return h + 'h';
-  return Math.floor(h / 24) + 'd';
-}
-
 function fmt(n) {
   if (n == null || Number.isNaN(n)) return '—';
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(0) + 'k';
   return String(n);
-}
-
-function shortModel(v) {
-  if (!v) return '—';
-  return String(v).replace('claude-', '').replace(/-/g, ' ').replace('opus 4 8', 'opus 4.8').replace('haiku 4 5', 'haiku 4.5');
-}
-
-function badgeFor(s) {
-  return s === 'in-progress' ? 'b-accent' : s === 'blocked' ? 'b-warn' : s === 'done' ? 'b-ok' : 'b-muted';
-}
-
-function outcomeBadge(o) {
-  return o === 'ok' ? 'b-ok' : o === 'skipped' ? 'b-warn' : o === 'failed' || o === 'blocked' ? 'b-danger' : 'b-muted';
 }
 
 // ─── Active now ─────────────────────────────────────────────────────────────

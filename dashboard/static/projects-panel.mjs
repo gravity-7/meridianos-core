@@ -2,6 +2,7 @@
  * Projects Panel UI
  * Displays project cards with status indicators and action buttons
  */
+import { esc as escapeHtml } from './dashboard-utils.mjs';
 
 // Guards the document-level action-button click delegate below so re-mounting this panel (e.g.
 // switching Admin sub-tabs away and back) never binds a second delegate and double-fires actions.
@@ -189,12 +190,6 @@ function formatDate(timestamp) {
     month: 'short',
     day: 'numeric'
   });
-}
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
 }
 
 /** Populates the Create Project modal's template <select> from the real template catalog
