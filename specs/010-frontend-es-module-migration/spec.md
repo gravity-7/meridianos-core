@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-07
 
-**Status**: Draft
+**Status**: Complete
 
 **Input**: This spec replaces the placeholder version of this file (parked when `009-dashboard-modernization`
 shipped, since full Principle VIII compliance was explicitly out of that phase's scope). Drafted now per this

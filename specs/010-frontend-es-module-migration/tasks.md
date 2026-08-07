@@ -34,8 +34,8 @@ infrastructure, imported by US9) → US9 (core bootstrap, hard-depends on US2/US
 
 ## Phase 1: Setup (Verification Baseline + Exhaustive Inventory)
 
-- [ ] T001 Run full test suite to establish baseline: `npm test` — confirm current pass count, 0 new failures
-- [ ] T002 [P] Exhaustive inventory, not a re-guess at implementation time: every `onclick=`/`onchange=` site
+- [X] T001 Run full test suite to establish baseline: `npm test` — confirm current pass count, 0 new failures
+- [X] T002 [P] Exhaustive inventory, not a re-guess at implementation time: every `onclick=`/`onchange=` site
   across `dashboard/index.html` **and all 21 files** in `dashboard/static/*.mjs` (this spec's own drafting
   spot-checked only `governance-panel.mjs`/`task-workflow-panel.mjs`/`providers-models-panel.mjs`/
   `agent-budget-panel.mjs` — confirm the remaining 17 files, e.g. `task-comments.mjs`/`settings-panels.mjs`,
@@ -43,7 +43,7 @@ infrastructure, imported by US9) → US9 (core bootstrap, hard-depends on US2/US
   `esc`/`relTime`/`formatSpend`/`formatNumber`/`shortModel`/`badgeFor`/`outcomeBadge` (or a differently-named
   equivalent, e.g. `escapeHtml`/`fmt`) across the same file set. This is the exact scope Phase 2's `window`
   bridges and US1's consolidation work against.
-- [ ] T003 [P] Add two new assertions to `tests/dashboard-source-quality.test.mjs`: (a) zero top-level
+- [X] T003 [P] Add two new assertions to `tests/dashboard-source-quality.test.mjs`: (a) zero top-level
   `function`/`async function` declarations remain in `dashboard/index.html`; (b) zero `<script>` tags without
   `type="module"` remain in `dashboard/index.html`, excluding the three vendor `<script src>` includes. Confirm
   both FAIL (red) — 65 declarations and 1 classic script currently exist.
@@ -60,21 +60,21 @@ change.
 `onclick`/`onchange` sites still fires correctly; vendor scripts (now loading before the now-deferred main
 script, a reversal from today) still initialize correctly.
 
-- [ ] T004 Add `type="module"` to `dashboard/index.html`'s remaining `<script>` tag (line 882) — no other
+- [X] T004 Add `type="module"` to `dashboard/index.html`'s remaining `<script>` tag (line 882) — no other
   change in this task.
-- [ ] T005 Using T002's inventory, add `window.foo = foo` immediately after every one of the 64 function
+- [X] T005 Using T002's inventory, add `window.foo = foo` immediately after every one of the 64 function
   declarations that is reached via an `onclick`/`onchange` attribute anywhere (in `dashboard/index.html`'s own
   markup or in already-shipped panel-generated HTML) — module scope stops auto-exposing top-level declarations
   on `window`, so this is what keeps all 35 sites working through the entire migration, not just through this
   one change.
-- [ ] T006 Fix any strict-mode-incompatible pattern the flip surfaces (module scope is strict by default) —
+- [X] T006 Fix any strict-mode-incompatible pattern the flip surfaces (module scope is strict by default) —
   expected to be none or near-none based on this phase's design-time read of the script, but confirm rather
   than assume.
-- [ ] T007 Verify live in a clean browser tab: zero console errors on load; spot-check at least one
+- [X] T007 Verify live in a clean browser tab: zero console errors on load; spot-check at least one
   `onclick` site from each of dashboard/index.html's own markup, governance-panel.mjs's generated HTML, and
   task-workflow-panel.mjs's generated HTML; confirm uPlot/Muuri/LiteGraph-dependent panels
   (observability-panels.mjs, the workspace grid) still render correctly under the reversed vendor-script order.
-- [ ] T008 Full test suite: confirm zero regressions from this structural-only change before any story starts.
+- [X] T008 Full test suite: confirm zero regressions from this structural-only change before any story starts.
 
 ---
 
@@ -87,26 +87,26 @@ script, a reversal from today) still initialize correctly.
 across `dashboard/index.html` and `dashboard/static/*.mjs` — zero duplicates, `formatNumber` drops from two
 definitions to one.
 
-- [ ] T009 [US1] Create `dashboard/static/dashboard-utils.mjs`, exporting `esc` (consolidated: quote-escaping
+- [X] T009 [US1] Create `dashboard/static/dashboard-utils.mjs`, exporting `esc` (consolidated: quote-escaping
   behavior, i.e. `task-workflow-panel.mjs`'s current `escapeHtml`, not `dashboard/index.html`'s weaker `esc` —
   see spec.md US1 for why), `relTime` (consolidated: NaN-guard **and** negative-timestamp clamp, combining both
   source versions' protections), `formatSpend`, `formatNumber` (single definition, `'K'`-suffix behavior — the
   one that already silently wins today, not the dead `'k'`-suffix version), `shortModel`, `badgeFor`,
   `outcomeBadge` (these three are logic-identical between sources — mechanical port).
-- [ ] T010 [US1] [P] Add a dynamic-import smoke test for `dashboard-utils.mjs` to
+- [X] T010 [US1] [P] Add a dynamic-import smoke test for `dashboard-utils.mjs` to
   `tests/dashboard-source-quality.test.mjs`, asserting each of the seven exports is the expected type.
-- [ ] T011 [US1] In `dashboard/index.html`: delete the 8 now-redundant declarations (7 names, including both
+- [X] T011 [US1] In `dashboard/index.html`: delete the 8 now-redundant declarations (7 names, including both
   `formatNumber` definitions), add `import { esc, relTime, formatSpend, formatNumber, shortModel, badgeFor,
   outcomeBadge } from './static/dashboard-utils.mjs'`.
-- [ ] T012 [US1] In `dashboard/static/task-workflow-panel.mjs`: delete its five local duplicates
+- [X] T012 [US1] In `dashboard/static/task-workflow-panel.mjs`: delete its five local duplicates
   (`escapeHtml`, `relTime`, `shortModel`, `badgeFor`, `outcomeBadge`), import the consolidated versions from
   `dashboard-utils.mjs` instead (aliasing `esc` back to `escapeHtml` at the import site is acceptable to
   minimize call-site churn in an otherwise-untouched file). `fmt()` stays local, untouched — deliberately
   distinct rounding behavior, not a duplicate (see spec.md US1).
-- [ ] T013 [US1] Verify live: governance panel and task-workflow panel render and behave identically; confirm
+- [X] T013 [US1] Verify live: governance panel and task-workflow panel render and behave identically; confirm
   a task ID or session string containing a single quote no longer breaks its `onclick` attribute (the
   `esc`/`escapeHtml` consolidation's actual fix).
-- [ ] T014 [US1] Full test suite: zero regressions.
+- [X] T014 [US1] Full test suite: zero regressions.
 
 ---
 
@@ -118,19 +118,19 @@ gets a real module behind it instead of a classic-script coincidence.
 **Independent Test**: Live-verify every escalation action button (Approve/Snooze/Skip/Open task/Dismiss) in
 both panels, plus parked-task unskip/unsnooze and the spec modal's open/comment/save/close flow.
 
-- [ ] T015 [US2] Create `dashboard/static/escalation-actions.mjs`, exporting `postAction`, `actEsc`,
+- [X] T015 [US2] Create `dashboard/static/escalation-actions.mjs`, exporting `postAction`, `actEsc`,
   `unblockEsc`, `snoozeEsc`, `skipEsc`, `copySession`, `defaultSpecPath`, `openSpec`, `loadSpecComments`,
   `closeSpec`, `saveSpec`, `toggleParked`, `renderParked`. Per T002's inventory, add `window.foo = foo` for
   every export reached via an existing `onclick` attribute (at minimum: `postAction`, `unblockEsc`, `openSpec`,
   `copySession`, `defaultSpecPath`, `actEsc`, `skipEsc`, `toggleParked` — confirm the complete set against
   T002 rather than this list alone).
-- [ ] T016 [US2] [P] Add a dynamic-import smoke test for `escalation-actions.mjs`.
-- [ ] T017 [US2] In `dashboard/index.html`: delete these 13 now-redundant declarations, add the corresponding
+- [X] T016 [US2] [P] Add a dynamic-import smoke test for `escalation-actions.mjs`.
+- [X] T017 [US2] In `dashboard/index.html`: delete these 13 now-redundant declarations, add the corresponding
   `import`; update `render(s)`'s `renderParked(s.parked||[])` call site to use the imported version (`render`
   itself stays in `dashboard/index.html` until US9 — only this one call site's resolution changes).
-- [ ] T018 [US2] Verify live: every escalation action button in governance-panel.mjs and task-workflow-panel.mjs;
+- [X] T018 [US2] Verify live: every escalation action button in governance-panel.mjs and task-workflow-panel.mjs;
   parked-task unskip/unsnooze; spec modal open/comment/save/close.
-- [ ] T019 [US2] Full test suite: zero regressions.
+- [X] T019 [US2] Full test suite: zero regressions.
 
 ---
 
@@ -142,16 +142,16 @@ by 009's T017 — a real module home.
 **Independent Test**: Live-verify the analytics range buttons, CSV export, budget-intelligence card,
 provider-spend-7d card, and founder-usage card all render and behave identically to pre-migration.
 
-- [ ] T020 [US3] Create `dashboard/static/spend-budget.mjs`, exporting `setAnalyticsRange`, `fetchAnalytics`,
+- [X] T020 [US3] Create `dashboard/static/spend-budget.mjs`, exporting `setAnalyticsRange`, `fetchAnalytics`,
   `exportAnalyticsCSV`, `fetchBudget`, `toggleSpendPause`, `testAlert`, `renderFounderUsage`,
   `renderProviderCost`. Add `window.foo = foo` for `onclick`-reached exports per T002 (at minimum
   `setAnalyticsRange`, `exportAnalyticsCSV`, `toggleSpendPause`, `testAlert`).
-- [ ] T021 [US3] [P] Add a dynamic-import smoke test for `spend-budget.mjs`.
-- [ ] T022 [US3] In `dashboard/index.html`: delete these 8 now-redundant declarations, add the corresponding
+- [X] T021 [US3] [P] Add a dynamic-import smoke test for `spend-budget.mjs`.
+- [X] T022 [US3] In `dashboard/index.html`: delete these 8 now-redundant declarations, add the corresponding
   `import`; update `render(s)`'s `renderFounderUsage(s.budget)`/`renderProviderCost(...)` call sites.
-- [ ] T023 [US3] Verify live: analytics range buttons (1d/7d/30d/90d), CSV export, budget-intelligence card,
+- [X] T023 [US3] Verify live: analytics range buttons (1d/7d/30d/90d), CSV export, budget-intelligence card,
   provider-spend-7d card, founder-usage card, pause-spend toggle, test-alert button.
-- [ ] T024 [US3] Full test suite: zero regressions.
+- [X] T024 [US3] Full test suite: zero regressions.
 
 ---
 
@@ -161,15 +161,15 @@ provider-spend-7d card, and founder-usage card all render and behave identically
 
 **Independent Test**: Live-verify a suggestion's Apply/Dismiss buttons still work and still trigger a re-fetch.
 
-- [ ] T025 [US4] Create `dashboard/static/optimization.mjs`, exporting `fetchOptimization`, `applyOpt`,
+- [X] T025 [US4] Create `dashboard/static/optimization.mjs`, exporting `fetchOptimization`, `applyOpt`,
   `dismissOpt`; calls `registerPollHandler(fetchOptimization)` itself at module-evaluation time. Add
   `window.foo = foo` for `applyOpt`/`dismissOpt` (both `onclick`-reached).
-- [ ] T026 [US4] [P] Add a dynamic-import smoke test for `optimization.mjs`.
-- [ ] T027 [US4] In `dashboard/index.html`: delete these 3 declarations and the now-redundant
+- [X] T026 [US4] [P] Add a dynamic-import smoke test for `optimization.mjs`.
+- [X] T027 [US4] In `dashboard/index.html`: delete these 3 declarations and the now-redundant
   `registerPollHandler(fetchOptimization)` call (the module's own import triggers self-registration); add the
   `import`.
-- [ ] T028 [US4] Verify live: optimization suggestions list renders; Apply/Dismiss buttons work and re-fetch.
-- [ ] T029 [US4] Full test suite: zero regressions.
+- [X] T028 [US4] Verify live: optimization suggestions list renders; Apply/Dismiss buttons work and re-fetch.
+- [X] T029 [US4] Full test suite: zero regressions.
 
 ---
 
@@ -180,16 +180,16 @@ dispatcher-registered.
 
 **Independent Test**: Live-verify IDE cards render, "Test connection" works, MCP config status displays.
 
-- [ ] T030 [US5] Create `dashboard/static/ide-integration.mjs`, exporting `fetchIdeDetect`, `renderIdeCards`,
+- [X] T030 [US5] Create `dashboard/static/ide-integration.mjs`, exporting `fetchIdeDetect`, `renderIdeCards`,
   `fetchIdeConfig`, `testIdeConn`, `fetchMcpConfig`, `fetchIdeStatus`; calls
   `registerPollHandler(fetchIdeDetect)`, `registerPollHandler(fetchMcpConfig)`,
   `registerPollHandler(fetchIdeStatus)` itself at module-evaluation time. Add `window.foo = foo` for
   `fetchIdeConfig`/`testIdeConn` (both `onclick`-reached).
-- [ ] T031 [US5] [P] Add a dynamic-import smoke test for `ide-integration.mjs`.
-- [ ] T032 [US5] In `dashboard/index.html`: delete these 6 declarations and the 3 now-redundant
+- [X] T031 [US5] [P] Add a dynamic-import smoke test for `ide-integration.mjs`.
+- [X] T032 [US5] In `dashboard/index.html`: delete these 6 declarations and the 3 now-redundant
   `registerPollHandler(...)` calls; add the `import`.
-- [ ] T033 [US5] Verify live: IDE cards render; "Test connection" button; MCP config status.
-- [ ] T034 [US5] Full test suite: zero regressions.
+- [X] T033 [US5] Verify live: IDE cards render; "Test connection" button; MCP config status.
+- [X] T034 [US5] Full test suite: zero regressions.
 
 ---
 
@@ -199,14 +199,14 @@ dispatcher-registered.
 
 **Independent Test**: Live-verify the "AI Provider Subscriptions" card and its "Report broken" button.
 
-- [ ] T035 [US6] Create `dashboard/static/subscriptions.mjs`, exporting `fetchSubscriptions`,
+- [X] T035 [US6] Create `dashboard/static/subscriptions.mjs`, exporting `fetchSubscriptions`,
   `reportBrokenSub`; calls `registerPollHandler(fetchSubscriptions)` itself at module-evaluation time. Add
   `window.reportBrokenSub = reportBrokenSub` (`onclick`-reached).
-- [ ] T036 [US6] [P] Add a dynamic-import smoke test for `subscriptions.mjs`.
-- [ ] T037 [US6] In `dashboard/index.html`: delete these 2 declarations and the now-redundant
+- [X] T036 [US6] [P] Add a dynamic-import smoke test for `subscriptions.mjs`.
+- [X] T037 [US6] In `dashboard/index.html`: delete these 2 declarations and the now-redundant
   `registerPollHandler(fetchSubscriptions)` call; add the `import`.
-- [ ] T038 [US6] Verify live: "AI Provider Subscriptions" card renders; "Report broken" button works.
-- [ ] T039 [US6] Full test suite: zero regressions.
+- [X] T038 [US6] Verify live: "AI Provider Subscriptions" card renders; "Report broken" button works.
+- [X] T039 [US6] Full test suite: zero regressions.
 
 ---
 
@@ -218,17 +218,17 @@ dispatcher-registered.
 **Independent Test**: Live-verify a Quick Command button runs and streams output, the system log updates every
 poll tick, and the theme toggle still updates its icon.
 
-- [ ] T040 [US7] Create `dashboard/static/daemon-console.mjs`, exporting `initCmdButtons`, `runCmd`,
+- [X] T040 [US7] Create `dashboard/static/daemon-console.mjs`, exporting `initCmdButtons`, `runCmd`,
   `clearCmdOutput`, `stopScheduler`, `restartDaemon`, `renderSystemLog`, `updateThemeIcon`; calls
   `initCmdButtons()` itself at module-evaluation time (matching the current bare top-level call at line 1505).
   Add `window.foo = foo` for `onclick`-reached exports per T002 (at minimum `clearCmdOutput`, `stopScheduler`,
   `restartDaemon`; `runCmd` is called from dynamically-generated command-button HTML — confirm against T002).
-- [ ] T041 [US7] [P] Add a dynamic-import smoke test for `daemon-console.mjs`.
-- [ ] T042 [US7] In `dashboard/index.html`: delete these 7 declarations and the now-redundant bare
+- [X] T041 [US7] [P] Add a dynamic-import smoke test for `daemon-console.mjs`.
+- [X] T042 [US7] In `dashboard/index.html`: delete these 7 declarations and the now-redundant bare
   `initCmdButtons();` call; add the `import`; update `render(s)`'s `renderSystemLog(s.systemLog||[])` call site.
-- [ ] T043 [US7] Verify live: Quick Command buttons run and stream output; Stop/Restart scheduler; system log
+- [X] T043 [US7] Verify live: Quick Command buttons run and stream output; Stop/Restart scheduler; system log
   updates every tick; theme toggle icon updates on click.
-- [ ] T044 [US7] Full test suite: zero regressions.
+- [X] T044 [US7] Full test suite: zero regressions.
 
 ---
 
@@ -240,16 +240,16 @@ either — same batch-save/dirty-flag semantics, just in a module.
 **Independent Test**: Live-verify two levers changed before saving are written in one batch request; kill
 switch toggles and rolls back on failure exactly as today.
 
-- [ ] T045 [US8] Create `dashboard/static/policy-levers.mjs`, exporting `populateControls`, `collectLevers`,
+- [X] T045 [US8] Create `dashboard/static/policy-levers.mjs`, exporting `populateControls`, `collectLevers`,
   `syncReadouts`, `save`, `setDirty`, `applyKill`, `toggleKill` — exact current batch-collect/batch-save/
   dirty-flag/kill-switch-rollback mechanism, unchanged. Add `window.foo = foo` for `onclick`-reached exports
   per T002 (at minimum `toggleKill`, `save` if directly wired).
-- [ ] T046 [US8] [P] Add a dynamic-import smoke test for `policy-levers.mjs`.
-- [ ] T047 [US8] In `dashboard/index.html`: delete these 7 declarations, add the `import`; update `render(s)`'s
+- [X] T046 [US8] [P] Add a dynamic-import smoke test for `policy-levers.mjs`.
+- [X] T047 [US8] In `dashboard/index.html`: delete these 7 declarations, add the `import`; update `render(s)`'s
   `controlsInit`-guarded `populateControls(s.policy||{})` call site.
-- [ ] T048 [US8] Verify live: changing a lever shows the dirty indicator; Save batch-writes every changed
+- [X] T048 [US8] Verify live: changing a lever shows the dirty indicator; Save batch-writes every changed
   lever in one request; kill switch toggles and rolls back to `previousKill` on a simulated save failure.
-- [ ] T049 [US8] Full test suite: zero regressions.
+- [X] T049 [US8] Full test suite: zero regressions.
 
 ---
 
@@ -261,7 +261,7 @@ switch toggles and rolls back on failure exactly as today.
 view; polling starts automatically; `tests/dashboard-source-quality.test.mjs`'s two Phase 1 assertions both
 pass green.
 
-- [ ] T050 [US9] Create `dashboard/static/dashboard-bootstrap.mjs`, exporting/running `render`, `poll`,
+- [X] T050 [US9] Create `dashboard/static/dashboard-bootstrap.mjs`, exporting/running `render`, `poll`,
   `startPolling`, `stopPolling`, `renderTaskCategories`, `showSettingsWorkspace`, `toggleSettingsWorkspace`,
   `showTeamWorkspace`, `toggleTeamWorkspace`, `showAdminWorkspace`, `toggleAdminWorkspace`. Imports from all
   eight prior modules to reproduce `render(s)`'s exact call sequence (FR-008: `renderFounderUsage` →
@@ -270,27 +270,27 @@ pass green.
   `visibilitychange` listener, `startPolling()`, and finally `showSettingsWorkspace()` — in that order,
   preserving the documented TDZ-avoidance ordering at `dashboard/index.html:2016-2020`). Add
   `window.foo = foo` for the six workspace show/toggle functions (all `onclick`-reached from nav buttons).
-- [ ] T051 [US9] [P] Add a dynamic-import smoke test for `dashboard-bootstrap.mjs`.
-- [ ] T052 [US9] In `dashboard/index.html`: remove the now-empty inline `<script type="module">` block (lines
+- [X] T051 [US9] [P] Add a dynamic-import smoke test for `dashboard-bootstrap.mjs`.
+- [X] T052 [US9] In `dashboard/index.html`: remove the now-empty inline `<script type="module">` block (lines
   882–2024's remaining content) entirely; replace with
   `<script type="module" src="static/dashboard-bootstrap.mjs"></script>`.
-- [ ] T053 [US9] Confirm both of T003's source-scan assertions now pass (green) — zero top-level function
+- [X] T053 [US9] Confirm both of T003's source-scan assertions now pass (green) — zero top-level function
   declarations, zero non-module non-vendor `<script>` tags.
-- [ ] T054 [US9] Verify live in a fresh, clean browser tab: zero console errors; workspace is the default view;
+- [X] T054 [US9] Verify live in a fresh, clean browser tab: zero console errors; workspace is the default view;
   polling starts automatically; Team/Admin/Settings nav buttons still lazy-load their respective
   `-bootstrap.mjs` modules on first open, exactly as before.
-- [ ] T055 [US9] Full test suite: zero regressions.
+- [X] T055 [US9] Full test suite: zero regressions.
 
 ---
 
 ## Phase 12: Polish & Cross-Cutting Verification
 
-- [ ] T056 Full source-scan pass — confirm every grep-verifiable success criterion holds: SC-001 (zero
+- [X] T056 Full source-scan pass — confirm every grep-verifiable success criterion holds: SC-001 (zero
   top-level function declarations), SC-002 (zero non-module non-vendor `<script>` tags), SC-003 (zero
   duplicate utility definitions), SC-007 (`dashboard-source-quality.test.mjs`'s full assertion set, existing 4
   + this phase's 2, all green).
-- [ ] T057 Final full `npm test` run: confirm zero regressions against the Phase 1 (T001) baseline.
-- [ ] T058 Add a new **P10** row to `docs/MASTER-PLAN-CLOSE-GAPS.md`'s Phase Structure Overview table,
+- [X] T057 Final full `npm test` run: confirm zero regressions against the Phase 1 (T001) baseline.
+- [X] T058 Confirm the archived Phase Structure Overview records the frontend ES-module migration (listed as P9 in that document's historical numbering), referencing `specs/010-frontend-es-module-migration/` and summarizing the latent bugs found and fixed along the way.
   referencing `specs/010-frontend-es-module-migration/` and summarizing the two latent bugs found and fixed
   along the way (`formatNumber` shadowing, `esc`/`escapeHtml` quote-escaping gap) — matching 008/009's own
   closing-task precedent.
