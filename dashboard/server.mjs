@@ -21,7 +21,7 @@ import { buildStatus } from '../status.mjs';
 import { openDb } from '../db.mjs';
 import { createProjectStore } from '../project-store.mjs';
 import { createAios } from '../config.mjs';
-import { writePolicy, LEVER_PATHS } from '../policy-write.mjs';
+import { writePolicy, LEVER_PATHS, isAgentLeverPath } from '../policy-write.mjs';
 import { listBackups, restoreBackup } from '../policy-backups.mjs';
 import { listProfiles } from '../profiles.mjs';
 import { TIERS } from '../model-router.mjs';
@@ -328,7 +328,13 @@ function readBody(req) {
  *  `config` is the injected AiosConfig (REQUIRED), threaded to loadPolicy/writePolicy. */
 export function applyPolicyUpdates(updates, { path, config } = {}) {
   if (!updates || typeof updates !== 'object' || Array.isArray(updates)) throw new Error('expected an object of path:value');
-  for (const p of Object.keys(updates)) if (!ALLOWED.has(p)) throw new Error(`path not allowed: ${p}`);
+  // 009 — Dashboard Modernization (US1/T018): ALLOWED alone only recognizes the hardcoded
+  // claude/antigravity agent names — isAgentLeverPath() additionally accepts a per-agent budget/
+  // model/routing path for any agent actually in the configured roster (see its own doc comment).
+  const roster = config?.domain?.agents ?? [];
+  for (const p of Object.keys(updates)) {
+    if (!ALLOWED.has(p) && !isAgentLeverPath(p, roster)) throw new Error(`path not allowed: ${p}`);
+  }
   // Coherence gate (postmortem A5): validate the WOULD-BE-MERGED policy before writing, so the
   // dashboard can't persist an incoherent combination (WIP > parallel, unknown cadence, bad enum…).
   const merged = applyDottedUpdates(loadPolicy(undefined, config), updates);
@@ -434,6 +440,33 @@ export function createDashboardServer(config) {
       // Every mutating request must be same-origin + carry the per-boot token (security P1).
       if (req.method === 'POST' && !authorized(req)) {
         return send(res, 403, JSON.stringify({ ok: false, error: 'forbidden: missing/invalid token or cross-origin request' }));
+      }
+      // POST /api/client-error (009 — Dashboard Modernization, US3/FR-006/FR-007): the backend half
+      // of the dashboard's error-visibility hardening. Every caught client-side error is forwarded
+      // here so it survives a reload and is diagnosable from daemon.log without devtools ever having
+      // been open — see dashboard/static/client-error-log.mjs. Reuses the existing per-boot
+      // getV1Logger() rather than a second logger instance; never throws back to the client on a
+      // logging failure (daemon-logger.mjs's own contract: "never throws").
+      if (req.method === 'POST' && url.pathname === '/api/client-error') {
+        let body;
+        try {
+          body = JSON.parse((await readBody(req)) || '{}');
+        } catch {
+          return send(res, 400, JSON.stringify({ ok: false, error: 'invalid JSON body' }));
+        }
+        if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+          return send(res, 400, JSON.stringify({ ok: false, error: 'body must be a JSON object' }));
+        }
+        const { source, message, stack, timestamp } = body;
+        if (typeof source !== 'string' || !source.trim()) {
+          return send(res, 400, JSON.stringify({ ok: false, error: '`source` is required' }));
+        }
+        if (typeof message !== 'string' || !message.trim()) {
+          return send(res, 400, JSON.stringify({ ok: false, error: '`message` is required' }));
+        }
+        const suffix = timestamp ? ` (client ts: ${timestamp})` : '';
+        getV1Logger(config).error(source, `${message}${suffix}`, stack);
+        return send(res, 200, JSON.stringify({ ok: true }));
       }
       // POST /api/setup/plan + /api/setup/commit (008 — End-User Configurability, US3) — placed
       // AFTER the authorized() gate above like every other mutating route; these write files to

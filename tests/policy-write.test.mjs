@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setPolicyValue, serializeScalar, writePolicy } from '../policy-write.mjs';
+import { setPolicyValue, serializeScalar, writePolicy, isAgentLeverPath } from '../policy-write.mjs';
 import { parseYaml } from '../yaml-lite.mjs';
 
 const SAMPLE = `version: 1
@@ -23,6 +23,31 @@ test('serializeScalar: bare when safe, quoted otherwise', () => {
   assert.equal(serializeScalar(800000), '800000');
   assert.equal(serializeScalar('claude-opus-4-8'), 'claude-opus-4-8');
   assert.equal(serializeScalar('01:00'), '"01:00"'); // colon → must quote so it round-trips as a string
+});
+
+// 009 — Dashboard Modernization (US1/T018): isAgentLeverPath() closes the gap where LEVER_PATHS'
+// hardcoded claude/antigravity meant every agent-budget/model/routing save for any other roster
+// (e.g. this repo's own current [builder, reviewer]) was silently rejected server-side despite the
+// dashboard sliders rendering and looking completely normal.
+test('isAgentLeverPath accepts a per-agent budget path for an agent actually in the roster', () => {
+  assert.equal(isAgentLeverPath('agent_budget.builder.per_5h_tokens', ['builder', 'reviewer']), true);
+  assert.equal(isAgentLeverPath('agent_budget.reviewer.per_week_tokens', ['builder', 'reviewer']), true);
+  assert.equal(isAgentLeverPath('agent_models.builder.default', ['builder', 'reviewer']), true);
+  assert.equal(isAgentLeverPath('model_routing.builder.complex', ['builder', 'reviewer']), true);
+});
+
+test('isAgentLeverPath rejects an agent name not in the roster (no unchecked wildcard)', () => {
+  assert.equal(isAgentLeverPath('agent_budget.some-other-agent.per_5h_tokens', ['builder', 'reviewer']), false);
+});
+
+test('isAgentLeverPath rejects a non-lever path even for a real agent', () => {
+  assert.equal(isAgentLeverPath('agent_budget.builder.unrelated_field', ['builder', 'reviewer']), false);
+  assert.equal(isAgentLeverPath('kill_switch', ['builder', 'reviewer']), false);
+});
+
+test('isAgentLeverPath returns false with an empty or missing roster', () => {
+  assert.equal(isAgentLeverPath('agent_budget.builder.per_5h_tokens', []), false);
+  assert.equal(isAgentLeverPath('agent_budget.builder.per_5h_tokens', undefined), false);
 });
 
 test('setPolicyValue updates a nested scalar and round-trips through parseYaml', () => {

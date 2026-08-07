@@ -114,6 +114,50 @@ export const LEVER_PATHS = [
   'gateway.port',
 ];
 
+// 009 — Dashboard Modernization (US1/T018): LEVER_PATHS above hardcodes `claude`/`antigravity` as
+// the only writable agent-budget/agent-model/model-routing paths — a static whitelist from when
+// that was the entire roster. The roster has been dynamic (config.domain.agents) on the READ side
+// for a while (renderAgentBudgetControls/renderBudgetCards build tiles for whatever the roster
+// actually is), but this WRITE-side whitelist was never updated to match: with any roster other
+// than exactly [claude, antigravity] — e.g. this repo's own current [builder, reviewer] — every
+// agent-budget/agent-model/model-routing save was silently rejected server-side
+// (`path not allowed: agent_budget.builder.per_5h_tokens`), even though the sliders that produce
+// those writes render and look perfectly normal. Found while building a merged agent-budget panel
+// (009/US1) that would otherwise have inherited the exact same silent breakage.
+//
+// AGENT_LEVER_SUFFIXES lists the per-agent path suffixes that ARE meant to be writable, checked
+// against the ACTUAL configured roster (never an unchecked wildcard — an unknown agent name is
+// still rejected) rather than a fixed name list.
+const AGENT_LEVER_SUFFIXES = [
+  'agent_budget.{agent}.per_5h_tokens',
+  'agent_budget.{agent}.per_week_tokens',
+  'agent_budget.{agent}.week_anchor',
+  'agent_models.{agent}.default',
+  'agent_models.{agent}.routine',
+  'model_routing.{agent}.simple',
+  'model_routing.{agent}.medium',
+  'model_routing.{agent}.medium_high',
+  'model_routing.{agent}.complex',
+  'model_routing.{agent}.critical',
+];
+
+/**
+ * True if `path` is a writable per-agent lever for one of the agents in `agents` (the real,
+ * configured roster) — the dynamic-roster counterpart to the static LEVER_PATHS list above. Does
+ * NOT accept an arbitrary agent name: `agents` must actually contain it.
+ * @param {string} path
+ * @param {string[]} agents
+ */
+export function isAgentLeverPath(path, agents) {
+  if (!Array.isArray(agents) || agents.length === 0) return false;
+  for (const agent of agents) {
+    for (const suffix of AGENT_LEVER_SUFFIXES) {
+      if (path === suffix.replace('{agent}', agent)) return true;
+    }
+  }
+  return false;
+}
+
 /** Render a JS value as a policy scalar: bare when safe, double-quoted otherwise. */
 export function serializeScalar(v) {
   if (v === true) return 'true';

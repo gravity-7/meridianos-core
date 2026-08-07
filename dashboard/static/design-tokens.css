@@ -1,0 +1,64 @@
+/**
+ * design-tokens — 009 Dashboard Modernization (US5/FR-010/FR-011).
+ *
+ * dashboard/index.html's existing `<style>` block already defines a comprehensive, Tabler-esque
+ * design language — surface hierarchy, text hierarchy, semantic status colors (accent/success/
+ * warning/danger), shadows, radius, font stacks, with proper `data-theme` + `prefers-color-scheme`
+ * dark mode support. This file does NOT duplicate or replace any of that — it adds the one thing
+ * genuinely missing: a validated CATEGORICAL palette for multi-series charts (Cost Over Time grouped
+ * by provider, Provider Spend Breakdown), which chrome-only tokens have no reason to define (a
+ * button never needs 8 mutually-distinguishable colors; a chart with 8 providers does).
+ *
+ * Values are the dataviz skill's reference categorical palette (references/palette.md), chosen
+ * because its ordering is validated CVD-safe by construction, not eyeballed — re-validated here
+ * against THIS dashboard's actual card surfaces (light #ffffff, dark #1e293b — this repo's
+ * `--surface-2`), not the skill's own generic defaults:
+ *
+ *   node scripts/validate_palette.js "<8 light hexes>" --mode light --surface "#ffffff"
+ *   node scripts/validate_palette.js "<8 dark hexes>"  --mode dark  --surface "#1e293b"
+ *
+ * Both passed every hard gate (lightness band, chroma floor, CVD separation, normal-vision floor).
+ * Three light-mode slots and one dark-mode slot land below 3:1 contrast against the card surface —
+ * per the skill's "relief rule" this is legal ONLY when charts also ship visible direct labels or a
+ * legend (never color-alone identity) — see buildUplotTheme() in observability-panels.mjs, which
+ * always renders a legend.
+ *
+ * No sequential or diverging ramp is defined here: nothing in the current panel set (all three are
+ * categorical — grouped-by-provider lines/bars) needs magnitude or polarity encoding yet. Add one
+ * only when a real chart needs it, validated the same way, not speculatively.
+ */
+
+:root {
+  --chart-series-1: #2a78d6; /* blue */
+  --chart-series-2: #eb6834; /* orange */
+  --chart-series-3: #1baf7a; /* aqua */
+  --chart-series-4: #eda100; /* yellow */
+  --chart-series-5: #e87ba4; /* magenta */
+  --chart-series-6: #008300; /* green */
+  --chart-series-7: #4a3aa7; /* violet */
+  --chart-series-8: #e34948; /* red */
+}
+
+:root[data-theme="dark"] {
+  --chart-series-1: #3987e5;
+  --chart-series-2: #d95926;
+  --chart-series-3: #199e70;
+  --chart-series-4: #c98500;
+  --chart-series-5: #d55181;
+  --chart-series-6: #008300;
+  --chart-series-7: #9085e9;
+  --chart-series-8: #e66767;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --chart-series-1: #3987e5;
+    --chart-series-2: #d95926;
+    --chart-series-3: #199e70;
+    --chart-series-4: #c98500;
+    --chart-series-5: #d55181;
+    --chart-series-6: #008300;
+    --chart-series-7: #9085e9;
+    --chart-series-8: #e66767;
+  }
+}
