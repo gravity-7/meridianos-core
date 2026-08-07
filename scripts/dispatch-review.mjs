@@ -267,11 +267,9 @@ async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 
       args = ["--print", "--output-format", "text"];
     } else if (name === "antigravity") {
       cmd = "agy";
-      // agy uses -p for the prompt (no chat subcommand, no --prompt-file).
-      // --dangerously-skip-permissions bypasses interactive permission prompts.
-      // --print-timeout ensures the agent doesn't hang indefinitely.
-      const agyPrompt = readFileSync(promptFile, "utf8");
-      args = ["--print", agyPrompt, "--dangerously-skip-permissions", "--print-timeout", "30m", "--output-format", "text"];
+      // The review prompt is streamed below through stdin. Passing it in argv can exceed
+      // Windows' command-line limit for large PR diffs.
+      args = ["--print", "--dangerously-skip-permissions", "--print-timeout", "30m", "--output-format", "text"];
     } else {
       resolve({ agent: name, verdict: "ERROR", output: "", error: `Unknown agent: ${name}`, posted: false });
       return;
