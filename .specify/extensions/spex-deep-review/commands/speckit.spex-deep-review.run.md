@@ -1390,4 +1390,3 @@ The gate outcome depends on the invocation context:
 - **PASS** or **FAIL**: Advisory only. Report findings and let the user decide. Do NOT block further commands.
 
 The invocation context is determined by the caller. When invoked from the superpowers quality gate in `speckit-implement`, the context is `superpowers`. When invoked directly, the context is `manual`.
-
