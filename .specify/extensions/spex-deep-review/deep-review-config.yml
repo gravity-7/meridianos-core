@@ -1,0 +1,11 @@
+# MeridianOS intentionally uses Spex review before a PR and the repository
+# dispatch-review script after a PR; do not invoke external review tools here.
+external_tools:
+  coderabbit: false
+  copilot: false
+  codex: false
+
+test_command: "npm test"
+test_timeout_seconds: 300
+pr_base_branch: "main"
+auto_generate_reviewers: true
