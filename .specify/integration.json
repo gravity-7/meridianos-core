@@ -2,18 +2,14 @@
   "version": "0.14.2",
   "integration_state_schema": 1,
   "installed_integrations": [
-    "copilot"
+    "codex"
   ],
   "integration_settings": {
-    "copilot": {
-      "script": "ps",
-      "raw_options": "--skills",
-      "parsed_options": {
-        "skills": true
-      },
+    "codex": {
+      "script": "sh",
       "invoke_separator": "-"
     }
   },
-  "integration": "copilot",
-  "default_integration": "copilot"
+  "integration": "codex",
+  "default_integration": "codex"
 }

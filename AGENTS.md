@@ -46,20 +46,20 @@
 
 ### Spec-Kit Workflow
 This project uses spec-kit for spec-driven development. The workflow is:
-1. `/speckit-constitution` — Establish project principles (already done)
-2. `/speckit-specify` — Define what to build
-3. `/speckit-plan` — Create technical implementation plan
-4. `/speckit-tasks` — Generate actionable tasks
-5. `/speckit-implement` — Execute implementation
-6. `/speckit-converge` — Verify completeness
+1. `$speckit-constitution` — Establish project principles (already done)
+2. `$speckit-specify` — Define what to build
+3. `$speckit-plan` — Create technical implementation plan
+4. `$speckit-tasks` — Generate actionable tasks
+5. `$speckit-implement` — Execute implementation
+6. `$speckit-converge` — Verify completeness
 
 Optional quality gates:
-- `/speckit-clarify` — Resolve ambiguities before planning
-- `/speckit-checklist` — Validate requirements completeness
-- `/speckit-analyze` — Cross-artifact consistency check
+- `$speckit-clarify` — Resolve ambiguities before planning
+- `$speckit-checklist` — Validate requirements completeness
+- `$speckit-analyze` — Cross-artifact consistency check
 
 ### Automated PR Review (After Implementation)
-AFTER `/speckit-implement` creates a pull request, you MUST automatically trigger the parallel review dispatch. The review agents are Claude Code (Sonnet 5) and Antigravity (Gemini 3.1 Pro) — two independent AI reviewers on different providers/models with fresh context (no access to the implementation conversation).
+AFTER `$speckit-implement` creates a pull request, you MUST automatically trigger the parallel review dispatch. The review agents are Claude Code (Sonnet 5) and Antigravity (Gemini 3.1 Pro) — two independent AI reviewers on different providers/models with fresh context (no access to the implementation conversation).
 
 **How to trigger:**
 ```powershell
@@ -75,3 +75,18 @@ For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
 at specs/010-frontend-es-module-migration/plan.md
 <!-- SPECKIT END -->
+
+<!-- >>> spex managed Codex guidance >>>
+This block is managed from .specify/spex.json. Keep project guidance outside it.
+-->
+
+## Spex workflow in Codex
+
+Invoke Spex skills with `$`, for example `$speckit-specify`, `$speckit-plan`,
+`$speckit-tasks`, and `$speckit-implement`. Do not print `/...` examples for
+Codex skills. Use `$speckit-spex-help` for the current command list.
+
+When a Spex skill needs a choice, present a short numbered list inline and wait
+for the answer. Use Codex subagents only when the user requests parallel work.
+
+<!-- <<< spex managed Codex guidance <<< -->
