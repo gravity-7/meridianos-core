@@ -6,22 +6,22 @@
 
 - [ ] T001 Add failing policy validation tests for the platform flag, default-off eligibility, and rollback semantics. [FR-005, FR-006]
 - [ ] T002 Add the policy schema/defaults and auditable eligibility evaluation. [FR-005, FR-006]
-- [ ] T003 Add a route registry for `/app`, supported destinations, and recovery destinations. [FR-001, FR-017]
-- [ ] T004 Add direct-load server routing and in-app unknown-route recovery with tests. [FR-002, FR-003]
-- [ ] T005 Add legacy/platform selection tests proving existing dashboard paths are unchanged when flag is disabled. [FR-004, FR-005]
+- [x] T003 Add a route registry for `/app`, supported destinations, and recovery destinations. [FR-001, FR-017]
+- [x] T004 Add direct-load server routing and in-app unknown-route recovery with tests. [FR-002, FR-003]
+- [x] T005 Add legacy/platform selection tests proving existing dashboard paths are unchanged when flag is disabled. [FR-004, FR-005]
 
 ## Phase 2: Shell, design, and accessibility
 
-- [ ] T006 [P] Define semantic design tokens for light/dark color, typography, space, elevation, borders, focus, and motion. [FR-007, FR-008]
-- [ ] T007 [P] Implement theme preference, system fallback, persistence, and theme tests. [FR-008]
-- [ ] T008 Implement the `/app` shell, navigation, and route transition behavior using the registry. [FR-001, FR-002, FR-017]
+- [x] T006 [P] Define semantic design tokens for light/dark color, typography, space, elevation, borders, focus, and motion. [FR-007, FR-008]
+- [x] T007 [P] Implement theme preference, system fallback, persistence, and theme tests. [FR-008]
+- [x] T008 Implement the `/app` shell, navigation, and route transition behavior using the registry. [FR-001, FR-002, FR-017]
 - [ ] T009 [P] Implement accessible action, input, feedback, overlay, and empty-state primitives with keyboard/focus/semantic tests. [FR-009, FR-010]
-- [ ] T010 Define and implement the shared action-state contract and recovery messaging. [FR-011, FR-012]
+- [x] T010 Define and implement the shared action-state contract and recovery messaging. [FR-011, FR-012]
 
 ## Phase 3: API boundary and compatibility
 
 - [ ] T011 Add contract fixtures for representative `/api/*` and `/api/v1/*` requests, responses, authentication outcomes, and status codes. [FR-014]
-- [ ] T012 Implement typed application-boundary adapters and normalized view failures. [FR-013, FR-012]
+- [x] T012 Implement typed application-boundary adapters and normalized view failures. [FR-013, FR-012]
 - [ ] T013 Connect foundation route fixtures to loading, content, empty, and error state boundaries. [FR-011, FR-013]
 - [ ] T014 Verify platform enablement/disablement leaves representative public API contracts byte-for-byte compatible where applicable. [FR-014]
 

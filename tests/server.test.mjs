@@ -8,6 +8,7 @@ import { applyPolicyUpdates, createDashboardServer } from '../dashboard/server.m
 import { parseYaml } from '../yaml-lite.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
+import { isUiPlatformEnabled, platformBoundary, resolvePlatformRoute } from '../dashboard/ui-platform.mjs';
 
 const config = resolvePaths({ domain: FIXTURE_DOMAIN });
 
@@ -57,6 +58,15 @@ test('GET /healthz returns 200 {ok:true} with no auth token and touches no DB', 
   }
 });
 
+test('UI platform boundary keeps rollout, routes, and safe failures explicit', () => {
+  assert.equal(isUiPlatformEnabled({ ui_platform: { enabled: true } }), true);
+  assert.equal(isUiPlatformEnabled({}), false);
+  assert.equal(resolvePlatformRoute('/app/foundation').id, 'foundation');
+  assert.equal(resolvePlatformRoute('/app/missing'), null);
+  assert.deepEqual(platformBoundary({ body: [] }), { state: 'empty', message: 'There is nothing to show yet.' });
+  assert.deepEqual(platformBoundary({ status: 500, error: new Error('secret') }), { state: 'error', message: 'Unable to load this information. Try again.', recoverable: true });
+});
+
 test('GET /app is feature-flagged and serves the stable platform shell when enabled', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'srv-app-'));
   mkdirSync(join(repoRoot, '.ai'), { recursive: true });
@@ -71,6 +81,21 @@ test('GET /app is feature-flagged and serves the stable platform shell when enab
     });
     assert.equal(result.status, 200);
     assert.match(result.body, /MeridianOS/);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('GET /app falls back to the legacy dashboard while the platform flag is disabled', async () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'srv-app-legacy-'));
+  mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+  writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), SAMPLE);
+  const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app' }, (res) => resolve({ status: res.statusCode, location: res.headers.location }));
+      req.on('error', reject); req.end();
+    });
+    assert.deepEqual(result, { status: 302, location: '/' });
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
