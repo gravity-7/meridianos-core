@@ -32,7 +32,7 @@ body { margin: 0; }
 .app-header { display: flex; gap: var(--space); align-items: center; padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid var(--border); }
 .brand { font-weight: 700; margin-right: auto; }
 a, button, input { color: var(--accent); min-height: 2.75rem; }
-a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 button { cursor: pointer; }
 button[aria-busy=true] { cursor: progress; }
 main { max-width: 70rem; margin: auto; padding: 2rem; }
@@ -52,6 +52,15 @@ main { max-width: 70rem; margin: auto; padding: 2rem; }
 .status button { margin-top: .75rem; }
 .feedback button { margin-top: .75rem; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.setup-stepper { margin-bottom: var(--space); overflow-x: auto; }
+.setup-stepper ol { display: flex; gap: var(--space); min-width: max-content; margin: 0; padding: 0; list-style: none; color: var(--muted); }
+.setup-stepper [aria-current=step] { color: var(--text); font-weight: 700; text-decoration: underline; text-underline-offset: .25rem; }
+.card label { display: block; margin: var(--space) 0; color: var(--text); }
+.card input, .card select { display: block; width: 100%; margin-top: var(--space-1); padding: .65rem; border: 1px solid var(--border); border-radius: .4rem; background: var(--surface); color: var(--text); }
+.card button { margin: var(--space) var(--space-1) 0 0; padding: .65rem 1rem; border: 1px solid var(--border); border-radius: .4rem; background: var(--surface); }
+.card dl { display: grid; grid-template-columns: max-content 1fr; gap: .5rem var(--space); }
+.card dt { font-weight: 700; }
+.card dd { margin: 0; overflow-wrap: anywhere; }
 
 @media (prefers-color-scheme: dark) {
   [data-theme=system] {

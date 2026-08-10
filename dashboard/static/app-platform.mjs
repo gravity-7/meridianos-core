@@ -1,13 +1,17 @@
 import { readApplicationStatus } from './app-boundary.mjs';
 import { actionButton, emptyState, feedback } from './ui-primitives.mjs';
+import { createOnboardingController } from './onboarding-flow.mjs';
 
 const routes = {
   '/app': { title: 'Application overview', text: 'The stable MeridianOS application foundation is ready.' },
   '/app/foundation': { title: 'Platform foundation', text: 'Shared tokens, accessible primitives, typed boundaries, and action-state conventions belong here.' },
+  '/app/setup': { title: 'Set up MeridianOS', onboarding: true },
+  '/app/setup/complete': { title: 'Your setup is complete', onboarding: true },
 };
 const themeKey = 'meridianos-ui-theme';
 const app = document.querySelector('#app');
 const themeButton = document.querySelector('#theme');
+let activeOnboarding = null;
 const make = (tag, text) => Object.assign(document.createElement(tag), text == null ? {} : { textContent: text });
 function applyTheme(theme) { document.documentElement.dataset.theme = theme; themeButton.textContent = `Theme: ${theme}`; }
 function currentTheme() { return localStorage.getItem(themeKey) || 'system'; }
@@ -34,6 +38,13 @@ async function render() {
   const route = routes[pathname];
   const view = route || { title: 'Page not found', text: 'This application route is not available. Return to the application overview.' };
   document.title = `${view.title} - MeridianOS`;
+  if (view.onboarding) {
+    activeOnboarding?.dispose();
+    app.replaceChildren();
+    activeOnboarding = createOnboardingController({ root: app });
+    return activeOnboarding.render();
+  }
+  activeOnboarding?.dispose(); activeOnboarding = null;
   const card = make('section'); card.className = 'card'; card.append(make('h1', view.title), make('p', view.text));
   if (!route) { const link = make('a', 'Go to overview'); link.href = '/app'; card.append(link); }
   app.replaceChildren(card); const forcedState = status(actionState());

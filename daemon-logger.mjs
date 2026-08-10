@@ -24,6 +24,15 @@ import { join } from 'node:path';
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
 const LOG_FILE_NAME    = 'daemon.log';
 
+/** Log a pre-sanitized onboarding lifecycle event without accepting free-form data. */
+export function logOnboardingLifecycleEvent(logger, event) {
+  try {
+    const allowed = ['event', 'providerId', 'agentCount', 'outcome', 'elapsedMs'];
+    const safe = Object.fromEntries(allowed.map((key) => [key, event?.[key] ?? null]));
+    logger?.log?.('onboarding', JSON.stringify(safe));
+  } catch { /* lifecycle logging must remain best-effort */ }
+}
+
 /**
  * Format a log line with an ISO timestamp prefix.
  * @param {string} level  'INFO' | 'ERROR'

@@ -38,6 +38,7 @@ let tray = null;
 let daemonChild = null;
 let logger = null;
 let consecutiveRendererCrashes = 0;
+const onboardingValidations = new Map();
 const MAX_AUTO_RECREATE = 3; // stop self-healing after this many crashes in a row — a persistent
                               // crash-on-load bug must surface as a visible failure, not a silent loop
 
@@ -101,7 +102,10 @@ function createMainWindow() {
   });
 
   if (isFirstRun()) {
-    mainWindow.loadFile(path.join(__dirname, 'renderer', 'wizard.html'));
+    // One-release escape hatch while the unified browser-rendered flow rolls
+    // out. It is explicit; the default first-run experience is shared setup.
+    if (process.env.MERIDIANOS_LEGACY_SETUP === '1') mainWindow.loadFile(path.join(__dirname, 'renderer', 'wizard.html'));
+    else mainWindow.loadURL(`http://localhost:${PORT}/app/setup`);
   } else {
     mainWindow.loadURL(`http://localhost:${PORT}`); // T035: existing dashboard, loaded as-is
   }
@@ -163,6 +167,49 @@ function setupIpc() {
     return { ...result, healthy };
   });
 
+  ipcMain.handle('onboarding:validate-credential', async (_event, { providerId, credential }) => {
+    if (typeof providerId !== 'string' || !ACCOUNTS_SAFE(providerId) || !validOnboardingCredential(credential)) return { ok: false, code: 'provider_credential_required' };
+    try {
+      const { resolveProvider } = await import(path.join(REPO_ROOT, 'providers.mjs'));
+      const { testProviderConnection, toSafeProviderValidationResult } = await import(path.join(REPO_ROOT, 'provider-conformance.mjs'));
+      const provider = resolveProvider(providerId, {}, { repoRoot: REPO_ROOT });
+      const result = toSafeProviderValidationResult(await testProviderConnection(provider, credential), providerId);
+      if (result.status === 'valid') onboardingValidations.set(providerId, Date.now() + 10 * 60_000);
+      return { ok: true, result: { ...result, testedAt: new Date().toISOString() } };
+    } catch { return { ok: false, code: 'provider_validation_unavailable' }; }
+  });
+
+  ipcMain.handle('onboarding:store-credential', async (_event, { providerId, credential }) => {
+    if (typeof providerId !== 'string' || !ACCOUNTS_SAFE(providerId) || !validOnboardingCredential(credential)) return { ok: false, code: 'provider_credential_required' };
+    const keytar = require('keytar');
+    const { getApiKey, setApiKey, ACCOUNTS } = await import(path.join(__dirname, 'keychain.mjs'));
+    const existing = await getApiKey({ keytar, account: ACCOUNTS[providerId] });
+    if (!existing.ok) return { ok: false, code: 'secure_storage_unavailable' };
+    if (existing.value) return { ok: false, code: 'secure_storage_existing' };
+    const result = await setApiKey({ keytar, account: ACCOUNTS[providerId], value: credential });
+    return result.ok ? { ok: true } : { ok: false, code: 'secure_storage_unavailable' };
+  });
+
+  ipcMain.handle('onboarding:commit-setup', async (_event, { draft }) => {
+    try {
+      const providerId = draft?.provider?.id;
+      if (!ACCOUNTS_SAFE(providerId) || onboardingValidations.get(providerId) < Date.now()) return { ok: false, code: 'provider_validation_required' };
+      const keytar = require('keytar');
+      const { getApiKey, ACCOUNTS } = await import(path.join(__dirname, 'keychain.mjs'));
+      const stored = await getApiKey({ keytar, account: ACCOUNTS[providerId] });
+      if (!stored.ok || !stored.value) return { ok: false, code: 'secure_storage_unavailable' };
+      const { resolveProvider } = await import(path.join(REPO_ROOT, 'providers.mjs'));
+      const { commitOnboardingSetup } = await import(path.join(REPO_ROOT, 'setup-wizard-core.mjs'));
+      const provider = resolveProvider(providerId, {}, { repoRoot: REPO_ROOT });
+      // Electron credentials are already in OS storage. The setup core writes
+      // only policy/tenant configuration in keychain mode; it never creates a
+      // transient `.env` copy of this value.
+      const outcome = commitOnboardingSetup({ draft, provider, repoRoot: REPO_ROOT, credentialStore: 'keychain' });
+      onboardingValidations.delete(providerId);
+      return { ok: true, outcome: 'committed', ...outcome, checklist: { firstTaskTarget: '/?workspace=admin', firstRunTarget: null } };
+    } catch { return { ok: false, code: 'onboarding_commit_rejected' }; }
+  });
+
   ipcMain.handle('dashboard:open-external', (_event, url) => shell.openExternal(url));
 }
 
@@ -186,11 +233,19 @@ async function checkForUpdates() {
 
 app.whenReady().then(async () => {
   createTray();
-  createMainWindow();
   setupIpc();
-  if (!isFirstRun()) await startDaemon();
+  await startDaemon();
+  createMainWindow();
   checkForUpdates();
 });
+
+function ACCOUNTS_SAFE(providerId) {
+  return providerId === 'anthropic' || providerId === 'deepseek';
+}
+
+function validOnboardingCredential(value) {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 4096;
+}
 
 app.on('window-all-closed', async () => {
   await stopDaemon(); // T032: daemon stops when the window closes

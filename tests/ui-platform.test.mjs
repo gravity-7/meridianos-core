@@ -4,9 +4,10 @@ import { readFileSync } from 'node:fs';
 import { resolvePlatformRoute, PLATFORM_ROUTES, platformBoundary } from '../dashboard/ui-platform.mjs';
 
 test('platform route inventory covers direct, recovery, and history destinations', () => {
-  assert.deepEqual(Object.keys(PLATFORM_ROUTES), ['/app', '/app/foundation']);
+  assert.deepEqual(Object.keys(PLATFORM_ROUTES), ['/app', '/app/foundation', '/app/setup', '/app/setup/complete']);
   assert.equal(resolvePlatformRoute('/app').id, 'overview');
   assert.equal(resolvePlatformRoute('/app/foundation').id, 'foundation');
+  assert.equal(resolvePlatformRoute('/app/setup').id, 'setup');
   assert.equal(resolvePlatformRoute('/app/unknown'), null);
 });
 

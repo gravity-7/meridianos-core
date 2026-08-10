@@ -10,6 +10,7 @@ isn't working see [`troubleshooting-multi-tenant.md`](troubleshooting-multi-tena
 ## Contents
 
 - [Getting started](#getting-started)
+- [Unified first-run setup](#unified-first-run-setup)
 - [Managing projects](#managing-projects)
 - [Project templates](#project-templates)
 - [Accounts, roles, and authentication](#accounts-roles-and-authentication)
@@ -27,6 +28,34 @@ The Dashboard is the control surface for everything below. By default it binds t
 `127.0.0.1` (loopback only); for remote access, configure HTTPS and authentication first — see
 the **Accounts, roles, and authentication** section and `troubleshooting-multi-tenant.md` for TLS
 setup. Every `/api/*` request requires a Bearer JWT (from logging in) or an API key.
+
+## Unified first-run setup
+
+Open `/app/setup` for a guided first-run configuration. The stepper records only the installation
+name, agent roster, chosen provider, budget, and a sanitized validation outcome, so it can resume
+after a refresh without retaining a provider credential. A refresh or Back to the provider step
+always requires entering the credential again.
+
+The browser sends a credential only to the local, authenticated provider-validation/final-commit
+boundary. It is never placed in browser storage, a URL, the review, telemetry, or an error. On an
+explicit successful browser commit MeridianOS writes the environment secret file with restrictive
+permissions where the host supports them. The review names files and settings but never displays
+their secret contents.
+
+If validation is invalid, unreachable, or timed out, correct the credential/network issue and
+retry; the non-secret choices remain available. If storage is unavailable, complete the current
+session normally but do not expect resume after closing the browser. An existing `.ai` setup or
+`.env` is never overwritten: `/app/setup` displays a recovery state and the existing Dashboard
+and legacy `/setup` remain available during the compatibility release.
+
+The Electron application renders the same `/app/setup` steps. Its credential crosses only the
+context-isolated onboarding bridge into the OS keychain; Electron never writes a `.env` fallback.
+If the keychain is locked or unavailable, unlock/configure it and retry—do not copy the secret into
+the browser draft. The previous Electron wizard remains available for one release by starting the
+desktop app with `MERIDIANOS_LEGACY_SETUP=1`.
+
+After commit, `/app/setup/complete` provides a stable handoff to the existing task workspace. The
+run link is intentionally unavailable until that first task has created a run.
 
 ## Managing projects
 

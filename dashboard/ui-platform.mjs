@@ -2,6 +2,14 @@
 export const PLATFORM_ROUTES = Object.freeze({
   '/app': { id: 'overview', label: 'Overview', title: 'Application overview', text: 'The stable MeridianOS application foundation is ready.' },
   '/app/foundation': { id: 'foundation', label: 'Foundation', title: 'Platform foundation', text: 'Shared tokens, accessible primitives, typed boundaries, and action-state conventions belong here.' },
+  '/app/setup': { id: 'setup', label: 'Setup', title: 'Set up MeridianOS', text: 'Connect a provider, set a budget, and start your first run.' },
+  '/app/setup/complete': { id: 'setup-complete', label: 'Setup complete', title: 'Your setup is complete', text: 'Continue with your first task and run.' },
+});
+
+/** Preserved legacy targets used by onboarding until Operations is migrated. */
+export const ONBOARDING_COMPATIBILITY_TARGETS = Object.freeze({
+  firstTaskTarget: '/?workspace=admin',
+  firstRunTarget: null,
 });
 
 export const DEFAULT_UI_PLATFORM_POLICY = Object.freeze({
