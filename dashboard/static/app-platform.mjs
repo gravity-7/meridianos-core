@@ -2,13 +2,29 @@ const routes = {
   '/app': { title: 'Application overview', text: 'The stable MeridianOS application foundation is ready.' },
   '/app/foundation': { title: 'Platform foundation', text: 'Shared tokens, accessible primitives, typed boundaries, and action-state conventions belong here.' },
 };
-const key = 'meridianos-ui-theme';
+const themeKey = 'meridianos-ui-theme';
 const app = document.querySelector('#app');
 const themeButton = document.querySelector('#theme');
+const make = (tag, text) => Object.assign(document.createElement(tag), text == null ? {} : { textContent: text });
 function applyTheme(theme) { document.documentElement.dataset.theme = theme; themeButton.textContent = `Theme: ${theme}`; }
-function currentTheme() { return localStorage.getItem(key) || 'system'; }
-function render() { const route = routes[location.pathname]; const view = route || { title: 'Page not found', text: 'This application route is not available. Return to the application overview.' }; app.replaceChildren(Object.assign(document.createElement('section'), { className: 'card', innerHTML: `<h1>${view.title}</h1><p>${view.text}</p>${route ? '' : '<p><a href="/app">Go to overview</a></p>'}`)); }
+function currentTheme() { return localStorage.getItem(themeKey) || 'system'; }
+function actionState() { return new URLSearchParams(location.search).get('state') || 'content'; }
+function status(state) {
+  const messages = { loading: 'Loading application information…', empty: 'There is nothing to show yet.', error: 'Unable to load this information.' };
+  if (!messages[state]) return null;
+  const panel = make('section'); panel.className = 'status'; panel.dataset.state = state; panel.setAttribute('role', state === 'error' ? 'alert' : 'status');
+  panel.append(make('h2', state[0].toUpperCase() + state.slice(1)), make('p', messages[state]));
+  if (state === 'error') { const retry = make('button', 'Try again'); retry.type = 'button'; retry.addEventListener('click', () => { history.replaceState({}, '', location.pathname); render(); }); panel.append(retry); }
+  return panel;
+}
+function render() {
+  const route = routes[location.pathname];
+  const view = route || { title: 'Page not found', text: 'This application route is not available. Return to the application overview.' };
+  const card = make('section'); card.className = 'card'; card.append(make('h1', view.title), make('p', view.text));
+  if (!route) { const link = make('a', 'Go to overview'); link.href = '/app'; card.append(link); }
+  app.replaceChildren(card); const state = status(actionState()); if (state) app.append(state);
+}
 document.addEventListener('click', (event) => { const link = event.target.closest('a[href^="/app"]'); if (!link || event.metaKey || event.ctrlKey) return; event.preventDefault(); history.pushState({}, '', link.href); render(); });
 addEventListener('popstate', render);
-themeButton.addEventListener('click', () => { const order=['system','light','dark']; const next=order[(order.indexOf(currentTheme())+1)%order.length]; localStorage.setItem(key,next); applyTheme(next); });
+themeButton.addEventListener('click', () => { const order=['system','light','dark']; const next=order[(order.indexOf(currentTheme())+1)%order.length]; localStorage.setItem(themeKey,next); applyTheme(next); });
 applyTheme(currentTheme()); render();

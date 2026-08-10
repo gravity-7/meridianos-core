@@ -29,4 +29,7 @@ test('browser shell evidence declares keyboard, theme, history, and responsive f
   assert.match(client, /history\.pushState/);
   assert.match(client, /addEventListener\('popstate'/);
   assert.match(client, /localStorage/);
+  assert.match(client, /loading: 'Loading application information/);
+  assert.match(client, /role', state === 'error' \? 'alert' : 'status'/);
+  assert.match(client, /Try again/);
 });
