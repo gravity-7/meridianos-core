@@ -113,6 +113,8 @@ function buildReviewPrompt({ prNumber, specDir, worktreePath, base, head, contex
 
 You are a strictly READ-ONLY reviewer. Do not edit files, create files, commit, push, merge, change branches, install packages, or run mutating commands. You must review the complete detached checkout at \`${worktreePath}\` and every approved Spec Kit artifact below; do not rely on a truncated summary.
 
+This headless review has no terminal-command permission. Do not attempt any shell or terminal command, including read-only commands. Use only the declared \`read_file\`, \`file_search\`, and \`grep_search\` tools to inspect the detached checkout, full context, and artifacts.
+
 Review context (full, untruncated PR diff and artifacts): \`${contextPath}\`
 Approved spec directory in checkout: \`${join(worktreePath, specDir)}\`
 Reviewer instructions: \`${join(worktreePath, ".github/skills/meridianos-review-antigravity/instructions.md")}\`
@@ -144,17 +146,22 @@ export function parseVerdict(output) {
   return { verdict };
 }
 
+function blockedReviewOutput(reason, diagnostics = "") {
+  const safeDiagnostics = String(diagnostics).replace(/^#{1,6}\s+Verdict:/gmi, "### Reviewer-reported verdict:");
+  return `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: ${reason}${safeDiagnostics ? `\n\nReviewer diagnostics:\n${safeDiagnostics}` : ""}`;
+}
+
 export function runAntigravity(prompt, { cwd, timeoutMs = 30 * 60 * 1000 }, deps) {
   return new Promise((resolveResult) => {
     let settled = false;
-    const child = deps.spawn("agy", ["--print", prompt, "--output-format", "text"], { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = deps.spawn("agy", ["--print", prompt, "--output-format", "text", "--mode", "plan", "--sandbox"], { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
         child.kill();
-        resolveResult({ verdict: "ERROR", output: `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: review timed out after ${timeoutMs}ms.`, error: "timeout" });
+        resolveResult({ verdict: "ERROR", output: blockedReviewOutput(`review timed out after ${timeoutMs}ms.`), error: "timeout" });
       }
     }, timeoutMs);
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -163,15 +170,20 @@ export function runAntigravity(prompt, { cwd, timeoutMs = 30 * 60 * 1000 }, deps
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolveResult({ verdict: "ERROR", output: `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: reviewer could not start.`, error: error.message });
+      resolveResult({ verdict: "ERROR", output: blockedReviewOutput("reviewer could not start.", error.message), error: error.message });
     });
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       const output = `${stdout}${stderr ? `\n\nSTDERR:\n${stderr}` : ""}`;
-      const parsed = code === 0 ? parseVerdict(output) : { verdict: "ERROR", error: stderr || `reviewer exited ${code}` };
-      resolveResult({ verdict: parsed.verdict, output, error: parsed.error });
+      if (code !== 0) {
+        const error = stderr || `reviewer exited ${code}`;
+        return resolveResult({ verdict: "ERROR", output: blockedReviewOutput(error, output), error });
+      }
+      const parsed = parseVerdict(output);
+      if (parsed.error) return resolveResult({ verdict: "ERROR", output: blockedReviewOutput(parsed.error, output), error: parsed.error });
+      resolveResult({ verdict: parsed.verdict, output });
     });
   });
 }

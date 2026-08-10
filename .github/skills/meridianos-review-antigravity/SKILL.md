@@ -9,6 +9,7 @@ tools: [read_file, grep_search, file_search]
 allowed_actions:
   - Read the detached PR checkout and complete review context
   - Read all approved artifacts in the selected specs directory
+  - Use only read_file, file_search, and grep_search; never invoke a shell or terminal command
   - Return a review verdict for the dispatcher to post
 forbidden_actions:
   - Modify any source code or review artifact
