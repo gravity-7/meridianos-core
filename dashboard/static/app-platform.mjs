@@ -13,7 +13,7 @@ function applyTheme(theme) { document.documentElement.dataset.theme = theme; the
 function currentTheme() { return localStorage.getItem(themeKey) || 'system'; }
 function actionState() { return new URLSearchParams(location.search).get('state') || 'content'; }
 function status(state) {
-  const messages = { loading: 'Loading application information…', empty: 'There is nothing to show yet.', error: 'Unable to load this information.' };
+  const messages = { idle: 'Ready when you are.', pending: 'Your action is in progress…', disabled: 'This action is currently unavailable.', success: 'Your action completed successfully.', loading: 'Loading application information…', empty: 'There is nothing to show yet.', error: 'Unable to load this information.' };
   if (!messages[state]) return null;
   const panel = make('section'); panel.className = 'status'; panel.dataset.state = state; panel.setAttribute('role', state === 'error' ? 'alert' : 'status');
   panel.append(make('h2', state[0].toUpperCase() + state.slice(1)), make('p', messages[state]));
@@ -26,7 +26,8 @@ function renderBoundary(view) {
   const detail = make('p', `${view.data.activeRuns} active runs · ${view.data.queuedTasks} queued tasks`); detail.className = 'status'; return detail;
 }
 async function render() {
-  const route = routes[location.pathname];
+  const pathname = location.pathname.length > 1 ? location.pathname.replace(/\/+$/, '') : location.pathname;
+  const route = routes[pathname];
   const view = route || { title: 'Page not found', text: 'This application route is not available. Return to the application overview.' };
   const card = make('section'); card.className = 'card'; card.append(make('h1', view.title), make('p', view.text));
   if (!route) { const link = make('a', 'Go to overview'); link.href = '/app'; card.append(link); }

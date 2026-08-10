@@ -24,7 +24,7 @@ export function evaluateUiPlatformEligibility(policy, { subjectId = null } = {})
   };
   if (!enabled) return { enabled: false, eligible: false, decision: 'legacy', reason: 'disabled', audit };
   if (eligibility.mode === 'allowlist') {
-    const eligible = typeof subjectId === 'string' && eligibility.subjects.includes(subjectId);
+    const eligible = typeof subjectId === 'string' && Array.isArray(eligibility.subjects) && eligibility.subjects.includes(subjectId);
     return { enabled: true, eligible, decision: eligible ? 'platform' : 'legacy', reason: eligible ? 'allowlisted' : 'not_allowlisted', audit };
   }
   return { enabled: true, eligible: true, decision: 'platform', reason: 'all_users', audit };
