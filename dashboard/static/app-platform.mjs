@@ -13,16 +13,20 @@ function applyTheme(theme) { document.documentElement.dataset.theme = theme; the
 function currentTheme() { return localStorage.getItem(themeKey) || 'system'; }
 function actionState() { return new URLSearchParams(location.search).get('state') || 'content'; }
 function status(state) {
-  const messages = { idle: 'Ready when you are.', pending: 'Your action is in progress…', disabled: 'This action is currently unavailable.', success: 'Your action completed successfully.', loading: 'Loading application information…', empty: 'There is nothing to show yet.', error: 'Unable to load this information.' };
+  const messages = { idle: 'Ready when you are.', pending: 'Your action is in progress…', disabled: 'This action is currently unavailable.', success: 'Your action completed successfully.', loading: 'Loading application information…', empty: 'There is nothing to show yet.', error: 'Unable to load this information.', fatal: 'This action cannot be completed. Check your access or contact an administrator.' };
   if (!messages[state]) return null;
-  const panel = make('section'); panel.className = 'status'; panel.dataset.state = state; panel.setAttribute('role', state === 'error' ? 'alert' : 'status');
+  const panel = make('section'); panel.className = 'status'; panel.dataset.state = state; panel.setAttribute('role', state === 'error' || state === 'fatal' ? 'alert' : 'status');
   panel.append(make('h2', state[0].toUpperCase() + state.slice(1)), make('p', messages[state]));
   if (state === 'error') { const retry = actionButton('Try again', { onClick: () => { history.replaceState({}, '', location.pathname); render(); } }); panel.append(retry); }
   return panel;
 }
 function renderBoundary(view) {
   if (view.state === 'empty') return emptyState('No application activity', view.message);
-  if (view.state === 'error') return feedback(view.message, { error: true });
+  if (view.state === 'error') {
+    const region = feedback(view.message, { error: true }); region.dataset.recoverable = String(view.recoverable === true);
+    if (view.recoverable) region.append(actionButton('Try again', { onClick: render }));
+    return region;
+  }
   const detail = make('p', `${view.data.activeRuns} active runs · ${view.data.queuedTasks} queued tasks`); detail.className = 'status'; return detail;
 }
 async function render() {

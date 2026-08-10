@@ -33,7 +33,10 @@ test('browser shell evidence declares keyboard, theme, history, and responsive f
   assert.match(client, /addEventListener\('popstate'/);
   assert.match(client, /localStorage/);
   assert.match(client, /loading: 'Loading application information/);
-  assert.match(client, /role', state === 'error' \? 'alert' : 'status'/);
+  assert.match(client, /state === 'error' \|\| state === 'fatal' \? 'alert' : 'status'/);
+  assert.match(client, /fatal: 'This action cannot be completed/);
+  assert.match(client, /region\.dataset\.recoverable/);
+  assert.match(client, /if \(view\.recoverable\) region\.append\(actionButton\('Try again'/);
   assert.match(client, /Try again/);
 });
 

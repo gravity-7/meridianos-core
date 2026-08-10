@@ -16,7 +16,7 @@ export function labeledInput(labelText, { id, type = 'text', value = '' } = {}) 
 }
 
 export function feedback(message, { error = false } = {}) {
-  const region = node('p', message); region.className = 'feedback';
+  const region = node('section', message); region.className = 'feedback';
   region.setAttribute('role', error ? 'alert' : 'status'); region.setAttribute('aria-live', error ? 'assertive' : 'polite');
   return region;
 }

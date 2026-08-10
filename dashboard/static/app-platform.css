@@ -50,6 +50,7 @@ main { max-width: 70rem; margin: auto; padding: 2rem; }
 .status[data-state=empty], .empty-state { border-color: var(--muted); }
 .status[data-state=loading] { border-color: #b7791f; }
 .status button { margin-top: .75rem; }
+.feedback button { margin-top: .75rem; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 @media (prefers-color-scheme: dark) {

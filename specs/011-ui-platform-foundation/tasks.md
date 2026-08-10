@@ -37,3 +37,8 @@
 ## Dependency Order
 
 `T001 → T005 → T008 → T013 → T015–T020`; T006/T007/T009 may proceed after T003; T011 precedes T012–T014; T015–T019 require their underlying route/primitives/boundary work.
+
+## Phase 5: Convergence
+
+- [x] T021 Prove browser Back and Forward restore the corresponding registered platform route. [FR-002, FR-016] (partial)
+- [x] T022 Distinguish recoverable and non-recoverable application errors, including a retry action only for recoverable failures. [FR-011, FR-012] (partial)
