@@ -99,6 +99,50 @@ test('GET /app falls back to the legacy dashboard while the platform flag is dis
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
+test('platform rollout leaves representative legacy and public API contracts unchanged', async () => {
+  const request = (server, path) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: server.address().port, path }, (res) => {
+      let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve({ status: res.statusCode, type: res.headers['content-type'], body }));
+    }); req.on('error', reject); req.end();
+  });
+  const start = async (enabled) => {
+    const root = mkdtempSync(join(tmpdir(), 'srv-platform-contract-'));
+    mkdirSync(join(root, '.ai'), { recursive: true });
+    writeFileSync(join(root, '.ai', 'policy.yaml'), `${SAMPLE}ui_platform:\n  enabled: ${enabled}\n`);
+    const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root }));
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return server;
+  };
+  const legacy = await start(false); const platform = await start(true);
+  try {
+    const [legacyIndex, platformIndex, legacyStatus, platformStatus] = await Promise.all([
+      request(legacy, '/'), request(platform, '/'), request(legacy, '/api/status'), request(platform, '/api/status'),
+    ]);
+    assert.equal(legacyIndex.status, 200); assert.equal(platformIndex.status, 200);
+    assert.match(legacyIndex.body, /MeridianOS/); assert.match(platformIndex.body, /MeridianOS/);
+    assert.deepEqual([legacyStatus.status, legacyStatus.type], [platformStatus.status, platformStatus.type]);
+    assert.deepEqual(Object.keys(JSON.parse(legacyStatus.body)).sort(), Object.keys(JSON.parse(platformStatus.body)).sort());
+  } finally { await Promise.all([legacy, platform].map((server) => new Promise((resolve) => server.close(resolve)))); }
+});
+
+test('disabling the policy flag rolls an active platform route back to legacy without restart', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'srv-platform-rollback-'));
+  mkdirSync(join(root, '.ai'), { recursive: true });
+  const policyPath = join(root, '.ai', 'policy.yaml');
+  writeFileSync(policyPath, `${SAMPLE}ui_platform:\n  enabled: true\n`);
+  const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const appRequest = () => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app' }, (res) => resolve({ status: res.statusCode, location: res.headers.location }));
+    req.on('error', reject); req.end();
+  });
+  try {
+    assert.equal((await appRequest()).status, 200);
+    writeFileSync(policyPath, `${SAMPLE}ui_platform:\n  enabled: false\n`);
+    assert.deepEqual(await appRequest(), { status: 302, location: '/' });
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
 // Regression: statusCache was referenced (read + reassigned) throughout this file without ever
 // being declared, so GET /api/status — the dashboard's main polling endpoint — threw 500 on every
 // call in a real running server (only caught while adding /api/config/backups, since no prior test
