@@ -5,8 +5,8 @@
  */
 
 export function statusViewFromResponse({ status = 200, body, error } = {}) {
-  if (error || status >= 400) return { state: 'error', message: 'Unable to load application status. Try again.', recoverable: true };
   if (status === 401 || status === 403) return { state: 'error', message: 'You do not have access to application status.', recoverable: false };
+  if (error || status >= 400) return { state: 'error', message: 'Unable to load application status. Try again.', recoverable: true };
   if (!body || typeof body !== 'object') return { state: 'error', message: 'Application status was unavailable.', recoverable: true };
   const activeRuns = Array.isArray(body.runs) ? body.runs.length : 0;
   const queuedTasks = Array.isArray(body.queue) ? body.queue.length : 0;
