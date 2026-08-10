@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validatePolicy, applyDottedUpdates } from '../policy-validate.mjs';
+import { evaluateUiPlatformEligibility } from '../dashboard/ui-platform.mjs';
 
 const base = () => ({
   agent_budget: { warn_pct: 90, per_task_tokens: 300000, attribution: 'agent_only' },
@@ -51,4 +52,28 @@ test('applyDottedUpdates merges onto a clone without mutating the source', () =>
   assert.equal(merged.work.wip_per_agent, 9);
   assert.equal(merged.schedule.cadence, 'hourly');
   assert.equal(p.work.wip_per_agent, 2); // original untouched
+});
+
+test('UI platform defaults safely to legacy and records an auditable rollout decision', () => {
+  assert.deepEqual(evaluateUiPlatformEligibility({}), {
+    enabled: false, eligible: false, decision: 'legacy', reason: 'disabled',
+    audit: { policyPath: 'ui_platform', rolloutId: null, subjectId: null },
+  });
+  assert.deepEqual(evaluateUiPlatformEligibility({ ui_platform: { enabled: true, rollout_id: 'ui-011', eligibility: { mode: 'allowlist', subjects: ['operator-1'] } } }, { subjectId: 'operator-1' }), {
+    enabled: true, eligible: true, decision: 'platform', reason: 'allowlisted',
+    audit: { policyPath: 'ui_platform', rolloutId: 'ui-011', subjectId: 'operator-1' },
+  });
+  assert.equal(evaluateUiPlatformEligibility({ ui_platform: { enabled: true, eligibility: { mode: 'allowlist', subjects: ['operator-1'] } } }).decision, 'legacy');
+});
+
+test('UI platform policy rejects malformed flags and unsafe allowlists', () => {
+  for (const ui_platform of [
+    { enabled: 'true' },
+    { enabled: true, eligibility: { mode: 'cohort' } },
+    { enabled: true, eligibility: { mode: 'allowlist', subjects: [] } },
+  ]) {
+    const result = validatePolicy({ ...base(), ui_platform });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('; '), /ui_platform/);
+  }
 });

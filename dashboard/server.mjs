@@ -51,7 +51,7 @@ import { metricsMiddleware, startMetricsCollection, createMetricsEndpoint, toPro
 import { createRotatingLogger } from '../daemon-logger.mjs';
 import { handleApiV1 } from '../api/v1/router.mjs';
 import { sendError, Errors } from './errors.mjs';
-import { isUiPlatformEnabled } from './ui-platform.mjs';
+import { evaluateUiPlatformEligibility } from './ui-platform.mjs';
 
 // Import ProjectManager for multi-tenant project management
 let _projectManager = null;
@@ -411,9 +411,9 @@ export function createDashboardServer(config) {
         return send(res, 200, html, 'text/html; charset=utf-8');
       }
       if (req.method === 'GET' && (url.pathname === '/app' || url.pathname.startsWith('/app/'))) {
-        let enabled = false;
-        try { enabled = isUiPlatformEnabled(loadPolicy(undefined, config)); } catch { /* missing policy stays safely legacy */ }
-        if (!enabled) {
+        let eligibility = { eligible: false };
+        try { eligibility = evaluateUiPlatformEligibility(loadPolicy(undefined, config)); } catch { /* missing policy stays safely legacy */ }
+        if (!eligibility.eligible) {
           res.writeHead(302, { location: '/', 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
           return res.end();
         }

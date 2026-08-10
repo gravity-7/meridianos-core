@@ -1,3 +1,6 @@
+import { readApplicationStatus } from './app-boundary.mjs';
+import { actionButton, emptyState, feedback } from './ui-primitives.mjs';
+
 const routes = {
   '/app': { title: 'Application overview', text: 'The stable MeridianOS application foundation is ready.' },
   '/app/foundation': { title: 'Platform foundation', text: 'Shared tokens, accessible primitives, typed boundaries, and action-state conventions belong here.' },
@@ -14,15 +17,25 @@ function status(state) {
   if (!messages[state]) return null;
   const panel = make('section'); panel.className = 'status'; panel.dataset.state = state; panel.setAttribute('role', state === 'error' ? 'alert' : 'status');
   panel.append(make('h2', state[0].toUpperCase() + state.slice(1)), make('p', messages[state]));
-  if (state === 'error') { const retry = make('button', 'Try again'); retry.type = 'button'; retry.addEventListener('click', () => { history.replaceState({}, '', location.pathname); render(); }); panel.append(retry); }
+  if (state === 'error') { const retry = actionButton('Try again', { onClick: () => { history.replaceState({}, '', location.pathname); render(); } }); panel.append(retry); }
   return panel;
 }
-function render() {
+function renderBoundary(view) {
+  if (view.state === 'empty') return emptyState('No application activity', view.message);
+  if (view.state === 'error') return feedback(view.message, { error: true });
+  const detail = make('p', `${view.data.activeRuns} active runs · ${view.data.queuedTasks} queued tasks`); detail.className = 'status'; return detail;
+}
+async function render() {
   const route = routes[location.pathname];
   const view = route || { title: 'Page not found', text: 'This application route is not available. Return to the application overview.' };
   const card = make('section'); card.className = 'card'; card.append(make('h1', view.title), make('p', view.text));
   if (!route) { const link = make('a', 'Go to overview'); link.href = '/app'; card.append(link); }
-  app.replaceChildren(card); const state = status(actionState()); if (state) app.append(state);
+  app.replaceChildren(card); const forcedState = status(actionState());
+  if (forcedState) return app.append(forcedState);
+  const loading = status('loading'); app.append(loading);
+  const requestedPath = location.pathname;
+  const view = await readApplicationStatus();
+  if (location.pathname === requestedPath) app.replaceChildren(card, renderBoundary(view));
 }
 document.addEventListener('click', (event) => { const link = event.target.closest('a[href^="/app"]'); if (!link || event.metaKey || event.ctrlKey) return; event.preventDefault(); history.pushState({}, '', link.href); render(); });
 addEventListener('popstate', render);

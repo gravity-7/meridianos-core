@@ -33,3 +33,13 @@ test('browser shell evidence declares keyboard, theme, history, and responsive f
   assert.match(client, /role', state === 'error' \? 'alert' : 'status'/);
   assert.match(client, /Try again/);
 });
+
+test('accessible primitive source covers actions, inputs, feedback, overlays, and empty states', () => {
+  const source = readFileSync(new URL('../dashboard/static/ui-primitives.mjs', import.meta.url), 'utf8');
+  assert.match(source, /button\.disabled = disabled \|\| pending/);
+  assert.match(source, /label\.htmlFor = id/);
+  assert.match(source, /role', error \? 'alert' : 'status'/);
+  assert.match(source, /document\.createElement\('dialog'\)/);
+  assert.match(source, /event\.key === 'Escape'/);
+  assert.match(source, /empty-state/);
+});

@@ -9,6 +9,7 @@ import { parseYaml } from '../yaml-lite.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
 import { isUiPlatformEnabled, platformBoundary, resolvePlatformRoute } from '../dashboard/ui-platform.mjs';
+import { UI_PLATFORM_API_CONTRACT_FIXTURES } from './fixtures/ui-platform-api-contracts.mjs';
 
 const config = resolvePaths({ domain: FIXTURE_DOMAIN });
 
@@ -122,6 +123,31 @@ test('platform rollout leaves representative legacy and public API contracts unc
     assert.match(legacyIndex.body, /MeridianOS/); assert.match(platformIndex.body, /MeridianOS/);
     assert.deepEqual([legacyStatus.status, legacyStatus.type], [platformStatus.status, platformStatus.type]);
     assert.deepEqual(Object.keys(JSON.parse(legacyStatus.body)).sort(), Object.keys(JSON.parse(platformStatus.body)).sort());
+  } finally { await Promise.all([legacy, platform].map((server) => new Promise((resolve) => server.close(resolve)))); }
+});
+
+test('platform rollout leaves representative public v1 contract fixtures unchanged', async () => {
+  const request = (server, fixture) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: server.address().port, path: fixture.path, method: fixture.method }, (res) => {
+      let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve({ status: res.statusCode, type: res.headers['content-type'], body }));
+    }); req.on('error', reject); req.end();
+  });
+  const start = async (enabled) => {
+    const root = mkdtempSync(join(tmpdir(), 'srv-platform-v1-contract-'));
+    mkdirSync(join(root, '.ai'), { recursive: true });
+    writeFileSync(join(root, '.ai', 'policy.yaml'), `${SAMPLE}ui_platform:\n  enabled: ${enabled}\n`);
+    const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root }));
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return server;
+  };
+  const legacy = await start(false); const platform = await start(true);
+  try {
+    for (const fixture of [UI_PLATFORM_API_CONTRACT_FIXTURES.publicSpecification, UI_PLATFORM_API_CONTRACT_FIXTURES.protectedTasks]) {
+      const [before, after] = await Promise.all([request(legacy, fixture), request(platform, fixture)]);
+      assert.equal(after.status, fixture.status);
+      assert.deepEqual([after.status, after.type, after.body], [before.status, before.type, before.body]);
+    }
+    assert.match((await request(platform, UI_PLATFORM_API_CONTRACT_FIXTURES.publicSpecification)).body, /openapi:/);
   } finally { await Promise.all([legacy, platform].map((server) => new Promise((resolve) => server.close(resolve)))); }
 });
 
