@@ -1,0 +1,12 @@
+# The repository manages its own PR labels and mandatory external review dispatch.
+pr_base_branch: "main"
+
+labels:
+  enabled: false
+
+phases:
+  file_threshold: 20
+
+triage:
+  split_threshold: 100
+  loop_interval: "5m"

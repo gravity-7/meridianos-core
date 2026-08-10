@@ -8,6 +8,14 @@ MeridianOS has two plugin contracts:
   protocol. Built into core (`gateway/wire-adapters/`), not community-installable today; documented
   briefly at the end for completeness.
 
+**Current limitation, read before you build one**: installing, configuring, and test-connecting an
+IntakeSource plugin from the dashboard's Marketplace panel all work end-to-end today. Automatically
+pulling tasks from it into the board does not — nothing in production currently calls a plugin's
+`fetchTasks()` on any schedule. Azure DevOps sync (`azure-devops-source.mjs`, built into core, not
+a marketplace plugin) is the only source actually wired into the scheduler's automatic loop right
+now. Build and test your plugin against the contract below; just don't expect tasks to appear on
+the board without a manual trigger until this is wired up.
+
 ## Quick start
 
 ```bash

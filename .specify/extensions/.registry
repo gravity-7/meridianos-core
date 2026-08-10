@@ -14,6 +14,131 @@
       },
       "registered_skills": [],
       "installed_at": "2026-07-27T16:54:39.434111+00:00"
+    },
+    "spex": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:f966d136990f1e5ba99729fde6246917dd7efbc7029de084cae57d18e9aa1a91",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "codex": [
+          "speckit.spex.brainstorm",
+          "speckit.spex.ship",
+          "speckit.spex.help",
+          "speckit.spex.evolve",
+          "speckit.spex.spec-refactoring",
+          "speckit.spex.using-superpowers",
+          "speckit.spex.spec-kit",
+          "speckit.spex.extensions",
+          "speckit.spex.submit",
+          "speckit.spex.finish",
+          "speckit.spex.flow-state",
+          "speckit.spex.smoke-test",
+          "speckit.spex.clear"
+        ],
+        "copilot": [
+          "speckit.spex.brainstorm",
+          "speckit.spex.ship",
+          "speckit.spex.help",
+          "speckit.spex.evolve",
+          "speckit.spex.spec-refactoring",
+          "speckit.spex.using-superpowers",
+          "speckit.spex.spec-kit",
+          "speckit.spex.extensions",
+          "speckit.spex.submit",
+          "speckit.spex.finish",
+          "speckit.spex.flow-state",
+          "speckit.spex.smoke-test",
+          "speckit.spex.clear"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-08T05:52:01.459084+00:00"
+    },
+    "spex-gates": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:0c5fd54c03047f6222be9190e06dbea088f41d6d133ca9969e48e655de682511",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "codex": [
+          "speckit.spex-gates.review-spec",
+          "speckit.spex-gates.review-plan",
+          "speckit.spex-gates.review-code",
+          "speckit.spex-gates.verify",
+          "speckit.spex-gates.stamp"
+        ],
+        "copilot": [
+          "speckit.spex-gates.review-spec",
+          "speckit.spex-gates.review-plan",
+          "speckit.spex-gates.review-code",
+          "speckit.spex-gates.verify",
+          "speckit.spex-gates.stamp"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-08T05:52:02.271072+00:00"
+    },
+    "spex-worktrees": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:85d1b5425bb12c60de1b268403c9339f7ac84b5ab69f136563929f5720bc208f",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "codex": [
+          "speckit.spex-worktrees.manage"
+        ],
+        "copilot": [
+          "speckit.spex-worktrees.manage"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-08T05:52:02.985718+00:00"
+    },
+    "spex-deep-review": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:4aff8373799618b90797c33b62f835e7011f154f46b81067cdb587449a473f69",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "codex": [
+          "speckit.spex-deep-review.run"
+        ],
+        "copilot": [
+          "speckit.spex-deep-review.run"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-08T05:52:03.706697+00:00"
+    },
+    "spex-collab": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:3b72c093c7257775b05953930ad8f9ecba05c78f11f1803cb255500b0cdb2c37",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "codex": [
+          "speckit.spex-collab.reviewers",
+          "speckit.spex-collab.phase-split",
+          "speckit.spex-collab.phase-manager",
+          "speckit.spex-collab.revise",
+          "speckit.spex-collab.reconcile"
+        ],
+        "copilot": [
+          "speckit.spex-collab.reviewers",
+          "speckit.spex-collab.phase-split",
+          "speckit.spex-collab.phase-manager",
+          "speckit.spex-collab.revise",
+          "speckit.spex-collab.reconcile"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-08T05:52:04.485068+00:00"
     }
   }
 }

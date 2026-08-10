@@ -1,5 +1,12 @@
 # Completion Plan: Remaining Work
 
+> **⚠️ ARCHIVED — historical planning document.** Every item this file tracked as remaining
+> (P2 T068-T072, P6 T194-T202) shipped — see the root [`CHANGELOG.md`](../CHANGELOG.md)'s "Phase 10
+> Polish" entry and `specs/003-provider-model-agnosticism`/`specs/006-multi-tenant-platform`'s
+> `tasks.md` files. The Phase 3 (P3) "decision point" below was resolved: it shipped, re-scoped, as
+> `specs/008-end-user-configurability` (see [MASTER-PLAN-CLOSE-GAPS.md](MASTER-PLAN-CLOSE-GAPS.md)'s
+> phase table). Kept for history; for current status use `CHANGELOG.md` and `specs/`, not this file.
+
 **Date**: 2026-08-04  
 **Status**: 6/7 existing phases complete, 1 phase never started
 

@@ -14,6 +14,7 @@
  * panel exists to make visible and usable.
  */
 import { registerPanel } from './settings-workspace.mjs';
+import { esc as escapeHtml } from './dashboard-utils.mjs';
 
 async function fetchJson(path, opts) {
   const res = await fetch(path, opts);
@@ -54,15 +55,6 @@ function resetIn(ts) {
   if (ms <= 0) return ' · resetting…';
   const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
   return ' · resets in ' + (h ? h + 'h ' : '') + m + 'm';
-}
-
-function escapeHtml(unsafe) {
-  return (unsafe ?? '').toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
 
 function usageTile(label, w, resetAt) {

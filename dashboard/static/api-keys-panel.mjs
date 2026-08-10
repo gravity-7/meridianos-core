@@ -2,6 +2,7 @@
  * API Key Management UI
  * Generate, list, and revoke API tokens
  */
+import { esc as escapeHtml } from './dashboard-utils.mjs';
 
 // Guards the document-level revoke-button click delegate below so re-mounting this panel (e.g.
 // switching Admin sub-tabs away and back) never binds a second delegate and double-fires revokes.
@@ -158,12 +159,6 @@ function formatDate(timestamp) {
     hour: '2-digit',
     minute: '2-digit'
   });
-}
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
 }
 
 /**

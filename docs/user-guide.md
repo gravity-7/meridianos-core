@@ -74,9 +74,9 @@ Sign in with email/password to get a JWT (expires after 30 minutes of inactivity
 refreshes it automatically while you're active). For automation (CI, scripts), generate an **API
 key** scoped to a role instead of using a personal login.
 
-Single sign-on (Azure AD, Google Workspace, GitHub OAuth) can be configured under **Settings →
-SSO** so your team signs in with its existing identity provider instead of a platform-local
-password.
+Single sign-on (Azure AD, Google Workspace, GitHub OAuth) has UI and route stubs under
+**Settings → SSO**, but the authorize→callback flow is not functional end-to-end yet (see
+[KNOWN-ISSUES.md](KNOWN-ISSUES.md)) — use email/password or an API key for now.
 
 ## Team collaboration
 
@@ -117,19 +117,21 @@ chart's own test suite is what to run after `helm install` to confirm the cluste
 
 ## Compliance and reporting
 
-Enterprise-tier accounts can generate audit-ready reports from the **Compliance** panel:
+Enterprise-tier accounts can generate reports from the **Compliance** panel:
 
 - **SOC2** — access logs, change logs, and auth logs with per-user attribution, for the last N
-  days.
+  days. Backed by real audit-trail data (`compliance_log`/`activity_log`).
 - **GDPR** — data flows: which providers/regions process your data and for how long it's
   retained.
-- **Cost allocation** — spend broken down by department/project; per-department totals always sum
-  to the overall total.
+- **Cost allocation** — spend broken down by department/project.
 - **Model usage** — which models were used per task category, their success rates, and cost
   efficiency.
 
-Every report generates in under 30 seconds even over a 30-day window with 10,000+ events, and
-exports as CSV, JSON, or PDF depending on report type.
+Only SOC2 is backed by real data today — GDPR, cost allocation, and model usage reports render
+from placeholder/mocked figures (a fixed sample data-flow list, and randomly-generated cost
+numbers, respectively) pending full wiring to the real ledger and provider config. Treat their
+numbers as illustrative of the report *shape*, not real spend, until this is fixed — see
+[security-audit.md](security-audit.md) for the detail. Every report exports as CSV or JSON.
 
 ## Live configuration (hot-reload)
 

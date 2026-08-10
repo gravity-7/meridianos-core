@@ -253,15 +253,15 @@ node daemon-entry.mjs &
 
 ```bash
 # Check control plane health
-curl http://localhost:4320/api/status
+curl http://localhost:4317/api/status
 
 # Check authentication endpoint
-curl -X POST http://localhost:4320/api/auth/login \
+curl -X POST http://localhost:4317/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@example.com","password":"your-secure-password"}'
 
 # Check project list
-curl http://localhost:4320/api/projects \
+curl http://localhost:4317/api/projects \
   -H "Authorization: Bearer <your-jwt-token>"
 ```
 
@@ -273,7 +273,7 @@ curl http://localhost:4320/api/projects \
 
 ```bash
 # Test login
-curl -X POST http://localhost:4320/api/auth/login \
+curl -X POST http://localhost:4317/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "admin@example.com",
@@ -288,7 +288,7 @@ curl -X POST http://localhost:4320/api/auth/login \
 
 ```bash
 # Create a test project
-curl -X POST http://localhost:4320/api/projects \
+curl -X POST http://localhost:4317/api/projects \
   -H "Authorization: Bearer <your-jwt-token>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -297,7 +297,7 @@ curl -X POST http://localhost:4320/api/projects \
   }'
 
 # Verify project was created
-curl http://localhost:4320/api/projects \
+curl http://localhost:4317/api/projects \
   -H "Authorization: Bearer <your-jwt-token>"
 ```
 
@@ -305,7 +305,7 @@ curl http://localhost:4320/api/projects \
 
 ```bash
 # Create a team member
-curl -X POST http://localhost:4320/api/auth/users \
+curl -X POST http://localhost:4317/api/auth/users \
   -H "Authorization: Bearer <admin-token>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -316,7 +316,7 @@ curl -X POST http://localhost:4320/api/auth/users \
   }'
 
 # Verify member was created
-curl http://localhost:4320/api/projects/{project-id}/members \
+curl http://localhost:4317/api/projects/{project-id}/members \
   -H "Authorization: Bearer <admin-token>"
 ```
 
@@ -324,18 +324,18 @@ curl http://localhost:4320/api/projects/{project-id}/members \
 
 ```bash
 # Get license status
-curl http://localhost:4320/api/billing/license \
+curl http://localhost:4317/api/billing/license \
   -H "Authorization: Bearer <your-jwt-token>"
 
 # Get pricing plans
-curl http://localhost:4320/api/billing/pricing
+curl http://localhost:4317/api/billing/pricing
 ```
 
 ### 5. Compliance Reporting Test (Optional)
 
 ```bash
 # Generate SOC2 report
-curl -X POST http://localhost:4320/api/compliance/reports/soc2 \
+curl -X POST http://localhost:4317/api/compliance/reports/soc2 \
   -H "Authorization: Bearer <your-jwt-token>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -488,10 +488,10 @@ node daemon-entry.mjs &
 
 ```bash
 # Check control plane health
-curl http://localhost:4320/api/status
+curl http://localhost:4317/api/status
 
 # Verify single-user mode is active
-curl http://localhost:4320/api/status | grep -i "single-user"
+curl http://localhost:4317/api/status | grep -i "single-user"
 ```
 
 ---

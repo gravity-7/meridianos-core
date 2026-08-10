@@ -8,21 +8,13 @@
  * task-workflow-panel.mjs had to work around.
  */
 import { registerPanel } from './settings-workspace.mjs';
+import { esc as escapeHtml } from './dashboard-utils.mjs';
 
 async function fetchJson(path, opts) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
   return body;
-}
-
-function escapeHtml(unsafe) {
-  return (unsafe ?? '').toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
 
 // ─── Capability matrix ───────────────────────────────────────────────────────
