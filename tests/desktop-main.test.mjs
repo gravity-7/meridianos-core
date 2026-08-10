@@ -13,5 +13,7 @@ test('desktop onboarding main process allow-lists credential operations and does
   assert.match(source, /secure_storage_unavailable/);
   assert.match(source, /secure_storage_existing/);
   assert.match(source, /validOnboardingCredential/);
+  assert.match(source, /const expiry = onboardingValidations\.get\(providerId\);/);
+  assert.match(source, /!expiry \|\| expiry < Date\.now\(\)/);
   assert.doesNotMatch(source, /unlinkSync\(envPath\)/);
 });

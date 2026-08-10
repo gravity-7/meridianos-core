@@ -193,7 +193,8 @@ function setupIpc() {
   ipcMain.handle('onboarding:commit-setup', async (_event, { draft }) => {
     try {
       const providerId = draft?.provider?.id;
-      if (!ACCOUNTS_SAFE(providerId) || onboardingValidations.get(providerId) < Date.now()) return { ok: false, code: 'provider_validation_required' };
+      const expiry = onboardingValidations.get(providerId);
+      if (!ACCOUNTS_SAFE(providerId) || !expiry || expiry < Date.now()) return { ok: false, code: 'provider_validation_required' };
       const keytar = require('keytar');
       const { getApiKey, ACCOUNTS } = await import(path.join(__dirname, 'keychain.mjs'));
       const stored = await getApiKey({ keytar, account: ACCOUNTS[providerId] });
