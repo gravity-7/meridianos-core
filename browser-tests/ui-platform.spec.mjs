@@ -14,6 +14,7 @@ test('platform routes, history, themes, action states, keyboard access, and reco
   await page.goto('/app?state=error'); await expect(page.getByRole('alert')).toContainText('Unable to load');
   await page.getByRole('button', { name: /theme/i }).click(); await expect(page.locator('html')).toHaveAttribute('data-theme', /light|dark/);
   await page.reload(); await page.keyboard.press('Tab'); await expect(page.locator('.skip-link')).toBeFocused();
+  await page.getByRole('button', { name: /theme/i }).click(); await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.setViewportSize({ width: 375, height: 720 });
   await page.goto('/app?state=success'); await page.screenshot({ path: testInfo.outputPath('narrow-dark-success.png'), fullPage: true });
   expect(pageErrors).toEqual([]);

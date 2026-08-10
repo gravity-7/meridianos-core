@@ -30,9 +30,9 @@
 - [x] T015 Add browser coverage for direct loads, refresh, Back/Forward, unknown route recovery, and flag states. [FR-002, FR-003, FR-005]
 - [x] T016 Add browser coverage for light/dark themes, narrow/wide viewports, and every action state. [FR-008, FR-011, FR-016]
 - [x] T017 Add automated accessibility checks and keyboard-path evidence for shell and primitives. [FR-009, FR-010]
-- [ ] T018 Add browser-matrix execution and evidence retention for Chrome, Edge, Firefox, and Safari support policy. [FR-015, FR-016]
+- [x] T018 Add browser-matrix execution and evidence retention for Chrome, Edge, Firefox, and Safari support policy. [FR-015, FR-016]
 - [x] T019 Add rollback rehearsal: disable the flag after use and prove legacy recovery plus API compatibility. [FR-006, FR-014]
-- [ ] T020 Run full validation, record screenshots/evidence, update quickstart, and run `$speckit-converge`. [SC-001–SC-005]
+- [x] T020 Run full validation, record screenshots/evidence, update quickstart, and run `$speckit-converge`. [SC-001–SC-005]
 
 ## Dependency Order
 
