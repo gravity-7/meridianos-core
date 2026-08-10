@@ -24,8 +24,11 @@ test('browser shell evidence declares keyboard, theme, history, and responsive f
   assert.match(html, /Skip to content/);
   assert.match(html, /aria-label="Application"/);
   assert.match(css, /:focus-visible/);
-  assert.match(css, /@media\(max-width:600px\)/);
+  assert.match(css, /@media\s*\(max-width:\s*600px\)/);
   assert.match(css, /\[data-theme=dark\]/);
+  assert.match(css, /--focus:\s*#2563eb/);
+  assert.match(css, /\[data-theme=dark\][\s\S]*--focus:\s*#fbbf24/);
+  assert.match(css, /prefers-color-scheme:\s*dark[\s\S]*--focus:\s*#fbbf24/);
   assert.match(client, /history\.pushState/);
   assert.match(client, /addEventListener\('popstate'/);
   assert.match(client, /localStorage/);
