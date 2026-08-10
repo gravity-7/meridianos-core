@@ -63,6 +63,7 @@ function getProjectManager() {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INDEX = join(HERE, 'index.html');
+const APP_INDEX = join(HERE, 'app.html');
 const SETUP_HTML = join(HERE, 'setup.html');
 // GET /static/* (008 — End-User Configurability): the workspace's own .mjs modules plus the
 // vendored uPlot/Muuri/Litegraph.js assets. Extension allowlist, not a MIME-sniffing library —
@@ -406,6 +407,16 @@ export function createDashboardServer(config) {
       }
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         const html = readFileSync(INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
+        return send(res, 200, html, 'text/html; charset=utf-8');
+      }
+      if (req.method === 'GET' && (url.pathname === '/app' || url.pathname.startsWith('/app/'))) {
+        let enabled = false;
+        try { enabled = loadPolicy(undefined, config)?.ui_platform?.enabled === true; } catch { /* missing policy stays safely legacy */ }
+        if (!enabled) {
+          res.writeHead(302, { location: '/', 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
+          return res.end();
+        }
+        const html = readFileSync(APP_INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
         return send(res, 200, html, 'text/html; charset=utf-8');
       }
       // GET /setup + POST /api/setup/* (008 — End-User Configurability, US3): the browser twin of

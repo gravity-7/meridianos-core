@@ -57,6 +57,23 @@ test('GET /healthz returns 200 {ok:true} with no auth token and touches no DB', 
   }
 });
 
+test('GET /app is feature-flagged and serves the stable platform shell when enabled', async () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'srv-app-'));
+  mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+  writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), `${SAMPLE}ui_platform:\n  enabled: true\n`);
+  const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app/foundation' }, (res) => {
+        let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve({ status: res.statusCode, body }));
+      }); req.on('error', reject); req.end();
+    });
+    assert.equal(result.status, 200);
+    assert.match(result.body, /MeridianOS/);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
 // Regression: statusCache was referenced (read + reassigned) throughout this file without ever
 // being declared, so GET /api/status — the dashboard's main polling endpoint — threw 500 on every
 // call in a real running server (only caught while adding /api/config/backups, since no prior test
