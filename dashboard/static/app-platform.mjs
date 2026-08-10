@@ -29,6 +29,7 @@ async function render() {
   const pathname = location.pathname.length > 1 ? location.pathname.replace(/\/+$/, '') : location.pathname;
   const route = routes[pathname];
   const view = route || { title: 'Page not found', text: 'This application route is not available. Return to the application overview.' };
+  document.title = `${view.title} - MeridianOS`;
   const card = make('section'); card.className = 'card'; card.append(make('h1', view.title), make('p', view.text));
   if (!route) { const link = make('a', 'Go to overview'); link.href = '/app'; card.append(link); }
   app.replaceChildren(card); const forcedState = status(actionState());
