@@ -10,7 +10,8 @@ export function actionButton(label, { pending = false, disabled = false, onClick
 
 export function labeledInput(labelText, { id, type = 'text', value = '' } = {}) {
   const label = node('label', labelText); const input = document.createElement('input');
-  input.id = id; input.type = type; input.value = value; label.htmlFor = id; label.append(input);
+  if (typeof id === 'string' && id) { input.id = id; label.htmlFor = id; }
+  input.type = type; input.value = value; label.append(input);
   return { label, input };
 }
 

@@ -38,7 +38,7 @@ async function render() {
   const statusView = await readApplicationStatus();
   if (location.pathname === requestedPath) app.replaceChildren(card, renderBoundary(statusView));
 }
-document.addEventListener('click', (event) => { const link = event.target.closest('a[href^="/app"]'); if (!link || event.metaKey || event.ctrlKey) return; event.preventDefault(); history.pushState({}, '', link.href); render(); });
+document.addEventListener('click', (event) => { const link = event.target.closest('a[href^="/app"]'); if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); history.pushState({}, '', link.href); render(); });
 addEventListener('popstate', render);
 themeButton.addEventListener('click', () => { const order=['system','light','dark']; const next=order[(order.indexOf(currentTheme())+1)%order.length]; localStorage.setItem(themeKey,next); applyTheme(next); });
 applyTheme(currentTheme()); render();
