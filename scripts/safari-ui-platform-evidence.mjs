@@ -16,8 +16,13 @@ const driver = spawn('safaridriver', ['-p', '4444']);
 try {
   await wait('/status'); const session = await request('POST', '/session', { capabilities: { alwaysMatch: { browserName: 'safari' } } }); const id = session.value.sessionId;
   await request('POST', `/session/${id}/url`, { url: 'http://127.0.0.1:4319/app/foundation' });
-  const text = (await request('POST', `/session/${id}/execute/sync`, { script: 'return document.body.innerText', args: [] })).value;
-  if (!text.includes('Platform foundation')) throw new Error('Safari did not render the platform route');
+  let text = '';
+  for (let i = 0; i < 50; i++) {
+    text = (await request('POST', `/session/${id}/execute/sync`, { script: 'return document.body.innerText', args: [] })).value;
+    if (text.includes('Platform foundation')) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!text.includes('Platform foundation')) throw new Error('Safari did not render the platform route before timeout');
   const screenshot = (await request('GET', `/session/${id}/screenshot`)).value; mkdirSync('artifacts/browser/safari', { recursive: true }); writeFileSync('artifacts/browser/safari/platform.png', Buffer.from(screenshot, 'base64'));
   await request('DELETE', `/session/${id}`);
 } finally { driver.kill(); await new Promise((resolve) => server.close(resolve)); }
