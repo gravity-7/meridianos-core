@@ -13,7 +13,7 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
-      - run: safaridriver --enable
+      - run: sudo safaridriver --enable
       - run: node scripts/safari-ui-platform-evidence.mjs
       - uses: actions/upload-artifact@v4
         if: always()
