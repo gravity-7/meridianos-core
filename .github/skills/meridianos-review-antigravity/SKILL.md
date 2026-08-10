@@ -1,43 +1,30 @@
 ---
-name: "meridianos-review-antigravity"
-description: "Code review agent powered by Antigravity (Gemini 3.1 Pro) — reviews PRs against spec.md acceptance criteria and constitution principles. Respects 5H budget: at >80% exhaustion, review is automatically skipped and PR merges without review."
-model: "gemini-3.1-pro"
-provider: "google"
-harness: "antigravity"
-instructions: ".github/skills/meridianos-review-antigravity/instructions.md"
-tools: ["read_file", "grep_search", "file_search"]
+name: meridianos-review-antigravity
+description: Read-only independent PR review against the full checkout and approved Spec Kit artifacts.
+model: gemini-3.1-pro
+provider: google
+harness: antigravity
+instructions: .github/skills/meridianos-review-antigravity/instructions.md
+tools: [read_file, grep_search, file_search]
 allowed_actions:
-  - "Read PR diff from GitHub API"
-  - "Read spec.md, plan.md, tasks.md from specs/ directory"
-  - "Read constitution from .specify/memory/constitution.md"
-  - "Post review comments to PR via GitHub API"
+  - Read the detached PR checkout and complete review context
+  - Read all approved artifacts in the selected specs directory
+  - Return a review verdict for the dispatcher to post
 forbidden_actions:
-  - "Modify any source code"
-  - "Push commits"
-  - "Merge PRs"
-  - "Execute terminal commands"
+  - Modify any source code or review artifact
+  - Create, delete, or rename files
+  - Execute commands that change repository state
+  - Commit, push, open a pull request, or merge a pull request
 budget:
-  window: "5h"
+  window: 5h
   threshold_pct: 80
-  on_exhausted: "SKIP — PR merges directly without review. Budget note posted to PR."
+  on_exhausted: PENDING/BLOCKED; do not approve or permit merging
 output_format: |
-  ## Antigravity Review — PR #N
+  ### Verdict: APPROVE | REQUEST_CHANGES | ERROR
 
-  ### Verdict: ✅ APPROVE / ⚠️ CHANGES REQUESTED / ❌ REJECT
-
-  ### Architecture Review
-  - Does this change follow MeridianOS patterns?
-  - Any zero-dependency violations?
-
-  ### Spec Compliance
-  | User Story | Acceptance Scenario | Status | Notes |
-  |------------|---------------------|--------|-------|
-
-  ### Edge Cases & Risks
-  - [list potential issues the implementing agent may have missed]
-
-  ### Recommendation
-  - [clear actionable next step]
+  Every finding includes severity, path:line, evidence, and recommendation.
 ---
-name: "meridianos-review-antigravity"
-description: "Antigravity (Gemini 3.1 Pro) review agent — independent PR code review against spec-kit artifacts"
+
+# MeridianOS Antigravity review
+
+Follow the referenced instructions exactly. This is a mandatory, fail-closed review gate.

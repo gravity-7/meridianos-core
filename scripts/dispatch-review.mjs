@@ -1,502 +1,245 @@
 #!/usr/bin/env node
 /**
- * dispatch-review.mjs — Parallel PR review using Claude Code + Antigravity
+ * Dispatch the mandatory, read-only Antigravity review for a pull request.
  *
- * Usage: node scripts/dispatch-review.mjs <PR_NUMBER> [--spec=specs/001-feature]
- *
- * Spawns two independent review agents in parallel:
- *   1. Claude Code (Sonnet 5) — reviews code quality, spec compliance, constitution
- *   2. Antigravity (Gemini 3.1 Pro) — reviews architecture, edge cases, risks
- *
- * Each agent runs with a fresh prompt containing only the PR diff + spec context.
- * Neither agent has access to the implementation conversation history.
- * Results are posted as PR comments via GitHub API.
- *
- * 5H window budgeting: each agent targets ~2.5h of work per run (3-4 user stories).
+ * This dispatcher deliberately has no merge or source-write capability. It creates a
+ * disposable detached worktree at the PR head, supplies the reviewer with the full
+ * checkout plus complete (untruncated) review artifacts, posts the result, then removes
+ * the worktree. A review gate fails closed: only an explicit APPROVE exits successfully.
  */
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { execSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(__dirname, "..");
-const REVIEWS_DIR = join(REPO_ROOT, ".ai", "reviews");
-
-// ── Budget Config ────────────────────────────────────────────────────────────
-
-/** Default 5H token caps when policy.yaml is unavailable. */
-const DEFAULT_CAPS = {
-  claude: 200_000,      // Claude Code default 5H cap (tokens)
-  antigravity: 150_000, // Antigravity default 5H cap (tokens)
-};
-
-/** Threshold percentage — at/above this, skip the agent's review. */
+const REPO_ROOT = resolve(join(fileURLToPath(new URL(".", import.meta.url)), ".."));
+const REVIEW_ROOT = join(REPO_ROOT, ".ai", "reviews");
+const SKILL_PATH = join(REPO_ROOT, ".github", "skills", "meridianos-review-antigravity", "SKILL.md");
+const INSTRUCTIONS_PATH = join(REPO_ROOT, ".github", "skills", "meridianos-review-antigravity", "instructions.md");
 const BUDGET_EXHAUSTION_PCT = 80;
 
-// ── CLI ──────────────────────────────────────────────────────────────────────
+export const EXIT = Object.freeze({ APPROVE: 0, REQUEST_CHANGES: 2, BLOCKED: 3, USAGE: 64 });
 
-const prNumber = process.argv[2];
-if (!prNumber || isNaN(Number(prNumber))) {
-  console.error("Usage: node scripts/dispatch-review.mjs <PR_NUMBER> [--spec=specs/001-feature]");
-  process.exit(1);
+export function parseArgs(argv) {
+  const [pr, ...flags] = argv;
+  const spec = flags.find((flag) => flag.startsWith("--spec="))?.slice("--spec=".length);
+  const agent = flags.find((flag) => flag.startsWith("--agent="))?.slice("--agent=".length);
+  if (!/^\d+$/.test(pr ?? "") || !spec || agent !== "antigravity" || flags.length !== 2) {
+    return { ok: false, error: "Usage: node scripts/dispatch-review.mjs <PR_NUMBER> --spec=specs/<feature> --agent=antigravity" };
+  }
+  if (!isProjectRelative(spec)) return { ok: false, error: "--spec must be a project-relative directory under specs/." };
+  return { ok: true, prNumber: Number(pr), specDir: spec };
 }
 
-const specArg = process.argv.find(a => a.startsWith("--spec="));
-const SPEC_DIR = specArg ? specArg.split("=")[1] : "specs/001-foundation-hardening";
+function isProjectRelative(path) {
+  return path.startsWith("specs/") && !path.includes("\\") && !path.split("/").includes("..") && !path.startsWith("/");
+}
 
-// ── Budget pre-flight ────────────────────────────────────────────────────────
+function command(command, args, { cwd = REPO_ROOT, input } = {}) {
+  return execFileSync(command, args, { cwd, encoding: "utf8", input, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true });
+}
 
-/**
- * Query 5H token usage for an agent using the built-in usage readers.
- * Returns { agent, billable, cap, pct, exhausted } or null if unavailable.
- */
-async function checkBudget(agent) {
+function createDefaultDeps() {
+  return {
+    root: REPO_ROOT,
+    exists: existsSync,
+    read: (path) => readFileSync(path, "utf8"),
+    write: (path, text) => writeFileSync(path, text),
+    mkdir: (path) => mkdirSync(path, { recursive: true }),
+    remove: (path) => rmSync(path, { recursive: true, force: true }),
+    command,
+    spawn,
+    now: () => Date.now(),
+    log: console.log,
+  };
+}
+
+export function validateReviewerSkill(deps) {
+  const skillPath = deps.skillPath ?? SKILL_PATH;
+  const instructionsPath = deps.instructionsPath ?? INSTRUCTIONS_PATH;
+  if (!deps.exists(skillPath) || !deps.exists(instructionsPath)) return { ok: false, error: "Reviewer skill or its instructions.md is missing." };
+  const skill = deps.read(skillPath);
+  const markers = skill.match(/^---\s*$/gm) ?? [];
+  if (markers.length !== 2 || !/^name:\s*["']?meridianos-review-antigravity["']?\s*$/m.test(skill)) {
+    return { ok: false, error: "Reviewer skill frontmatter must contain exactly one valid document." };
+  }
+  if (!/forbidden_actions:[\s\S]*Modify any source code/i.test(skill) || !/read-only/i.test(skill)) {
+    return { ok: false, error: "Reviewer skill must explicitly be read-only." };
+  }
+  return { ok: true };
+}
+
+export async function checkAntigravityBudget(deps) {
   try {
-    let billable = 0;
-    let cap = DEFAULT_CAPS[agent];
-
-    if (agent === "claude") {
-      // Dynamic import — avoids loading usage readers when not needed
-      const { claudeUsage, defaultClaudeDir } = await import(pathToFileURL(join(REPO_ROOT, "claude-usage.mjs")).href);
-      const usage = claudeUsage({ dir: defaultClaudeDir(), session5h: true });
-      billable = usage.last5h?.billable ?? 0;
-    } else if (agent === "antigravity") {
-      const { antigravityUsage, defaultAntigravityDirs } = await import(pathToFileURL(join(REPO_ROOT, "antigravity-usage.mjs")).href);
-      const usage = antigravityUsage({ dirs: defaultAntigravityDirs(), session5h: true });
-      billable = usage.last5h?.billable ?? 0;
-    } else {
-      return null;
-    }
-
-    // Try to read budget cap from policy.yaml
-    try {
-      const yaml = readFileSync(join(REPO_ROOT, "policy.yaml"), "utf8");
-      const match = yaml.match(new RegExp(`${agent}.*?per_5h_tokens\\s*:\\s*(\\d+)`, "s"));
-      if (match) cap = parseInt(match[1], 10);
-    } catch { /* use default cap */ }
-
-    const pct = cap > 0 ? Math.round((billable / cap) * 100) : 0;
-    const exhausted = pct >= BUDGET_EXHAUSTION_PCT;
-
-    return { agent, billable, cap, pct, exhausted };
-  } catch (err) {
-    // Usage reader unavailable — allow review (fail open)
-    return { agent, billable: 0, cap: DEFAULT_CAPS[agent], pct: 0, exhausted: false, error: err.message };
+    const usageModule = await import(`${new URL("../antigravity-usage.mjs", import.meta.url).href}?review=${deps.now()}`);
+    const usage = usageModule.antigravityUsage({ dirs: usageModule.defaultAntigravityDirs(), session5h: true });
+    const billable = usage.last5h?.billable;
+    if (!Number.isFinite(billable)) return { ok: false, error: "Antigravity usage is unavailable." };
+    const cap = 150_000;
+    const pct = Math.round((billable / cap) * 100);
+    return { ok: pct < BUDGET_EXHAUSTION_PCT, billable, cap, pct, error: pct >= BUDGET_EXHAUSTION_PCT ? "Antigravity 5H budget is exhausted." : null };
+  } catch (error) {
+    return { ok: false, error: `Antigravity usage check failed: ${error.message}` };
   }
 }
 
-/**
- * Run budget checks for both agents. Returns { claude, antigravity } with
- * budget status for each. Agents that can't be queried are assumed OK (fail open).
- */
-async function preflightBudget() {
-  console.log("💰 Pre-flight budget check...\n");
-
-  const [claude, antigravity] = await Promise.all([
-    checkBudget("claude"),
-    checkBudget("antigravity"),
-  ]);
-
-  for (const b of [claude, antigravity]) {
-    if (!b) continue;
-    const icon = b.exhausted ? "🔴" : b.pct >= 60 ? "🟡" : "🟢";
-    const status = b.exhausted ? "EXHAUSTED — SKIPPING REVIEW" : `${b.pct}% used`;
-    console.log(`   ${icon} ${b.agent.padEnd(15)} ${b.billable.toLocaleString().padStart(10)} / ${b.cap.toLocaleString().padStart(10)} tokens — ${status}`);
-    if (b.error) console.log(`      ⚠️  Usage reader warning: ${b.error}`);
-  }
-
-  console.log("");
-  return { claude, antigravity };
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function gh(args) {
-  return execSync(`gh ${args}`, { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
-}
-
-function ensureDir(dir) {
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-}
-
-// ── Fetch PR context ─────────────────────────────────────────────────────────
-
-console.log(`\n📋 Fetching PR #${prNumber} context...\n`);
-
-const prTitle = gh(`pr view ${prNumber} --json title --jq .title`).trim();
-const prBody = gh(`pr view ${prNumber} --json body --jq .body`).trim();
-const prDiff = gh(`pr diff ${prNumber}`);
-const fileList = JSON.parse(gh(`pr view ${prNumber} --json files`)).files;
-const prFiles = fileList.map(f => f.path).join('\n');
-
-// Load spec context
-const specPath = join(REPO_ROOT, SPEC_DIR, "spec.md");
-const planPath = join(REPO_ROOT, SPEC_DIR, "plan.md");
-const tasksPath = join(REPO_ROOT, SPEC_DIR, "tasks.md");
-const constitutionPath = join(REPO_ROOT, ".specify", "memory", "constitution.md");
-
-const spec = existsSync(specPath) ? readFileSync(specPath, "utf8") : "(spec.md not found)";
-const plan = existsSync(planPath) ? readFileSync(planPath, "utf8") : "(plan.md not found)";
-const tasks = existsSync(tasksPath) ? readFileSync(tasksPath, "utf8") : "(tasks.md not found)";
-const constitution = existsSync(constitutionPath) ? readFileSync(constitutionPath, "utf8") : "(constitution not found)";
-
-// Truncate large artifacts to fit in agent context windows
-const MAX_SPEC_LINES = 200;
-const MAX_DIFF_LINES = 500;
-const truncate = (text, maxLines) => {
-  const lines = text.split("\n");
-  if (lines.length <= maxLines) return text;
-  return lines.slice(0, maxLines).join("\n") + `\n\n... (truncated ${lines.length - maxLines} lines)`;
-};
-
-// ── Review prompts ───────────────────────────────────────────────────────────
-
-const sharedContext = `
-## PR #${prNumber}: ${prTitle}
-
-### PR Description
-${prBody.slice(0, 1000)}
-
-### Spec Context (${SPEC_DIR})
-${truncate(spec, MAX_SPEC_LINES)}
-
-### Constitution Principles (abbreviated)
-${constitution.split("###").slice(0, 6).join("###")}
-
-### Files Changed
-${prFiles}
-
-### PR Diff (abbreviated)
-\`\`\`diff
-${truncate(prDiff, MAX_DIFF_LINES)}
-\`\`\`
-`;
-
-const claudeReviewPrompt = `${sharedContext}
-
-You are an independent code reviewer (Claude Code / Sonnet 5). You have NO knowledge of how this code was written or what conversation led to it. Judge purely on what you see in the diff.
-
-## Your Task
-Review PR #${prNumber} against:
-1. The spec.md acceptance criteria (above)
-2. The MeridianOS Constitution principles (above)
-3. Code quality standards (ES modules, .mjs extension, no require(), node: prefix)
-
-## Output Format
-### Verdict: ✅ APPROVE / ⚠️ CHANGES REQUESTED / ❌ REJECT
-
-### Spec Compliance
-| User Story | Acceptance Scenario | Status | Evidence |
-|------------|---------------------|--------|----------|
-
-### Constitution Violations
-| Principle | Violation | File:Line | Fix |
-|-----------|-----------|-----------|-----|
-
-### Code Quality Issues
-- [file:line] specific issue → suggested fix
-
-### Test Assessment
-- Were new tests added for changed behavior? (yes/no/NA)
-- Do existing tests cover the change paths?
-
-Be specific. Reference exact file paths and line numbers from the diff.
-`;
-
-const antigravityReviewPrompt = `${sharedContext}
-
-You are an independent architecture reviewer (Antigravity / Gemini 3.1 Pro). You have NO knowledge of how this code was designed or what decisions were made. Judge purely on architecture and patterns.
-
-## Your Task
-Review PR #${prNumber} for:
-1. Architectural fit — does this follow MeridianOS module patterns?
-2. Zero-dependency check — any new imports that aren't node:* or better-sqlite3?
-3. Gateway metering — does this change preserve the gateway as single source of truth?
-4. Configuration — is behavior config-driven, not hardcoded?
-5. Cross-cutting risks — what could break in production?
-
-## Output Format
-### Verdict: ✅ APPROVE / ⚠️ CHANGES REQUESTED / ❌ REJECT
-
-### Architecture Assessment
-- Module placement: [correct / concerns]
-- Data flow impact: [assessment]
-- Gateway compliance: [pass / fail with details]
-
-### Risk Register
-| Risk | Severity | Mitigation |
-|------|----------|------------|
-
-### Dependencies
-- New imports: [list or "none"]
-- Zero-dependency violation: [yes/no, details]
-
-### Recommendation
-- [Clear merge/block/rework guidance]
-`;
-
-// ── Save prompts for reproducibility ─────────────────────────────────────────
-
-ensureDir(REVIEWS_DIR);
-const runDir = join(REVIEWS_DIR, `pr-${prNumber}-${Date.now()}`);
-ensureDir(runDir);
-
-writeFileSync(join(runDir, "claude-review-prompt.md"), claudeReviewPrompt);
-writeFileSync(join(runDir, "antigravity-review-prompt.md"), antigravityReviewPrompt);
-writeFileSync(join(runDir, "pr-diff.txt"), prDiff);
-writeFileSync(join(runDir, "pr-context.json"), JSON.stringify({ prNumber, title: prTitle, specDir: SPEC_DIR, files: prFiles.split("\n") }, null, 2));
-
-console.log(`Review prompts saved to ${runDir}`);
-
-// ── Spawn review agents ──────────────────────────────────────────────────────
-
-/**
- * Run a review agent with a timeout and automatic PR comment posting.
- * Reviews are posted independently — NOT gated on other agents.
- * Returns { agent, verdict, output, error?, posted }
- */
-async function runReviewAgent(name, promptFile, runDirPath, timeoutMs = 30 * 60 * 1000) { // default 30min
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    let cmd, args;
-
-    if (name === "claude") {
-      cmd = "claude";
-      args = ["--print", "--output-format", "text"];
-    } else if (name === "antigravity") {
-      cmd = "agy";
-      // agy uses -p for the prompt (no chat subcommand, no --prompt-file).
-      // --dangerously-skip-permissions bypasses interactive permission prompts.
-      // --print-timeout ensures the agent doesn't hang indefinitely.
-      const agyPrompt = readFileSync(promptFile, "utf8");
-      args = ["--print", agyPrompt, "--dangerously-skip-permissions", "--print-timeout", "30m", "--output-format", "text"];
-    } else {
-      resolve({ agent: name, verdict: "ERROR", output: "", error: `Unknown agent: ${name}`, posted: false });
-      return;
-    }
-
-    console.log(`\n🚀 Spawning ${name} review agent...`);
-    console.log(`   Command: ${cmd} ${args.join(" ")}`);
-    console.log(`   Prompt: ${promptFile}`);
-    console.log(`   Timeout: ${timeoutMs / 60000} minutes\n`);
-
-    let resolved = false;
-    let child = null;
-
-    // Hard kill timer — if the soft timeout doesn't work, force-kill
-    const killTimer = setTimeout(() => {
-      if (!resolved && child) {
-        console.error(`⏰ ${name} review HARD TIMEOUT after ${timeoutMs / 60000}min — force killing PID ${child.pid}`);
-        try { process.kill(child.pid, 'SIGKILL'); } catch { /* already dead */ }
-      }
-    }, timeoutMs + 30_000); // 30s grace after soft timeout
-
-    const finish = (verdict, output, error, posted) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(killTimer);
-      resolve({ agent: name, verdict, output, error, posted });
+export function createPrReviewWorktree(prNumber, deps) {
+  const dir = join(REVIEW_ROOT, `pr-${prNumber}-${deps.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  deps.mkdir(REVIEW_ROOT);
+  try {
+    // pull/<n>/head works for same-repository and fork PRs without checking out a branch.
+    deps.command("git", ["fetch", "origin", `pull/${prNumber}/head`], { cwd: deps.root });
+    const head = deps.command("git", ["rev-parse", "FETCH_HEAD"], { cwd: deps.root }).trim();
+    deps.command("git", ["worktree", "add", "--detach", dir, head], { cwd: deps.root });
+    return {
+      ok: true,
+      path: dir,
+      head,
+      cleanup: () => {
+        try { deps.command("git", ["worktree", "remove", "--force", dir], { cwd: deps.root }); } finally {
+          deps.remove(dir);
+          try { deps.command("git", ["worktree", "prune"], { cwd: deps.root }); } catch { /* best effort after removal */ }
+        }
+      },
     };
+  } catch (error) {
+    deps.remove(dir);
+    return { ok: false, error: `Could not create detached PR review worktree: ${error.message}`, cleanup: () => {} };
+  }
+}
 
-    try {
-      const prompt = readFileSync(promptFile, "utf8");
-      child = spawn(cmd, args, {
-        cwd: REPO_ROOT,
-        stdio: ["pipe", "pipe", "pipe"],
-        timeout: timeoutMs,
-        windowsHide: true,
-      });
+function buildReviewPrompt({ prNumber, specDir, worktreePath, base, head, contextPath }) {
+  return `You are executing the repository skill \`meridianos-review-antigravity\` for PR #${prNumber}.
 
-      let stdout = "";
-      let stderr = "";
+You are a strictly READ-ONLY reviewer. Do not edit files, create files, commit, push, merge, change branches, install packages, or run mutating commands. You must review the complete detached checkout at \`${worktreePath}\` and every approved Spec Kit artifact below; do not rely on a truncated summary.
 
-      child.stdout.on("data", (d) => { stdout += d.toString(); });
-      child.stderr.on("data", (d) => { stderr += d.toString(); });
+Review context (full, untruncated PR diff and artifacts): \`${contextPath}\`
+Approved spec directory in checkout: \`${join(worktreePath, specDir)}\`
+Reviewer instructions: \`${join(worktreePath, ".github/skills/meridianos-review-antigravity/instructions.md")}\`
+Diff range: \`${base}..${head}\`
 
-      child.on("close", (code) => {
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        const output = stdout + (stderr ? `\n\nSTDERR:\n${stderr}` : "");
-        
-        // Parse verdict from output
-        const verdictMatch = output.match(/Verdict:\s*(✅\s*APPROVE|⚠️\s*CHANGES[^\n]*|❌\s*REJECT)/);
-        const verdict = verdictMatch ? verdictMatch[1].trim() : (code === 0 ? "UNKNOWN" : "ERROR");
+Your final response must contain exactly one standalone line: \`### Verdict: APPROVE\`, \`### Verdict: REQUEST_CHANGES\`, or \`### Verdict: ERROR\`. Use REQUEST_CHANGES for every Critical or High finding. A Medium finding must be REQUEST_CHANGES unless it cites a recorded \`Human disposition:\` with its location. Every finding must include severity, exact \`path:line\`, evidence, and an actionable recommendation.`;
+}
 
-        // Save output
-        writeFileSync(join(runDirPath, `${name}-review-output.md`), output);
+function createContext({ prNumber, specDir, worktree, deps }) {
+  const specRoot = resolve(worktree.path, specDir);
+  if (!relative(worktree.path, specRoot) || relative(worktree.path, specRoot).startsWith("..") || !deps.exists(specRoot)) {
+    throw new Error(`Approved spec directory does not exist in PR checkout: ${specDir}`);
+  }
+  const base = deps.command("git", ["merge-base", "origin/main", "HEAD"], { cwd: worktree.path }).trim();
+  const diff = deps.command("git", ["diff", "--no-ext-diff", "--binary", `${base}..HEAD`], { cwd: worktree.path });
+  const files = deps.command("git", ["ls-files", specDir, ".specify/memory/constitution.md"], { cwd: worktree.path }).trim().split("\n").filter(Boolean);
+  const artifacts = files.map((file) => `\n\n===== ${file} =====\n${deps.read(join(worktree.path, file))}`).join("");
+  const contextPath = join(worktree.path, ".antigravity-review-context.md");
+  deps.write(contextPath, `# Complete review context for PR #${prNumber}\n\n## Full diff (${base}..${worktree.head})\n\n\`\`\`diff\n${diff}\n\`\`\`\n\n## Approved Spec Kit artifacts${artifacts}\n`);
+  return { base, contextPath };
+}
 
-        console.log(`✅ ${name} review complete (${elapsed}s) — ${verdict}`);
+export function parseVerdict(output) {
+  const matches = [...String(output).matchAll(/^#{1,6}\s+Verdict:\s*(APPROVE|REQUEST_CHANGES|ERROR)\s*$/gm)];
+  if (matches.length !== 1) return { verdict: "ERROR", error: "Malformed reviewer verdict: exactly one machine-readable verdict is required." };
+  let verdict = matches[0][1];
+  if (verdict === "APPROVE" && /\b(?:CRITICAL|HIGH)\b/i.test(output)) verdict = "REQUEST_CHANGES";
+  if (verdict === "APPROVE" && /\bMEDIUM\b/i.test(output) && !/Human disposition:\s*\S+/i.test(output)) verdict = "REQUEST_CHANGES";
+  return { verdict };
+}
 
-        // Post to PR immediately — don't wait for other agents
-        const posted = postReviewComment(name, output, runDirPath);
-
-        finish(verdict, output, code !== 0 ? stderr.slice(-500) : null, posted);
-      });
-
-      child.on("error", (err) => {
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.error(`❌ ${name} review failed (${elapsed}s): ${err.message}`);
-        
-        const timeoutMsg = `## 🤖 ${name === "claude" ? "Claude Code (Sonnet 5)" : "Antigravity (Gemini 3.1 Pro)"} Review — TIMEOUT\n\n> Review agent did not complete within the ${timeoutMs / 60000}-minute window. The agent process was killed. Re-run the review or review manually.\n\n**Error**: ${err.message}`;
-        postReviewComment(name, timeoutMsg, runDirPath, true);
-        
-        finish("TIMEOUT", "", err.message, true);
-      });
-
-      // Feed prompt to stdin for both agents
-      child.stdin.write(prompt);
-      child.stdin.end();
-    } catch (err) {
-      finish("ERROR", "", err.message, false);
-    }
+export function runAntigravity(prompt, { cwd, timeoutMs = 30 * 60 * 1000 }, deps) {
+  return new Promise((resolveResult) => {
+    let settled = false;
+    const child = deps.spawn("agy", ["--print", prompt, "--output-format", "text"], { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        child.kill();
+        resolveResult({ verdict: "ERROR", output: `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: review timed out after ${timeoutMs}ms.`, error: "timeout" });
+      }
+    }, timeoutMs);
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult({ verdict: "ERROR", output: `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: reviewer could not start.`, error: error.message });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const output = `${stdout}${stderr ? `\n\nSTDERR:\n${stderr}` : ""}`;
+      const parsed = code === 0 ? parseVerdict(output) : { verdict: "ERROR", error: stderr || `reviewer exited ${code}` };
+      resolveResult({ verdict: parsed.verdict, output, error: parsed.error });
+    });
   });
 }
 
-// ── Post results to PR ───────────────────────────────────────────────────────
+function reviewComment(result) {
+  return `## Antigravity Review\n\n${result.output || `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: ${result.error}`}\n`;
+}
 
-function postReviewComment(agent, output, runDirPath, isTimeout = false) {
-  const agentName = agent === "claude" ? "Claude Code (Sonnet 5)" : "Antigravity (Gemini 3.1 Pro)";
-  const header = isTimeout
-    ? output // Already formatted as a timeout notice
-    : `## 🤖 ${agentName} Review\n\n> Independent review — no knowledge of implementation conversation. Prompt and full output saved to \`${runDirPath}\`.\n\n${output.slice(0, 60000)}`; // GitHub comment limit ~64KB
+export async function dispatch({ prNumber, specDir }, injected = {}) {
+  const deps = { ...createDefaultDeps(), ...injected };
+  const publish = injected.postComment ?? postComment;
+  const skill = validateReviewerSkill(deps);
+  if (!skill.ok) {
+    const result = { verdict: "ERROR", output: `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: ${skill.error}`, error: skill.error };
+    return { exitCode: EXIT.BLOCKED, ...result, posted: publish(prNumber, reviewComment(result), deps) };
+  }
 
-  const commentFile = join(runDir, `${agent}-pr-comment.md`);
-  writeFileSync(commentFile, header);
+  const budget = injected.checkBudget ? await injected.checkBudget() : await checkAntigravityBudget(deps);
+  if (!budget.ok) {
+    const result = { verdict: "ERROR", output: `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: ${budget.error}`, error: budget.error };
+    const posted = publish(prNumber, reviewComment(result), deps);
+    return { exitCode: EXIT.BLOCKED, ...result, posted };
+  }
 
+  const worktree = (injected.createWorktree ?? createPrReviewWorktree)(prNumber, deps);
+  if (!worktree.ok) {
+    const result = { verdict: "ERROR", output: `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: ${worktree.error}`, error: worktree.error };
+    return { exitCode: EXIT.BLOCKED, ...result, posted: publish(prNumber, reviewComment(result), deps) };
+  }
   try {
-    gh(`pr comment ${prNumber} --body-file "${commentFile}"`);
-    console.log(`   📝 ${agent} review posted to PR #${prNumber}`);
-    return true;
-  } catch (err) {
-    console.error(`   ⚠️ Failed to post ${agent} review: ${err.message}`);
-    console.log(`   Review saved to: ${commentFile}`);
-    return false;
+    const { base, contextPath } = (injected.createContext ?? createContext)({ prNumber, specDir, worktree, deps });
+    const prompt = buildReviewPrompt({ prNumber, specDir, worktreePath: worktree.path, base, head: worktree.head, contextPath });
+    const result = await (injected.runReview ?? runAntigravity)(prompt, { cwd: worktree.path }, deps);
+    const posted = (injected.postComment ?? postComment)(prNumber, reviewComment(result), deps);
+    if (!posted) return { exitCode: EXIT.BLOCKED, ...result, posted: false, error: "Failed to post review to the PR." };
+    return { exitCode: result.verdict === "APPROVE" ? EXIT.APPROVE : result.verdict === "REQUEST_CHANGES" ? EXIT.REQUEST_CHANGES : EXIT.BLOCKED, ...result, posted: true };
+  } catch (error) {
+    const result = { verdict: "ERROR", output: `### Verdict: ERROR\n\nReview Status: PENDING/BLOCKED\n\nReason: ${error.message}`, error: error.message };
+    return { exitCode: EXIT.BLOCKED, ...result, posted: publish(prNumber, reviewComment(result), deps) };
+  } finally {
+    worktree.cleanup();
   }
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
-
-console.log("╔══════════════════════════════════════════════╗");
-console.log("║   MeridianOS Parallel PR Review Dispatch     ║");
-console.log("╠══════════════════════════════════════════════╣");
-console.log(`║   PR:     #${prNumber}`);
-console.log(`║   Title:  ${prTitle.slice(0, 45)}`);
-console.log(`║   Spec:   ${SPEC_DIR}`);
-console.log(`║   Files:  ${prFiles.split("\n").length} changed`);
-console.log("╠══════════════════════════════════════════════╣");
-console.log(`║   Budget threshold: ${BUDGET_EXHAUSTION_PCT}% of 5H cap`);
-console.log("╚══════════════════════════════════════════════╝\n");
-
-// ── Budget pre-flight ────────────────────────────────────────────────────────
-
-const budget = await preflightBudget();
-
-// Determine which agents can run
-const agents = [];
-if (budget.claude && !budget.claude.exhausted) {
-  agents.push("claude");
-} else if (budget.claude) {
-  console.log(`⏭️  Claude Code skipped — 5H budget at ${budget.claude.pct}% (threshold: ${BUDGET_EXHAUSTION_PCT}%)\n`);
-}
-
-if (budget.antigravity && !budget.antigravity.exhausted) {
-  agents.push("antigravity");
-} else if (budget.antigravity) {
-  console.log(`⏭️  Antigravity skipped — 5H budget at ${budget.antigravity.pct}% (threshold: ${BUDGET_EXHAUSTION_PCT}%)\n`);
-}
-
-// Both exhausted → auto-approve (no review needed, merge directly)
-if (agents.length === 0) {
-  console.log("╔══════════════════════════════════════════════╗");
-  console.log("║  🔴 ALL AGENTS AT BUDGET LIMIT              ║");
-  console.log("║                                             ║");
-  console.log("║  Both Claude Code and Antigravity have      ║");
-  console.log("║  exhausted >80% of their 5H token windows.  ║");
-  console.log("║  Skipping review — PR can merge directly.   ║");
-  console.log("║                                             ║");
-  console.log("║  Budgets reset at the next 5H window.       ║");
-  console.log("╚══════════════════════════════════════════════╝\n");
-
-  // Post budget-exhaustion note to PR
-  const skipComment = `## 🤖 Automated Review — Skipped (Budget Exhausted)
-
-Both review agents are at >${BUDGET_EXHAUSTION_PCT}% of their 5H token limits:
-
-| Agent | Billable Tokens | 5H Cap | Usage |
-|-------|----------------|--------|-------|
-| Claude Code (Sonnet 5) | ${budget.claude?.billable?.toLocaleString() ?? "N/A"} | ${budget.claude?.cap?.toLocaleString() ?? "N/A"} | ${budget.claude?.pct ?? "N/A"}% |
-| Antigravity (Gemini 3.1 Pro) | ${budget.antigravity?.billable?.toLocaleString() ?? "N/A"} | ${budget.antigravity?.cap?.toLocaleString() ?? "N/A"} | ${budget.antigravity?.pct ?? "N/A"}% |
-
-> ℹ️ Reviews will resume automatically once the 5H budget window resets. This PR may merge without automated review per budget-exhaustion policy.
-
-`;
-  const skipFile = join(runDir, "budget-skip-note.md");
-  writeFileSync(skipFile, skipComment);
+function postComment(prNumber, body, deps) {
+  const dir = join(REVIEW_ROOT, `post-${deps.now()}`);
+  const file = join(dir, "comment.md");
   try {
-    gh(`pr comment ${prNumber} --body-file "${skipFile}"`);
-    console.log("📝 Budget exhaustion note posted to PR\n");
-  } catch { /* non-critical */ }
-
-  process.exit(0);
+    deps.mkdir(dir);
+    deps.write(file, body);
+    deps.command("gh", ["pr", "comment", String(prNumber), "--body-file", file], { cwd: deps.root });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    deps.remove(dir);
+  }
 }
 
-// Report which agents will run
-console.log("╔══════════════════════════════════════════════╗");
-console.log(`║   Review Agents: ${agents.map(a => a === "claude" ? "Claude Code (Sonnet 5)" : "Antigravity (Gemini 3.1 Pro)").join(" + ")}`);
-console.log("╚══════════════════════════════════════════════╝\n");
-
-// ── Spawn review agents ──────────────────────────────────────────────────────
-
-const reviewTasks = [];
-if (agents.includes("claude")) {
-  reviewTasks.push(runReviewAgent("claude", join(runDir, "claude-review-prompt.md"), runDir));
-}
-if (agents.includes("antigravity")) {
-  reviewTasks.push(runReviewAgent("antigravity", join(runDir, "antigravity-review-prompt.md"), runDir));
+async function main() {
+  const parsed = parseArgs(process.argv.slice(2));
+  if (!parsed.ok) {
+    console.error(parsed.error);
+    return EXIT.USAGE;
+  }
+  const result = await dispatch(parsed);
+  console.log(`Antigravity review verdict: ${result.verdict}${result.error ? ` — ${result.error}` : ""}`);
+  return result.exitCode;
 }
 
-// Post-as-you-go: each agent posts its review independently as it completes.
-// Use Promise.allSettled so one hung agent doesn't block the other's result.
-const settled = await Promise.allSettled(reviewTasks);
-
-// Extract results from settled promises
-const results = settled.map(s => s.status === 'fulfilled' ? s.value : { agent: 'unknown', verdict: 'ERROR', output: '', error: s.reason?.message, posted: false });
-
-// For skipped agents, add a skip entry
-if (!agents.includes("claude") && budget.claude) {
-  results.push({ agent: "claude", verdict: "⏭️ SKIPPED (budget exhausted)", output: `Claude Code review skipped: 5H budget at ${budget.claude.pct}%`, error: null, posted: true });
-}
-if (!agents.includes("antigravity") && budget.antigravity) {
-  results.push({ agent: "antigravity", verdict: "⏭️ SKIPPED (budget exhausted)", output: `Antigravity review skipped: 5H budget at ${budget.antigravity.pct}%`, error: null, posted: true });
-}
-
-// ── Summary ──────────────────────────────────────────────────────────────────
-
-console.log("\n╔══════════════════════════════════════════════╗");
-console.log("║           Review Results Summary             ║");
-console.log("╠══════════════════════════════════════════════╣");
-
-for (const r of results) {
-  const skipped = r.verdict.includes("SKIPPED");
-  const icon = skipped ? "⏭️" : r.verdict.includes("APPROVE") ? "✅" : r.verdict.includes("CHANGES") ? "⚠️" : "❌";
-  console.log(`║  ${icon} ${r.agent.padEnd(15)} ${r.verdict}`);
-}
-
-console.log("╠══════════════════════════════════════════════╣");
-
-const activeResults = results.filter(r => !r.verdict.includes("SKIPPED"));
-const allApproved = activeResults.length > 0 && activeResults.every(r => r.verdict.includes("APPROVE"));
-
-if (activeResults.length === 0) {
-  console.log("║  ⏭️  All agents skipped — merging directly  ║");
-} else if (allApproved) {
-  console.log("║  ✅ ALL ACTIVE AGENTS APPROVE — safe merge   ║");
-} else {
-  console.log("║  ⚠️  REVIEW NEEDED — see PR comments         ║");
-}
-console.log("╚══════════════════════════════════════════════╝\n");
-
-// Reviews are already posted independently by each agent's close handler.
-
-console.log(`\n📁 Full review artifacts: ${runDir}\n`);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await main();
