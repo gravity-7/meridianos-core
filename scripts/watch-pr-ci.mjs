@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+import { execFileSync } from 'node:child_process';
+const [pr, seconds = '30'] = process.argv.slice(2); const interval = Number(seconds) * 1000;
+if (!/^\d+$/.test(pr ?? '') || interval < 1_000) throw new Error('Usage: node scripts/watch-pr-ci.mjs <PR_NUMBER> [INTERVAL_SECONDS]');
+for (;;) { const checks = JSON.parse(execFileSync('gh', ['pr', 'checks', pr, '--json', 'name,bucket'], { encoding: 'utf8' })); const pending = checks.filter((check) => check.bucket === 'pending'); const failed = checks.filter((check) => ['fail', 'cancel'].includes(check.bucket)); console.log(JSON.stringify({ pr: Number(pr), pending: pending.map((check) => check.name), failed: failed.map((check) => check.name) })); if (failed.length) process.exit(1); if (!pending.length) break; await new Promise((resolve) => setTimeout(resolve, interval)); }
