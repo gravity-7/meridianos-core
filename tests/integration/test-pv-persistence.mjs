@@ -30,7 +30,7 @@ function helmTemplate(extraArgs = []) {
     { encoding: 'utf8' },
   );
   assert.equal(result.status, 0, result.stderr);
-  return result.stdout;
+  return result.stdout.replace(/\r\n/g, '\n');
 }
 
 describe('Persistent volume reattachment (deploy/kubernetes/helm/meridianos)', { skip: !helmAvailable }, () => {
