@@ -65,7 +65,7 @@ After `$speckit-implement` opens or materially updates an implementation PR, Cod
 1. Wait for all required CI checks.
 2. Run `node scripts/dispatch-review.mjs <PR_NUMBER> --spec=specs/<feature> --agent=antigravity`.
 3. Apply accepted blocking findings, rerun required validation and `$speckit-converge`, then redispatch after material changes.
-4. Stop and ask the human for direction after three unsuccessful review/fix rounds.
+4. Stop and ask the human for direction after ten unsuccessful Antigravity review/fix rounds.
 5. Never merge the PR.
 
 The independent Antigravity skill is read-only and the gate fails closed: `APPROVE` is the only successful dispatcher result. Timeout, malformed output, missing instructions, posting failures, and budget exhaustion leave the PR `PENDING/BLOCKED`. Critical and High findings always block; Medium findings require a fix or a recorded human disposition.

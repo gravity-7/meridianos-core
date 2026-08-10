@@ -156,6 +156,22 @@
         }
       }
     },
+    "ui_platform": {
+      "type": "object",
+      "description": "Reversible UI platform rollout. Omission safely keeps the legacy dashboard active.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "rollout_id": { "type": "string", "minLength": 1 },
+        "eligibility": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["all", "allowlist"], "default": "all" },
+            "subjects": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        }
+      },
+      "required": ["enabled"]
+    },
     "oidc": {
       "type": "object",
       "description": "OIDC Single Sign-On configuration for multiple providers.",
