@@ -58,17 +58,17 @@ Optional quality gates:
 - `$speckit-checklist` — Validate requirements completeness
 - `$speckit-analyze` — Cross-artifact consistency check
 
-### Automated PR Review (After Implementation)
-AFTER `$speckit-implement` creates a pull request, you MUST automatically trigger the parallel review dispatch. The review agents are Claude Code (Sonnet 5) and Antigravity (Gemini 3.1 Pro) — two independent AI reviewers on different providers/models with fresh context (no access to the implementation conversation).
+### Mandatory Antigravity Review (After Implementation)
 
-**How to trigger:**
-```powershell
-node scripts/dispatch-review.mjs <PR_NUMBER>
-```
+After `$speckit-implement` opens or materially updates an implementation PR, Codex must:
 
-**Budget protection:** The script automatically checks each agent's 5H token budget before spawning. If an agent is at >80% of its 5H cap, that agent is skipped and the PR merges without that review. If both agents are exhausted, the PR merges directly. Budget status is always posted as a PR comment.
+1. Wait for all required CI checks.
+2. Run `node scripts/dispatch-review.mjs <PR_NUMBER> --spec=specs/<feature> --agent=antigravity`.
+3. Apply accepted blocking findings, rerun required validation and `$speckit-converge`, then redispatch after material changes.
+4. Stop and ask the human for direction after three unsuccessful review/fix rounds.
+5. Never merge the PR.
 
-**Do NOT skip this step.** It replaces human code review and is required before merge. The test and spec-check CI gates will also validate the PR automatically.
+The independent Antigravity skill is read-only and the gate fails closed: `APPROVE` is the only successful dispatcher result. Timeout, malformed output, missing instructions, posting failures, and budget exhaustion leave the PR `PENDING/BLOCKED`. Critical and High findings always block; Medium findings require a fix or a recorded human disposition.
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,

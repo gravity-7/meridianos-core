@@ -1,52 +1,30 @@
 ---
-name: "meridianos-review-antigravity"
-description: "Code review agent powered by Antigravity (Gemini 3.1 Pro) — reviews PRs against spec.md acceptance criteria and constitution principles. Respects 5H budget: at >80% exhaustion, review is automatically skipped and PR merges without review."
-model: "gemini-3.1-pro"
-provider: "google"
-harness: "antigravity"
-instructions: ".github/skills/meridianos-review-antigravity/instructions.md"
-tools: ["read_file", "grep_search", "file_search"]
+name: meridianos-review-antigravity
+description: Read-only independent PR review against the full checkout and approved Spec Kit artifacts.
+model: gemini-3.1-pro
+provider: google
+harness: antigravity
+instructions: .github/skills/meridianos-review-antigravity/instructions.md
+tools: [read_file, grep_search, file_search]
 allowed_actions:
-  - "Read PR diff from GitHub API"
-  - "Read spec.md, plan.md, tasks.md from specs/ directory"
-  - "Read constitution from .specify/memory/constitution.md"
-  - "Post review comments to PR via GitHub API"
+  - Read the detached PR checkout and complete review context
+  - Read all approved artifacts in the selected specs directory
+  - Return a review verdict for the dispatcher to post
 forbidden_actions:
-  - "Modify any source code"
-  - "Push commits"
-  - "Merge PRs"
-  - "Execute terminal commands"
+  - Modify any source code or review artifact
+  - Create, delete, or rename files
+  - Execute commands that change repository state
+  - Commit, push, open a pull request, or merge a pull request
 budget:
-  window: "5h"
+  window: 5h
   threshold_pct: 80
-  on_exhausted: "SKIP — PR merges directly without review. Budget note posted to PR."
+  on_exhausted: PENDING/BLOCKED; do not approve or permit merging
 output_format: |
-  ## Antigravity Review — PR #N
+  ### Verdict: APPROVE | REQUEST_CHANGES | ERROR
 
-  ### Verdict: ✅ APPROVE / ⚠️ CHANGES REQUESTED / ❌ REJECT
-
-  ### Architecture Review
-  - Does this change follow MeridianOS patterns?
-  - Any zero-dependency violations?
-
-  ### Spec Compliance
-  | User Story | Acceptance Scenario | Status | Notes |
-  |------------|---------------------|--------|-------|
-
-  ### Edge Cases & Risks
-  - [list potential issues the implementing agent may have missed]
-
-  ### Recommendation
-  - [clear actionable next step]
-
+  Every finding includes severity, path:line, evidence, and recommendation.
 ---
 
-## Headless CLI Review Process
+# MeridianOS Antigravity review
 
-The review dispatcher is `node scripts/dispatch-review.mjs <PR_NUMBER>`. It resolves the matching `specs/<PR branch>/` directory when present, saves the complete instructions in a review artifact, and gives `agy` a short positional prompt directing it to read that artifact. This avoids Windows command-line limits while preserving a complete, independent review context.
-
-Before a headless Antigravity review can inspect repository files, ensure `${HOME}/.gemini/config/config.json` contains this least-privilege grant under `userSettings.globalPermissionGrants.allow`:
-
-`read_file(<repository-root>)`
-
-For this repository the required value is `read_file(C:\projects\meridianos-core)`. The dispatcher validates this grant before launching Antigravity and reports the exact missing value if configuration is incomplete. The reviewer remains read-only: it may inspect the PR diff, feature artifacts, constitution, and repository files, but must not edit, commit, merge, or execute shell commands.
+Follow the referenced instructions exactly. This is a mandatory, fail-closed review gate.
