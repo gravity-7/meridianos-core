@@ -30,11 +30,13 @@ const helmAvailable = spawnSync('helm', ['version'], { encoding: 'utf8' }).statu
 const TEST_JWT_SECRET = 'a'.repeat(128);
 
 function helmTemplate(extraArgs = []) {
-  return spawnSync(
+  const result = spawnSync(
     'helm',
     ['template', 'test-release', CHART_DIR, '--set', `secrets.jwtSecret=${TEST_JWT_SECRET}`, ...extraArgs],
     { encoding: 'utf8' },
   );
+  result.stdout = result.stdout.replace(/\r\n/g, '\n');
+  return result;
 }
 
 describe('Helm chart installation (deploy/kubernetes/helm/meridianos)', { skip: !helmAvailable }, () => {

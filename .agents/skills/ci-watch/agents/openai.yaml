@@ -1,0 +1,4 @@
+interface:
+  display_name: "CI Watch"
+  short_description: "Poll PR checks and continue review gates"
+  default_prompt: "Watch this pull request until CI completes, then continue the configured review workflow."

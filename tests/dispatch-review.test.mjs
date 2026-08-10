@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
-import { createPrReviewWorktree, dispatch, EXIT, parseArgs, parseVerdict, validateReviewerSkill } from "../scripts/dispatch-review.mjs";
+import { createPrReviewWorktree, dispatch, EXIT, parseArgs, parseVerdict, runAntigravity, validateReviewerSkill } from "../scripts/dispatch-review.mjs";
 
 const root = process.cwd();
 const validSkill = `---\nname: meridianos-review-antigravity\nforbidden_actions:\n  - Modify any source code\ndescription: read-only reviewer\n---\n`;
@@ -73,6 +74,24 @@ test("malformed output and undispositioned medium findings cannot approve", () =
   assert.equal(parseVerdict("### Verdict: maybe").verdict, "ERROR");
   assert.equal(parseVerdict("### Verdict: APPROVE\nSeverity: HIGH").verdict, "REQUEST_CHANGES");
   assert.equal(parseVerdict("### Verdict: APPROVE\nSeverity: MEDIUM").verdict, "REQUEST_CHANGES");
+});
+
+test("reviewer process errors remain machine-readable and use only read-only session controls", async () => {
+  let args;
+  const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {};
+  const result = await runAntigravity("review", { cwd: root }, {
+    spawn: (_command, receivedArgs) => {
+      args = receivedArgs;
+      queueMicrotask(() => { child.stderr.emit("data", "terminal command permission denied"); child.emit("close", 1); });
+      return child;
+    },
+  });
+  assert.ok(args.includes("--mode") && args.includes("plan"));
+  assert.ok(args.includes("--sandbox"));
+  assert.equal(result.verdict, "ERROR");
+  assert.match(result.output, /^### Verdict: ERROR$/m);
+  assert.match(result.output, /Review Status: PENDING\/BLOCKED/);
+  assert.equal((result.output.match(/^#{1,6}\s+Verdict:/gm) ?? []).length, 1);
 });
 
 test("missing reviewer instructions block dispatch", () => {

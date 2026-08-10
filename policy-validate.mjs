@@ -77,6 +77,33 @@ export function validatePolicy(policy = {}) {
     err(`auto_merge '${policy.auto_merge}' must be one of ${[...MERGE_MODES].join(' | ')}`);
   }
 
+  // --- UI platform release control ---
+  // An absent section is the documented safe default (legacy). Once present, the flag must be
+  // explicit so a typo cannot silently widen a rollout.
+  const platform = policy?.ui_platform;
+  if (platform != null) {
+    if (typeof platform !== 'object' || Array.isArray(platform)) {
+      err('ui_platform must be an object');
+    } else {
+      if (typeof platform.enabled !== 'boolean') err('ui_platform.enabled must be a boolean');
+      if (platform.rollout_id != null && (typeof platform.rollout_id !== 'string' || platform.rollout_id.trim() === '')) {
+        err('ui_platform.rollout_id must be a non-empty string when supplied');
+      }
+      const eligibility = platform.eligibility;
+      if (eligibility != null) {
+        if (typeof eligibility !== 'object' || Array.isArray(eligibility)) {
+          err('ui_platform.eligibility must be an object');
+        } else if (!['all', 'allowlist'].includes(eligibility.mode)) {
+          err("ui_platform.eligibility.mode must be 'all' or 'allowlist'");
+        } else if (eligibility.mode === 'allowlist') {
+          if (!Array.isArray(eligibility.subjects) || eligibility.subjects.length === 0 || eligibility.subjects.some((subject) => typeof subject !== 'string' || subject.trim() === '')) {
+            err('ui_platform.eligibility.subjects must be a non-empty string array for allowlist mode');
+          }
+        }
+      }
+    }
+  }
+
   // --- model coherence: routine sweep must not cost more than the default ---
   for (const agent of Object.keys(policy?.agent_models ?? {})) {
     const m = policy.agent_models[agent];

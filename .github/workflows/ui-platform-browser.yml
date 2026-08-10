@@ -1,0 +1,31 @@
+name: UI Platform Browser Evidence
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-evidence:
+    name: Chrome, Edge, and Firefox evidence
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install firefox
+      - run: npm run test:browser
+      - name: Upload browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-platform-browser-evidence
+          path: artifacts/
+          if-no-files-found: error

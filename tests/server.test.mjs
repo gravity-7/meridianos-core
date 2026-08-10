@@ -8,6 +8,8 @@ import { applyPolicyUpdates, createDashboardServer } from '../dashboard/server.m
 import { parseYaml } from '../yaml-lite.mjs';
 import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
+import { isUiPlatformEnabled, platformBoundary, resolvePlatformRoute } from '../dashboard/ui-platform.mjs';
+import { UI_PLATFORM_API_CONTRACT_FIXTURES } from './fixtures/ui-platform-api-contracts.mjs';
 
 const config = resolvePaths({ domain: FIXTURE_DOMAIN });
 
@@ -55,6 +57,116 @@ test('GET /healthz returns 200 {ok:true} with no auth token and touches no DB', 
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('UI platform boundary keeps rollout, routes, and safe failures explicit', () => {
+  assert.equal(isUiPlatformEnabled({ ui_platform: { enabled: true } }), true);
+  assert.equal(isUiPlatformEnabled({}), false);
+  assert.equal(resolvePlatformRoute('/app/foundation').id, 'foundation');
+  assert.equal(resolvePlatformRoute('/app/missing'), null);
+  assert.deepEqual(platformBoundary({ body: [] }), { state: 'empty', message: 'There is nothing to show yet.' });
+  assert.deepEqual(platformBoundary({ status: 500, error: new Error('secret') }), { state: 'error', message: 'Unable to load this information. Try again.', recoverable: true });
+});
+
+test('GET /app is feature-flagged and serves the stable platform shell when enabled', async () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'srv-app-'));
+  mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+  writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), `${SAMPLE}ui_platform:\n  enabled: true\n`);
+  const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app/foundation' }, (res) => {
+        let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve({ status: res.statusCode, body }));
+      }); req.on('error', reject); req.end();
+    });
+    assert.equal(result.status, 200);
+    assert.match(result.body, /MeridianOS/);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('GET /app falls back to the legacy dashboard while the platform flag is disabled', async () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'srv-app-legacy-'));
+  mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+  writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), SAMPLE);
+  const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app' }, (res) => resolve({ status: res.statusCode, location: res.headers.location }));
+      req.on('error', reject); req.end();
+    });
+    assert.deepEqual(result, { status: 302, location: '/' });
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('platform rollout leaves representative legacy and public API contracts unchanged', async () => {
+  const request = (server, path) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: server.address().port, path }, (res) => {
+      let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve({ status: res.statusCode, type: res.headers['content-type'], body }));
+    }); req.on('error', reject); req.end();
+  });
+  const start = async (enabled) => {
+    const root = mkdtempSync(join(tmpdir(), 'srv-platform-contract-'));
+    mkdirSync(join(root, '.ai'), { recursive: true });
+    writeFileSync(join(root, '.ai', 'policy.yaml'), `${SAMPLE}ui_platform:\n  enabled: ${enabled}\n`);
+    const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root }));
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return server;
+  };
+  const legacy = await start(false); const platform = await start(true);
+  try {
+    const [legacyIndex, platformIndex, legacyStatus, platformStatus] = await Promise.all([
+      request(legacy, '/'), request(platform, '/'), request(legacy, '/api/status'), request(platform, '/api/status'),
+    ]);
+    assert.equal(legacyIndex.status, 200); assert.equal(platformIndex.status, 200);
+    assert.match(legacyIndex.body, /MeridianOS/); assert.match(platformIndex.body, /MeridianOS/);
+    assert.deepEqual([legacyStatus.status, legacyStatus.type], [platformStatus.status, platformStatus.type]);
+    assert.deepEqual(Object.keys(JSON.parse(legacyStatus.body)).sort(), Object.keys(JSON.parse(platformStatus.body)).sort());
+  } finally { await Promise.all([legacy, platform].map((server) => new Promise((resolve) => server.close(resolve)))); }
+});
+
+test('platform rollout leaves representative public v1 contract fixtures unchanged', async () => {
+  const request = (server, fixture) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: server.address().port, path: fixture.path, method: fixture.method }, (res) => {
+      let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve({ status: res.statusCode, type: res.headers['content-type'], body }));
+    }); req.on('error', reject); req.end();
+  });
+  const start = async (enabled) => {
+    const root = mkdtempSync(join(tmpdir(), 'srv-platform-v1-contract-'));
+    mkdirSync(join(root, '.ai'), { recursive: true });
+    writeFileSync(join(root, '.ai', 'policy.yaml'), `${SAMPLE}ui_platform:\n  enabled: ${enabled}\n`);
+    const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root }));
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return server;
+  };
+  const legacy = await start(false); const platform = await start(true);
+  try {
+    for (const fixture of [UI_PLATFORM_API_CONTRACT_FIXTURES.publicSpecification, UI_PLATFORM_API_CONTRACT_FIXTURES.protectedTasks]) {
+      const [before, after] = await Promise.all([request(legacy, fixture), request(platform, fixture)]);
+      assert.equal(after.status, fixture.status);
+      assert.deepEqual([after.status, after.type, after.body], [before.status, before.type, before.body]);
+    }
+    assert.match((await request(platform, UI_PLATFORM_API_CONTRACT_FIXTURES.publicSpecification)).body, /openapi:/);
+  } finally { await Promise.all([legacy, platform].map((server) => new Promise((resolve) => server.close(resolve)))); }
+});
+
+test('disabling the policy flag rolls an active platform route back to legacy without restart', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'srv-platform-rollback-'));
+  mkdirSync(join(root, '.ai'), { recursive: true });
+  const policyPath = join(root, '.ai', 'policy.yaml');
+  writeFileSync(policyPath, `${SAMPLE}ui_platform:\n  enabled: true\n`);
+  const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const appRequest = () => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app' }, (res) => resolve({ status: res.statusCode, location: res.headers.location }));
+    req.on('error', reject); req.end();
+  });
+  try {
+    assert.equal((await appRequest()).status, 200);
+    writeFileSync(policyPath, `${SAMPLE}ui_platform:\n  enabled: false\n`);
+    assert.deepEqual(await appRequest(), { status: 302, location: '/' });
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
 // Regression: statusCache was referenced (read + reassigned) throughout this file without ever
