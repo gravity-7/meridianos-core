@@ -34,8 +34,8 @@ async function render() {
   if (forcedState) return app.append(forcedState);
   const loading = status('loading'); app.append(loading);
   const requestedPath = location.pathname;
-  const view = await readApplicationStatus();
-  if (location.pathname === requestedPath) app.replaceChildren(card, renderBoundary(view));
+  const statusView = await readApplicationStatus();
+  if (location.pathname === requestedPath) app.replaceChildren(card, renderBoundary(statusView));
 }
 document.addEventListener('click', (event) => { const link = event.target.closest('a[href^="/app"]'); if (!link || event.metaKey || event.ctrlKey) return; event.preventDefault(); history.pushState({}, '', link.href); render(); });
 addEventListener('popstate', render);
