@@ -48,10 +48,10 @@ import { GDPRReport } from '../compliance/reports/gdpr.mjs';
 import { CostAllocationReport } from '../compliance/reports/cost-allocation.mjs';
 import { ModelUsageReport } from '../compliance/reports/model-usage.mjs';
 import { metricsMiddleware, startMetricsCollection, createMetricsEndpoint, toPrometheusText, getPerformanceReport, resetMetrics } from './metrics.mjs';
-import { createRotatingLogger } from '../daemon-logger.mjs';
+import { createRotatingLogger, logOnboardingLifecycleEvent } from '../daemon-logger.mjs';
 import { handleApiV1 } from '../api/v1/router.mjs';
 import { sendError, Errors } from './errors.mjs';
-import { evaluateUiPlatformEligibility } from './ui-platform.mjs';
+import { evaluateUiPlatformEligibility, ONBOARDING_COMPATIBILITY_TARGETS } from './ui-platform.mjs';
 
 // Import ProjectManager for multi-tenant project management
 let _projectManager = null;
@@ -358,6 +358,15 @@ let _dashboardConfig = null;
 /** `config` is the injected AiosConfig (REQUIRED). Threaded to every call this server makes that
  *  accepts one: readSpec/writeSpec, execCommand, restartDaemon, buildStatus, openDb, actions. */
 export function createDashboardServer(config) {
+  // Validation outcomes are intentionally short-lived and contain no credential.
+  // They prevent a client from forging a successful provider test during commit.
+  const onboardingValidations = new Map();
+  const recordOnboardingEvent = async (payload) => {
+    try {
+      const { createOnboardingLifecycleEvent } = await import('../setup-wizard-core.mjs');
+      logOnboardingLifecycleEvent(getV1Logger(config), createOnboardingLifecycleEvent(payload));
+    } catch { /* observability never changes setup behavior */ }
+  };
   _dashboardConfig = config;
   // lazy: don't open the DB just by importing this module
   const getStore = () => (_store ||= createProjectStore({ db: openDb(undefined, config), config }));
@@ -413,6 +422,13 @@ export function createDashboardServer(config) {
       if (req.method === 'GET' && (url.pathname === '/app' || url.pathname.startsWith('/app/'))) {
         let eligibility = { eligible: false };
         try { eligibility = evaluateUiPlatformEligibility(loadPolicy(undefined, config)); } catch { /* missing policy stays safely legacy */ }
+        // Setup is the sole platform route reachable before a policy exists.
+        // It is also a safe recovery entry point for an existing installation:
+        // the renderer shows a non-destructive status instead of redirecting it
+        // into an accidental second setup flow.
+        if (!eligibility.eligible && url.pathname.startsWith('/app/setup')) {
+          eligibility = { eligible: true };
+        }
         if (!eligibility.eligible) {
           res.writeHead(302, { location: '/', 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
           return res.end();
@@ -435,6 +451,40 @@ export function createDashboardServer(config) {
           providers: detectProviders().map((p) => ({ name: p.name, keyEnv: p.keyEnv })),
         }));
       }
+      // Unified onboarding is additive to the legacy setup endpoints. It returns
+      // only non-secret metadata and uses the same per-boot mutation protection.
+      if (req.method === 'GET' && url.pathname === '/api/onboarding/status') {
+        try {
+          const { detectOnboardingInstallation } = await import('../setup-wizard-core.mjs');
+          const { resolveAllProviders } = await import('../providers.mjs');
+          const installation = detectOnboardingInstallation(config.repoRoot);
+          const providers = Object.values(resolveAllProviders({}, config)).map((provider) => ({
+            id: provider.name,
+            label: provider.displayName ?? provider.name,
+            requiresCredential: Boolean(provider.keyEnv),
+          })).filter((provider) => provider.requiresCredential);
+          return send(res, 200, JSON.stringify({
+            ok: true, installation: installation.state, providers,
+            compatibility: { legacySetupAvailable: true },
+          }));
+        } catch {
+          return send(res, 200, JSON.stringify({ ok: false, code: 'onboarding_status_unavailable' }));
+        }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/onboarding/checklist') {
+        try {
+          const run = readRuns({ limit: 1, config })[0] ?? null;
+          const firstRun = run?.run_id ? {
+            id: run.run_id,
+            status: typeof run.outcome === 'string' ? run.outcome : 'unknown',
+            task: typeof run.task === 'string' ? run.task : null,
+            target: `/app/setup/complete?run=${encodeURIComponent(run.run_id)}`,
+          } : null;
+          return send(res, 200, JSON.stringify({ ok: true, firstRun }));
+        } catch {
+          return send(res, 200, JSON.stringify({ ok: false, code: 'onboarding_checklist_unavailable' }));
+        }
+      }
       // GET /static/* — the Settings/Observability workspace's own .mjs modules plus the three
       // vendored frontend libraries (008 — End-User Configurability, FR-015). Read-only, no auth
       // token required (same precedent as index.html itself — these are static assets, not data).
@@ -452,6 +502,60 @@ export function createDashboardServer(config) {
       // Every mutating request must be same-origin + carry the per-boot token (security P1).
       if (req.method === 'POST' && !authorized(req)) {
         return send(res, 403, JSON.stringify({ ok: false, error: 'forbidden: missing/invalid token or cross-origin request' }));
+      }
+      if (req.method === 'POST' && url.pathname === '/api/onboarding/provider-validation') {
+        try {
+          const body = JSON.parse((await readBody(req)) || '{}');
+          const providerId = typeof body?.provider?.id === 'string' ? body.provider.id : '';
+          const credential = typeof body?.credential === 'string' ? body.credential : '';
+          if (!providerId || !credential) return send(res, 400, JSON.stringify({ ok: false, code: 'provider_credential_required' }));
+          const { resolveProvider } = await import('../providers.mjs');
+          const { testProviderConnection, toSafeProviderValidationResult } = await import('../provider-conformance.mjs');
+          const provider = resolveProvider(providerId, {}, config);
+          if (!provider?.keyEnv) return send(res, 400, JSON.stringify({ ok: false, code: 'provider_not_supported' }));
+          const result = toSafeProviderValidationResult(await testProviderConnection(provider, credential), providerId);
+          const revision = typeof body.draftRevision === 'string' && body.draftRevision ? body.draftRevision : randomUUID();
+          if (result.status === 'valid') onboardingValidations.set(revision, { providerId, expiresAt: Date.now() + 10 * 60_000 });
+          void recordOnboardingEvent({ event: result.status === 'valid' ? 'onboarding_step_completed' : 'provider_test_failed', providerId, outcome: result.status, elapsedMs: body.elapsedMs });
+          return send(res, 200, JSON.stringify({ ok: true, revision, result: { ...result, testedAt: new Date().toISOString() } }));
+        } catch {
+          return send(res, 400, JSON.stringify({ ok: false, code: 'provider_validation_unavailable' }));
+        }
+      }
+      if (req.method === 'POST' && url.pathname === '/api/onboarding/preview') {
+        try {
+          const body = JSON.parse((await readBody(req)) || '{}');
+          const { validateOnboardingDraft } = await import('./static/onboarding-draft.mjs');
+          const { resolveProvider } = await import('../providers.mjs');
+          const { buildOnboardingPreview } = await import('../setup-wizard-core.mjs');
+          const draft = validateOnboardingDraft(body.draft);
+          const provider = resolveProvider(draft.provider.id, {}, config);
+          if (!provider?.keyEnv) return send(res, 400, JSON.stringify({ ok: false, code: 'provider_not_supported' }));
+          return send(res, 200, JSON.stringify({ ok: true, review: buildOnboardingPreview({ draft, provider }) }));
+        } catch {
+          return send(res, 400, JSON.stringify({ ok: false, code: 'onboarding_preview_invalid' }));
+        }
+      }
+      if (req.method === 'POST' && url.pathname === '/api/onboarding/commit') {
+        try {
+          const body = JSON.parse((await readBody(req)) || '{}');
+          const { validateOnboardingDraft } = await import('./static/onboarding-draft.mjs');
+          const { resolveProvider } = await import('../providers.mjs');
+          const { commitOnboardingSetup } = await import('../setup-wizard-core.mjs');
+          const draft = validateOnboardingDraft(body.draft, { requireValidation: true });
+          const validation = onboardingValidations.get(draft.revision);
+          if (!validation || validation.providerId !== draft.provider.id || validation.expiresAt < Date.now()) {
+            return send(res, 409, JSON.stringify({ ok: false, code: 'provider_validation_required' }));
+          }
+          const provider = resolveProvider(draft.provider.id, {}, config);
+          const result = commitOnboardingSetup({ draft, provider, credential: body.credential, repoRoot: config.repoRoot });
+          onboardingValidations.delete(draft.revision);
+          void recordOnboardingEvent({ event: 'onboarding_completed', providerId: draft.provider.id, agentCount: draft.agents.length, outcome: 'committed', elapsedMs: body.elapsedMs });
+          return send(res, 200, JSON.stringify({ ok: true, outcome: 'committed', ...result, checklist: ONBOARDING_COMPATIBILITY_TARGETS }));
+        } catch (error) {
+          const code = /existing installation/.test(String(error?.message)) ? 'existing_installation' : 'onboarding_commit_rejected';
+          return send(res, 400, JSON.stringify({ ok: false, code }));
+        }
       }
       // POST /api/client-error (009 — Dashboard Modernization, US3/FR-006/FR-007): the backend half
       // of the dashboard's error-visibility hardening. Every caught client-side error is forwarded

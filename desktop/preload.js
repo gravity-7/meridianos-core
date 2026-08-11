@@ -12,4 +12,11 @@ contextBridge.exposeInMainWorld('meridianos', {
   finishSetup: (monthlyBudget) => ipcRenderer.invoke('wizard:finish', { monthlyBudget }),
   /** Open a URL in the OS default browser instead of navigating the app window. */
   openExternal: (url) => ipcRenderer.invoke('dashboard:open-external', url),
+  /** Unified onboarding capability: only fixed, validated operations cross this bridge. */
+  onboarding: {
+    capabilities: { credentialStore: 'keychain', providerIds: ['anthropic', 'deepseek'] },
+    validateCredential: (providerId, credential) => ipcRenderer.invoke('onboarding:validate-credential', { providerId, credential }),
+    storeCredential: (providerId, credential) => ipcRenderer.invoke('onboarding:store-credential', { providerId, credential }),
+    commitSetup: (draft) => ipcRenderer.invoke('onboarding:commit-setup', { draft }),
+  },
 });

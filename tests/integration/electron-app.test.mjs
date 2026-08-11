@@ -63,12 +63,25 @@ describe('T025 — Electron app packaging (desktop/package.json, file layout)', 
     assert.match(src, /contextBridge\.exposeInMainWorld\('meridianos'/);
     assert.match(src, /saveApiKey/);
     assert.match(src, /finishSetup/);
+    assert.match(src, /onboarding:/);
+    assert.match(src, /credentialStore: 'keychain'/);
+    assert.match(src, /validateCredential/);
+    assert.match(src, /storeCredential/);
+    assert.match(src, /commitSetup/);
   });
 
   test('main.js creates the window with contextIsolation and without nodeIntegration', () => {
     const src = readFileSync(join(DESKTOP_DIR, 'main.js'), 'utf8');
     assert.match(src, /contextIsolation:\s*true/);
     assert.match(src, /nodeIntegration:\s*false/);
+  });
+
+  test('unified first-run loads the shared setup route and retains an explicit legacy fallback', () => {
+    const src = readFileSync(join(DESKTOP_DIR, 'main.js'), 'utf8');
+    assert.match(src, /loadURL\(`http:\/\/localhost:\$\{PORT\}\/app\/setup`\)/);
+    assert.match(src, /MERIDIANOS_LEGACY_SETUP/);
+    assert.match(src, /renderer', 'wizard.html/);
+    assert.match(src, /credentialStore: 'keychain'/);
   });
 });
 

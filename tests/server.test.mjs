@@ -10,6 +10,7 @@ import { resolvePaths } from '../config.mjs';
 import { FIXTURE_DOMAIN } from './_fixture-domain.mjs';
 import { isUiPlatformEnabled, platformBoundary, resolvePlatformRoute } from '../dashboard/ui-platform.mjs';
 import { UI_PLATFORM_API_CONTRACT_FIXTURES } from './fixtures/ui-platform-api-contracts.mjs';
+import { appendRun } from '../runlog.mjs';
 
 const config = resolvePaths({ domain: FIXTURE_DOMAIN });
 
@@ -97,6 +98,89 @@ test('GET /app falls back to the legacy dashboard while the platform flag is dis
       req.on('error', reject); req.end();
     });
     assert.deepEqual(result, { status: 302, location: '/' });
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('unified onboarding is available on a fresh installation, exposes no secret in status, and rejects unauthenticated mutation', async () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'srv-onboarding-'));
+  const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const request = (path, { method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: server.address().port, path, method, headers }, (res) => {
+      let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ status: res.statusCode, body: data }));
+    }); req.on('error', reject); if (body) req.write(body); req.end();
+  });
+  try {
+    const shell = await request('/app/setup');
+    assert.equal(shell.status, 200);
+    assert.match(shell.body, /window\.AIOS_TOKEN = "/);
+    const status = await request('/api/onboarding/status');
+    assert.equal(status.status, 200);
+    assert.equal(JSON.parse(status.body).installation, 'fresh');
+    const denied = await request('/api/onboarding/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ credential: 'never-in-response' }) });
+    assert.equal(denied.status, 403);
+    assert.doesNotMatch(denied.body, /never-in-response/);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('unified onboarding gives an existing installation a non-destructive recovery entry point', async () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'srv-onboarding-existing-'));
+  mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+  writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), SAMPLE);
+  const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app/setup' }, (res) => resolve({ status: res.statusCode })); req.on('error', reject); req.end();
+    });
+    assert.deepEqual(result, { status: 200 });
+    const status = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/api/onboarding/status' }, (res) => {
+        let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve(JSON.parse(body)));
+      }); req.on('error', reject); req.end();
+    });
+    assert.equal(status.installation, 'repair_needed');
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('onboarding preview is semantic and a stale commit is secret-free and non-mutating', async () => {
+  const tenantConfig = setupFreshRepoRoot();
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const credential = 'never-echo-this-onboarding-credential';
+  const draft = {
+    installationName: 'Preview Tenant', agents: ['builder'], monthlyBudgetUsd: 25,
+    provider: { id: 'deepseek' }, validation: { providerId: 'deepseek', status: 'valid', messageCode: 'provider_valid' },
+    revision: 'unvalidated-revision', reviewConfirmed: true,
+  };
+  try {
+    const token = await getDashToken(port);
+    const preview = await httpRequest({ port, path: '/api/onboarding/preview', method: 'POST', token, body: { draft } });
+    assert.equal(preview.status, 200);
+    assert.deepEqual(Object.keys(JSON.parse(preview.body).review).sort(), ['agents', 'budget', 'files', 'monthlyBudgetUsd', 'provider', 'revision']);
+    assert.doesNotMatch(preview.body, /DEEPSEEK_KEY=|never-echo/);
+    assert.equal(existsSync(tenantConfig.policyPath), false);
+    const commit = await httpRequest({ port, path: '/api/onboarding/commit', method: 'POST', token, body: { draft, credential } });
+    assert.equal(commit.status, 409);
+    assert.equal(JSON.parse(commit.body).code, 'provider_validation_required');
+    assert.doesNotMatch(commit.body, /never-echo/);
+    assert.equal(existsSync(tenantConfig.policyPath), false);
+    assert.equal(existsSync(join(tenantConfig.repoRoot, '.env')), false);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('onboarding checklist exposes a stable run target only after a run exists', async () => {
+  const tenantConfig = setupFreshRepoRoot();
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const none = await httpRequest({ port, path: '/api/onboarding/checklist', method: 'GET' });
+    assert.equal(JSON.parse(none.body).firstRun, null);
+    appendRun({ run_id: 'first-run-012', task: 'first-task-012', outcome: 'ok' }, { config: tenantConfig });
+    const available = JSON.parse((await httpRequest({ port, path: '/api/onboarding/checklist', method: 'GET' })).body);
+    assert.deepEqual(available.firstRun, { id: 'first-run-012', task: 'first-task-012', status: 'ok', target: '/app/setup/complete?run=first-run-012' });
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 

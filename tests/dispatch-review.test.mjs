@@ -74,6 +74,7 @@ test("malformed output and undispositioned medium findings cannot approve", () =
   assert.equal(parseVerdict("### Verdict: maybe").verdict, "ERROR");
   assert.equal(parseVerdict("### Verdict: APPROVE\nSeverity: HIGH").verdict, "REQUEST_CHANGES");
   assert.equal(parseVerdict("### Verdict: APPROVE\nSeverity: MEDIUM").verdict, "REQUEST_CHANGES");
+  assert.equal(parseVerdict("No Critical, High, Medium, or Low findings were identified.\n### Verdict: APPROVE").verdict, "APPROVE");
 });
 
 test("reviewer process errors remain machine-readable and use only read-only session controls", async () => {
