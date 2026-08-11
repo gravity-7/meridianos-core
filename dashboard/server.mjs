@@ -52,6 +52,12 @@ import { createRotatingLogger, logOnboardingLifecycleEvent } from '../daemon-log
 import { handleApiV1 } from '../api/v1/router.mjs';
 import { sendError, Errors } from './errors.mjs';
 import { evaluateUiPlatformEligibility, ONBOARDING_COMPATIBILITY_TARGETS } from './ui-platform.mjs';
+import { parseOperationalScope, scopeQuery } from './operational-scope.mjs';
+import { resolveOperationsPolicy } from './policy-schema.mjs';
+import { createOperationalEventBroker, registerOperationalEventBroker, unregisterOperationalEventBroker } from './operational-events.mjs';
+import { dispatchOperationsRequest, operationsError } from './operations-api.mjs';
+import { pruneOperationalEvidence } from './operational-alert-store.mjs';
+import { executeAuditedRestart } from './operational-recovery.mjs';
 
 // Import ProjectManager for multi-tenant project management
 let _projectManager = null;
@@ -70,6 +76,7 @@ const SETUP_HTML = join(HERE, 'setup.html');
 // vendored uPlot/Muuri/Litegraph.js assets. Extension allowlist, not a MIME-sniffing library —
 // zero-dependency principle — every extension actually used under dashboard/static/ is listed.
 const STATIC_DIR = join(HERE, 'static');
+const APP_STATIC_DIR = join(HERE, 'app');
 const STATIC_CONTENT_TYPES = {
   '.mjs': 'text/javascript; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -205,6 +212,14 @@ function authorized(req) {
   return req.headers['x-aios-token'] === AUTH_TOKEN;
 }
 
+function sameOriginRead(req) {
+  const host = String(req.headers.host || '').split(':')[0];
+  if (!LOOPBACK_HOSTS.has(host)) return false;
+  if (!req.headers.origin) return true;
+  try { return LOOPBACK_HOSTS.has(new URL(req.headers.origin).hostname); }
+  catch { return false; }
+}
+
 /** Build the exec-command map for a given tenant CLI path. `cliPath` defaults to
  *  'tools/aios/cli.mjs' (PV's runner) via config.mjs's resolveDomain, so the default map here is
  *  byte-identical to the old module-level constant. */
@@ -268,37 +283,8 @@ function restartDaemon(config) {
   }
 }
 
-// Lazy gateway ledger opener — only opens when a /api/ledger endpoint is hit.
-// Uses the gateway's tenant from config.gateway.registry.tenant or config.gateway.tenant.
-let _ledger = null;
-function getLedger(config) {
-  if (_ledger) return _ledger;
-  try { _ledger = openLedger(undefined, { config }); } catch { return null; }
-  return _ledger;
-}
 function getTenant(config) {
   return config?.gateway?.registry?.tenant ?? config?.gateway?.tenant ?? 'default';
-}
-
-let _store = null;
-
-// Lazy shared db handle for the Phase 7 public REST API (api/v1/router.mjs) — separate
-// connection from `getStore()`'s (same underlying WAL-mode SQLite file, so both coexist safely),
-// since api_keys/webhooks/plugins aren't part of the ProjectStore facade.
-let _v1Db = null;
-function getV1Db(config) {
-  return (_v1Db ||= openDb(undefined, config));
-}
-
-let _v1Logger = null;
-function getV1Logger(config) {
-  if (_v1Logger) return _v1Logger;
-  try {
-    _v1Logger = createRotatingLogger({ config });
-  } catch {
-    _v1Logger = { log: (_t, m) => console.log(`[meridianos] ${m}`), error: (_t, m, e) => console.error(`[meridianos] ${m}`, e ?? '') };
-  }
-  return _v1Logger;
 }
 
 // Security hardening (code-review follow-up): safe to apply to EVERY response regardless of
@@ -358,22 +344,58 @@ let _dashboardConfig = null;
 /** `config` is the injected AiosConfig (REQUIRED). Threaded to every call this server makes that
  *  accepts one: readSpec/writeSpec, execCommand, restartDaemon, buildStatus, openDb, actions. */
 export function createDashboardServer(config) {
+  let store = null;
+  let storeDb = null;
+  let v1Db = null;
+  let v1Logger = null;
+  const getStore = () => {
+    if (!store) {
+      storeDb = openDb(undefined, config);
+      store = createProjectStore({ db: storeDb, config });
+    }
+    return store;
+  };
+  const getV1Db = () => (v1Db ||= openDb(undefined, config));
+  const getV1Logger = () => {
+    if (v1Logger) return v1Logger;
+    try { v1Logger = createRotatingLogger({ config }); }
+    catch { v1Logger = { log: (_t, m) => console.log(`[meridianos] ${m}`), error: (_t, m, e) => console.error(`[meridianos] ${m}`, e ?? '') }; }
+    return v1Logger;
+  };
   // Validation outcomes are intentionally short-lived and contain no credential.
   // They prevent a client from forging a successful provider test during commit.
   const onboardingValidations = new Map();
   const recordOnboardingEvent = async (payload) => {
     try {
       const { createOnboardingLifecycleEvent } = await import('../setup-wizard-core.mjs');
-      logOnboardingLifecycleEvent(getV1Logger(config), createOnboardingLifecycleEvent(payload));
+      logOnboardingLifecycleEvent(getV1Logger(), createOnboardingLifecycleEvent(payload));
     } catch { /* observability never changes setup behavior */ }
   };
   _dashboardConfig = config;
-  // lazy: don't open the DB just by importing this module
-  const getStore = () => (_store ||= createProjectStore({ db: openDb(undefined, config), config }));
+  let operationalDb = null;
+  let operationalLedger = null;
+  let dashboardLedger = null;
+  let lastOperationalRetentionSweep = 0;
+  const getOperationalDb = () => (operationalDb ||= openDb(undefined, config));
+  const getOperationalLedger = () => (operationalLedger ||= openLedger(undefined, { config }));
+  const getDashboardLedger = () => {
+    if (dashboardLedger) return dashboardLedger;
+    try { dashboardLedger = openLedger(undefined, { config }); } catch { return null; }
+    return dashboardLedger;
+  };
+  let initialOperationsPolicy;
+  try { initialOperationsPolicy = resolveOperationsPolicy(loadPolicy(undefined, config)); }
+  catch { initialOperationsPolicy = resolveOperationsPolicy({}); }
+  const operationalBroker = createOperationalEventBroker({
+    maxEvents: initialOperationsPolicy.sse.replayEvents,
+    maxConnections: initialOperationsPolicy.sse.maxConnections,
+    heartbeatMs: initialOperationsPolicy.sse.heartbeatMs,
+  });
+  registerOperationalEventBroker(config, operationalBroker);
   // Start performance metrics collection for this server instance (T191)
   startMetricsCollection(60_000); // export snapshot every 60 s
 
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     try {
       // Metrics (code-review follow-up: "Add metrics export for monitoring") — registers a
       // `res.on('finish', ...)` listener and returns immediately (its `next` is a no-op; this
@@ -411,7 +433,7 @@ export function createDashboardServer(config) {
       // is a completely separate credential from the dashboard's own token).
       if (url.pathname.startsWith('/api/v1/')) {
         const handled = await handleApiV1(req, res, url, {
-          config, db: getV1Db(config), readBody, authorized, logger: getV1Logger(config),
+          config, db: getV1Db(), readBody, authorized, logger: getV1Logger(),
         });
         if (handled) return;
       }
@@ -490,9 +512,15 @@ export function createDashboardServer(config) {
       // token required (same precedent as index.html itself — these are static assets, not data).
       // path.join + a startsWith(STATIC_DIR) check blocks '..' traversal outside the static root.
       if (req.method === 'GET' && url.pathname.startsWith('/static/')) {
-        const rel = decodeURIComponent(url.pathname.slice('/static/'.length));
-        const filePath = join(STATIC_DIR, rel);
-        if (!filePath.startsWith(STATIC_DIR) || !existsSync(filePath) || !statSync(filePath).isFile()) {
+        const appAsset = url.pathname.startsWith('/static/app/');
+        const root = appAsset ? APP_STATIC_DIR : STATIC_DIR;
+        const prefix = appAsset ? '/static/app/' : '/static/';
+        let rel;
+        try { rel = decodeURIComponent(url.pathname.slice(prefix.length)); }
+        catch { return send(res, 404, JSON.stringify({ ok: false, error: 'not found' })); }
+        const filePath = join(root, rel);
+        const outside = path.relative(root, filePath).startsWith('..') || path.isAbsolute(path.relative(root, filePath));
+        if (outside || !existsSync(filePath) || !statSync(filePath).isFile()) {
           return send(res, 404, JSON.stringify({ ok: false, error: 'not found' }));
         }
         const contentType = STATIC_CONTENT_TYPES[path.extname(filePath)] ?? 'application/octet-stream';
@@ -501,7 +529,79 @@ export function createDashboardServer(config) {
       }
       // Every mutating request must be same-origin + carry the per-boot token (security P1).
       if (req.method === 'POST' && !authorized(req)) {
+        if (url.pathname.startsWith('/api/operations/')) {
+          const correlationId = req.headers['x-correlation-id'] || randomUUID();
+          return send(res, 403, JSON.stringify({ ok: false, error: { code: 'OPERATIONS_FORBIDDEN', message: 'This operational mutation requires same-origin dashboard authorization.', correlationId } }));
+        }
         return send(res, 403, JSON.stringify({ ok: false, error: 'forbidden: missing/invalid token or cross-origin request' }));
+      }
+      if (url.pathname.startsWith('/api/operations/')) {
+        const operationCorrelationId = req.headers['x-correlation-id'] || randomUUID();
+        const operationFailure = (code, message) => JSON.stringify({ ok: false, error: { code, message, correlationId: operationCorrelationId } });
+        let scope = null;
+        try {
+          const rawPolicy = loadPolicy(undefined, config);
+          const operationsPolicy = resolveOperationsPolicy(rawPolicy);
+          const tenantId = rawPolicy?.gateway?.registry?.tenant ?? rawPolicy?.gateway?.tenant ?? getTenant(config);
+          scope = parseOperationalScope(url, { tenantId, local: true }, operationsPolicy);
+          const demo = url.searchParams.get('demo') === 'true';
+          if (url.pathname === '/api/operations/events') {
+            if (req.method !== 'GET') return send(res, 405, operationFailure('METHOD_NOT_ALLOWED', 'Realtime events require GET.'));
+            if (!sameOriginRead(req)) return send(res, 403, operationFailure('SSE_FORBIDDEN', 'Realtime updates require the dashboard origin.'));
+            if (!operationsPolicy.sse.enabled || demo) {
+              res.setHeader('retry-after', String(Math.ceil(operationsPolicy.pollingIntervalMs / 1000)));
+              return send(res, 503, operationFailure('SSE_DISABLED', 'Realtime updates are disabled; use polling.'));
+            }
+            const pending = [];
+            let ready = false;
+            const writeEvent = (event) => event.comment
+              ? res.write(`: ${event.comment} ${event.occurredAt}\n\n`)
+              : res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify({ type: event.type, entityId: event.entityId, correlationId: event.correlationId, occurredAt: event.occurredAt })}\n\n`);
+            let unsubscribe;
+            try {
+              const resumeId = req.headers['last-event-id'] ?? url.searchParams.get('lastEventId');
+              unsubscribe = operationalBroker.subscribe(scope, resumeId, (event) => ready ? writeEvent(event) : pending.push(event));
+            } catch (error) {
+              const status = error?.code === 'SSE_CAPACITY' ? 503 : 400;
+              if (status === 503) res.setHeader('retry-after', String(Math.ceil(operationsPolicy.pollingIntervalMs / 1000)));
+              return send(res, status, operationFailure(error?.code || 'SSE_UNAVAILABLE', error?.message || 'Realtime updates are unavailable.'));
+            }
+            res.writeHead(200, {
+              'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive',
+              'x-accel-buffering': 'no', ...BASELINE_SECURITY_HEADERS,
+            });
+            res.flushHeaders?.();
+            res.write(`retry: ${operationsPolicy.pollingIntervalMs}\n\n`);
+            ready = true;
+            for (const event of pending) writeEvent(event);
+            let cleaned = false;
+            const cleanup = () => { if (cleaned) return; cleaned = true; unsubscribe?.(); };
+            req.on('close', cleanup); res.on('close', cleanup);
+            return;
+          }
+          if (req.method === 'POST' && demo) return send(res, 403, operationFailure('DEMO_READ_ONLY', 'Demo operational data is read-only.'));
+          let body = {};
+          if (req.method === 'POST') {
+            try { body = JSON.parse((await readBody(req)) || '{}'); }
+            catch { return send(res, 400, operationFailure('INVALID_JSON', 'Request body must be valid JSON.')); }
+          }
+          const db = getOperationalDb();
+          if (Date.now() - lastOperationalRetentionSweep >= 3600000) {
+            pruneOperationalEvidence(db, { tenantId: scope.tenantId, projectId: scope.projectId, alertRetentionDays: operationsPolicy.alertRetentionDays, auditRetentionDays: operationsPolicy.auditRetentionDays });
+            lastOperationalRetentionSweep = Date.now();
+          }
+          const result = dispatchOperationsRequest({
+            method: req.method, pathname: url.pathname, url, body, headers: { ...req.headers, 'x-correlation-id': operationCorrelationId }, scope,
+            actor: { id: 'local-operator', type: 'user', role: 'admin' }, db, ledger: getOperationalLedger(), config,
+            store: createProjectStore({ db, config }), policy: { operations: operationsPolicy, analytics: rawPolicy.analytics ?? {} }, broker: operationalBroker,
+          });
+          if (!result.handled) return sendError(res, Errors.SERVER_NOT_FOUND);
+          if (result.headers) for (const [key, value] of Object.entries(result.headers)) res.setHeader(key, value);
+          return send(res, result.status, typeof result.body === 'string' ? result.body : JSON.stringify(result.body), result.type);
+        } catch (error) {
+          const failure = operationsError(error, scope, operationCorrelationId);
+          return send(res, failure.status, JSON.stringify(failure.body));
+        }
       }
       if (req.method === 'POST' && url.pathname === '/api/onboarding/provider-validation') {
         try {
@@ -581,7 +681,7 @@ export function createDashboardServer(config) {
           return send(res, 400, JSON.stringify({ ok: false, error: '`message` is required' }));
         }
         const suffix = timestamp ? ` (client ts: ${timestamp})` : '';
-        getV1Logger(config).error(source, `${message}${suffix}`, stack);
+        getV1Logger().error(source, `${message}${suffix}`, stack);
         return send(res, 200, JSON.stringify({ ok: true }));
       }
       // POST /api/setup/plan + /api/setup/commit (008 — End-User Configurability, US3) — placed
@@ -637,10 +737,10 @@ export function createDashboardServer(config) {
       if (req.method === 'GET' && url.pathname === '/metrics') {
         let webhookDeliveries, apiKeysActive;
         try {
-          const v1Db = getV1Db(config);
-          const rows = v1Db.prepare('SELECT status, COUNT(*) AS c FROM webhook_delivery_logs GROUP BY status').all();
+          const currentV1Db = getV1Db();
+          const rows = currentV1Db.prepare('SELECT status, COUNT(*) AS c FROM webhook_delivery_logs GROUP BY status').all();
           webhookDeliveries = Object.fromEntries(rows.map((r) => [r.status, r.c]));
-          apiKeysActive = v1Db.prepare('SELECT COUNT(*) AS c FROM api_keys WHERE is_active = 1').get().c;
+          apiKeysActive = currentV1Db.prepare('SELECT COUNT(*) AS c FROM api_keys WHERE is_active = 1').get().c;
         } catch { /* Phase 7 tables may not exist yet on a very old DB — metrics export must never 500 */ }
         res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4', 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
         return res.end(toPrometheusText({ webhookDeliveries, apiKeysActive }));
@@ -704,8 +804,18 @@ export function createDashboardServer(config) {
         return;
       }
       if (req.method === 'POST' && url.pathname === '/api/restart') {
-        // Fire the detached restart FIRST, then respond — the detached process is independent of us.
-        return send(res, 200, JSON.stringify(restartDaemon(config)));
+        let body = {};
+        try { body = JSON.parse((await readBody(req)) || '{}'); } catch { /* legacy empty/non-JSON body remains compatible */ }
+        const policy = loadPolicy(undefined, config);
+        const tenantId = policy?.gateway?.registry?.tenant ?? policy?.gateway?.tenant ?? getTenant(config);
+        const correlationId = req.headers['x-correlation-id'] || randomUUID();
+        const actor = { id: 'local-operator', role: 'admin' };
+        const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : 'Confirmed from the legacy dashboard restart control.';
+        const db = getOperationalDb();
+        // Fire the detached restart only after durable intent evidence exists.
+        const { result, outcome } = executeAuditedRestart({ db, restart: () => restartDaemon(config), actor, tenantId, projectId: body.projectId ?? null, sourceRunId: body.sourceRunId ?? null, reason, correlationId });
+        const queryValue = body.scope?.from && body.scope?.to ? scopeQuery({ from: body.scope.from, to: body.scope.to, projectId: body.scope.project ?? null, provider: body.scope.provider ?? null }) : new URLSearchParams();
+        return send(res, 200, JSON.stringify({ ...result, audit: { id: outcome.id, href: `/app/observability/audit/${encodeURIComponent(outcome.id)}${queryValue.size ? `?${queryValue}` : ''}` } }));
       }
       if (req.method === 'GET' && url.pathname === '/api/commands') {
         const cliPath = config.domain?.cliPath ?? 'tools/aios/cli.mjs';
@@ -741,7 +851,7 @@ export function createDashboardServer(config) {
         return send(res, 200, JSON.stringify({ ok: true, providers }));
       }
       if (req.method === 'GET' && url.pathname === '/api/ledger/summary') {
-        const ledger = getLedger(config);
+        const ledger = getDashboardLedger();
         if (!ledger) return send(res, 200, JSON.stringify({ ok: true, available: false }));
         const tenant = getTenant(config);
         const week = queryWindow(ledger, { tenant, since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() });
@@ -751,7 +861,7 @@ export function createDashboardServer(config) {
         return send(res, 200, JSON.stringify({ ok: true, available: true, ...week, denyCount }));
       }
       if (req.method === 'GET' && url.pathname === '/api/ledger/by-model') {
-        const ledger = getLedger(config);
+        const ledger = getDashboardLedger();
         if (!ledger) return send(res, 200, JSON.stringify({ ok: true, available: false }));
         const tenant = getTenant(config);
         const rows = ledger.prepare(
@@ -761,7 +871,7 @@ export function createDashboardServer(config) {
         return send(res, 200, JSON.stringify({ ok: true, available: true, models: rows }));
       }
       if (req.method === 'GET' && url.pathname === '/api/ledger/by-agent') {
-        const ledger = getLedger(config);
+        const ledger = getDashboardLedger();
         if (!ledger) return send(res, 200, JSON.stringify({ ok: true, available: false }));
         const tenant = getTenant(config);
         const rows = ledger.prepare(
@@ -772,7 +882,7 @@ export function createDashboardServer(config) {
         return send(res, 200, JSON.stringify({ ok: true, available: true, agents: rows }));
       }
       if (req.method === 'GET' && url.pathname === '/api/ledger/deny-events') {
-        const ledger = getLedger(config);
+        const ledger = getDashboardLedger();
         if (!ledger) return send(res, 200, JSON.stringify({ ok: true, available: false }));
         const tenant = getTenant(config);
         const rows = ledger.prepare(
@@ -789,7 +899,7 @@ export function createDashboardServer(config) {
       // ── P5: Analytics endpoints (AI Spend Observability) ─────────────────
 
       // Helper to open the gateway ledger and get tenant
-      const getAnalyticsLedger = () => getLedger(config);
+      const getAnalyticsLedger = () => getDashboardLedger();
 
       // GET /api/analytics/overview — KPI aggregates (T019)
       if (req.method === 'GET' && url.pathname === '/api/analytics/overview') {
@@ -1137,7 +1247,7 @@ export function createDashboardServer(config) {
         const { pluginStatus } = await import('../plugin-loader.mjs');
         const regPath = registryPath(config);
         seedBuiltinPlugins(regPath);
-        const db = getV1Db(config);
+        const db = getV1Db();
         return send(res, 200, JSON.stringify({ ok: true, plugins: pluginStatus(db, regPath) }));
       }
       if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/install$/)) {
@@ -1145,7 +1255,7 @@ export function createDashboardServer(config) {
         const { registryPath } = await import('../plugin-registry.mjs');
         const { installPlugin } = await import('../plugin-loader.mjs');
         try {
-          const row = installPlugin(getV1Db(config), registryPath(config), pluginId, { logger: getV1Logger(config), policy: loadPolicy(undefined, config) });
+          const row = installPlugin(getV1Db(), registryPath(config), pluginId, { logger: getV1Logger(), policy: loadPolicy(undefined, config) });
           return send(res, 200, JSON.stringify({ ok: true, plugin: row }));
         } catch (err) {
           return send(res, 400, JSON.stringify({ ok: false, error: err.message }));
@@ -1154,7 +1264,7 @@ export function createDashboardServer(config) {
       if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/uninstall$/)) {
         const pluginId = url.pathname.split('/')[3];
         const { uninstallPlugin } = await import('../plugin-loader.mjs');
-        uninstallPlugin(getV1Db(config), pluginId, { logger: getV1Logger(config) });
+        uninstallPlugin(getV1Db(), pluginId, { logger: getV1Logger() });
         return send(res, 200, JSON.stringify({ ok: true }));
       }
       if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/(enable|disable)$/)) {
@@ -1162,7 +1272,7 @@ export function createDashboardServer(config) {
         const pluginId = parts[3];
         const { enablePlugin, disablePlugin } = await import('../plugin-loader.mjs');
         try {
-          (parts[4] === 'enable' ? enablePlugin : disablePlugin)(getV1Db(config), pluginId, { logger: getV1Logger(config) });
+          (parts[4] === 'enable' ? enablePlugin : disablePlugin)(getV1Db(), pluginId, { logger: getV1Logger() });
           return send(res, 200, JSON.stringify({ ok: true }));
         } catch (err) {
           return send(res, 400, JSON.stringify({ ok: false, error: err.message }));
@@ -1174,7 +1284,7 @@ export function createDashboardServer(config) {
         const body = JSON.parse((await readBody(req)) || '{}');
         try {
           const entry = ratePlugin(registryPath(config), pluginId, Number(body.stars));
-          getV1Logger(config).log('plugin-loader', `plugin '${pluginId}' rated ${body.stars} stars`);
+          getV1Logger().log('plugin-loader', `plugin '${pluginId}' rated ${body.stars} stars`);
           return send(res, 200, JSON.stringify({ ok: true, entry }));
         } catch (err) {
           return send(res, 400, JSON.stringify({ ok: false, error: err.message }));
@@ -1183,13 +1293,13 @@ export function createDashboardServer(config) {
       if (req.method === 'GET' && url.pathname.match(/^\/api\/plugins\/[^/]+\/config$/)) {
         const pluginId = url.pathname.split('/')[3];
         const { getPluginConfig } = await import('../plugin-loader.mjs');
-        return send(res, 200, JSON.stringify({ ok: true, config: getPluginConfig(getV1Db(config), pluginId) }));
+        return send(res, 200, JSON.stringify({ ok: true, config: getPluginConfig(getV1Db(), pluginId) }));
       }
       if (req.method === 'PUT' && url.pathname.match(/^\/api\/plugins\/[^/]+\/config$/)) {
         const pluginId = url.pathname.split('/')[3];
         const { setPluginConfig } = await import('../plugin-loader.mjs');
         const body = JSON.parse((await readBody(req)) || '{}');
-        setPluginConfig(getV1Db(config), pluginId, body.values ?? {}, { sensitiveKeys: body.sensitiveKeys ?? [], logger: getV1Logger(config) });
+        setPluginConfig(getV1Db(), pluginId, body.values ?? {}, { sensitiveKeys: body.sensitiveKeys ?? [], logger: getV1Logger() });
         return send(res, 200, JSON.stringify({ ok: true }));
       }
       if (req.method === 'POST' && url.pathname.match(/^\/api\/plugins\/[^/]+\/test$/)) {
@@ -1210,7 +1320,7 @@ export function createDashboardServer(config) {
             return send(res, 400, JSON.stringify({ ok: false, error: `Plugin '${entry.name ?? pluginId}' failed static analysis: ${analysis.violations.join('; ')}` }));
           }
           const pluginModule = await import(pathToFileURL(entryPath).href);
-          const testConfig = getPluginConfig(getV1Db(config), pluginId, { includeSensitive: true });
+          const testConfig = getPluginConfig(getV1Db(), pluginId, { includeSensitive: true });
           const result = await testPluginConnection(pluginModule, testConfig);
           return send(res, 200, JSON.stringify({ ok: true, ...result }));
         } catch (err) {
@@ -1269,7 +1379,7 @@ export function createDashboardServer(config) {
         let copilotStatus = 'unknown';
 
         try {
-          const ledger = getLedger(config);
+          const ledger = getDashboardLedger();
           if (ledger) {
             const tenant = getTenant(config);
 
@@ -1442,7 +1552,7 @@ export function createDashboardServer(config) {
         if (!run) return send(res, 404, JSON.stringify({ ok: false, error: 'run not found' }));
         let ledgerCost = null;
         try {
-          const ledger = getLedger(config);
+          const ledger = getDashboardLedger();
           if (ledger) {
             const tenant = getTenant(config);
             const rows = ledger.prepare(
@@ -1719,6 +1829,17 @@ export function createDashboardServer(config) {
       return sendError(res, Errors.SERVER_INTERNAL, {}, { detail: String((e && e.message) || e) });
     }
   });
+  server.on('close', () => {
+    unregisterOperationalEventBroker(config, operationalBroker);
+    operationalBroker.close();
+    try { operationalDb?.close(); } catch {}
+    try { operationalLedger?.close(); } catch {}
+    try { dashboardLedger?.close(); } catch {}
+    try { storeDb?.close(); } catch {}
+    try { v1Db?.close(); } catch {}
+    try { v1Logger?.close?.(); } catch {}
+  });
+  return server;
 }
 
 /**

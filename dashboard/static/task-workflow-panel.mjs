@@ -27,6 +27,8 @@ import { registerPanel } from './settings-workspace.mjs';
 import { registerPollHandler } from './poll-dispatcher.mjs';
 import { reportError } from './client-error-log.mjs';
 import { esc as escapeHtml, relTime, shortModel, badgeFor, outcomeBadge } from './dashboard-utils.mjs';
+import { operationalRunOutcomeLabel, operationalTaskStateLabel } from '/static/app/shared/legacy-adapters.mjs';
+export { operationalRunOutcomeLabel, operationalTaskStateLabel } from '/static/app/shared/legacy-adapters.mjs';
 
 async function fetchJson(path) {
   const res = await fetch(path);
@@ -99,7 +101,7 @@ function renderQueue(el, q) {
         if (t.routing.antigravity?.model) mb += `<span class="model" style="margin:0 6px 0 2px" title="Antigravity">${escapeHtml(shortModel(t.routing.antigravity.model))}</span>`;
       }
     }
-    return `<div class="row run" style="cursor:pointer" onclick="openSpec('${escapeHtml(t.id)}', '${escapeHtml(sp)}')"><span class="mono" style="font-size:12px;color:var(--text-muted);min-width:16px">${i + 1}</span><div style="flex:1;min-width:0"><span class="mono" style="font-size:13px">${escapeHtml(t.id)}</span></div><span class="badge ${badgeFor(t.status)}">${escapeHtml(t.status)}</span>${mb}<span style="font-size:11px;color:var(--text-muted)">${escapeHtml(t.owner)}</span></div>`;
+    return `<div class="row run" style="cursor:pointer" onclick="openSpec('${escapeHtml(t.id)}', '${escapeHtml(sp)}')"><span class="mono" style="font-size:12px;color:var(--text-muted);min-width:16px">${i + 1}</span><div style="flex:1;min-width:0"><span class="mono" style="font-size:13px">${escapeHtml(t.id)}</span></div><span class="badge ${badgeFor(t.status)}">${escapeHtml(operationalTaskStateLabel(t.status))}</span>${mb}<span style="font-size:11px;color:var(--text-muted)">${escapeHtml(t.owner)}</span></div>`;
   }).join('');
 }
 
@@ -109,7 +111,7 @@ function renderRuns(el, noteEl, runs) {
   if (!runs.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:.4rem 0">no runs yet — the runner has not fired</div>'; return; }
   el.innerHTML = runs.map((r) => {
     const t = r.ts ? new Date(r.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
-    return `<div class="row run" data-sess="${escapeHtml(r.session || '')}" data-app="${escapeHtml(r.agent || '')}" style="align-items:flex-start;cursor:pointer"><span class="mono" style="font-size:12px;color:var(--text-muted);min-width:46px">${t}</span><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:13px">${escapeHtml(r.agent || '—')}</span>${r.model ? `<span class="model">${escapeHtml(shortModel(r.model))}</span>` : ''}<span class="badge ${outcomeBadge(r.outcome)}">${escapeHtml(r.outcome)}</span>${r.tokens ? `<span class="mono" style="font-size:11px;color:var(--text-muted)">${fmt(r.tokens)} tok</span>` : ''}</div><div style="font-size:12px;color:var(--text-muted);margin-top:2px">${r.task ? `<span class="mono">${escapeHtml(r.task)}</span> — ` : ''}${escapeHtml(r.note || '')}${r.session ? ` · <span class="mono">${escapeHtml(String(r.session).slice(0, 8))}</span>` : ''}</div></div></div>`;
+    return `<div class="row run" data-sess="${escapeHtml(r.session || '')}" data-app="${escapeHtml(r.agent || '')}" style="align-items:flex-start;cursor:pointer"><span class="mono" style="font-size:12px;color:var(--text-muted);min-width:46px">${t}</span><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:13px">${escapeHtml(r.agent || '—')}</span>${r.model ? `<span class="model">${escapeHtml(shortModel(r.model))}</span>` : ''}<span class="badge ${outcomeBadge(r.outcome)}">${escapeHtml(operationalRunOutcomeLabel(r.outcome))}</span>${r.tokens ? `<span class="mono" style="font-size:11px;color:var(--text-muted)">${fmt(r.tokens)} tok</span>` : ''}</div><div style="font-size:12px;color:var(--text-muted);margin-top:2px">${r.task ? `<span class="mono">${escapeHtml(r.task)}</span> — ` : ''}${escapeHtml(r.note || '')}${r.session ? ` · <span class="mono">${escapeHtml(String(r.session).slice(0, 8))}</span>` : ''}</div></div></div>`;
   }).join('');
   el.querySelectorAll('.run').forEach((row) => {
     row.onclick = () => {

@@ -81,3 +81,74 @@ git diff --check
 ```
 
 Then run `$speckit-converge` until no unbuilt or inconsistent tasks remain. After each implementation push, follow the repository-mandated CI watch and Antigravity dispatch loop. Do not merge the implementation PR.
+
+## Stage 2 execution record — 2026-08-11
+
+### Environment and compatibility baseline
+
+- Baseline: merged `origin/main` commit `6d922e971d4d`, containing UXF-002 and UXF-003.
+- Runtime: Node.js `v24.15.0`; npm `11.12.1`.
+- Reference desktop: Windows, AMD Ryzen 7 7435HS, 16 logical browser-reported processors, 25,439,199,232 bytes physical RAM. The Chromium Device Memory API reported 16 GiB; Firefox does not expose that value.
+- Dependencies: no chart or runtime dependency was added; the existing vendored uPlot asset is used as an optional enhancement.
+- Pre-change baseline: 1,572 tests; 1,563 passed, 0 failed, 9 skipped.
+
+### Node and API validation
+
+`npm test` completed in 24.00 seconds: **1,621 tests; 1,612 passed, 0 failed, 9 skipped** across 126 suites.
+
+Focused tests separately covered shared scope, snapshot cursors, alert lifecycle/retention, retry/restart authorization and audit records, operational API envelopes, legacy/public compatibility, SSE broker and polling fallback, chart/table parity, and source-quality contracts. The representative compatibility gate preserved `/api/status`, `/api/run`, `/api/ledger/summary`, `/api/analytics/overview`, `/api/activity/feed`, `/api/v1/openapi.yaml`, existing static assets, direct app routes, and missing-token mutation denial.
+
+### Browser and accessibility evidence
+
+The relevant UXF-002/003/004 matrix completed **45/45 tests**:
+
+- UXF-004 operational scenarios: 27/27 (nine each in Chrome, Edge, and Firefox).
+- UXF-002 platform regression: 3/3.
+- UXF-003 onboarding regression: 15/15.
+
+Browsers were Chrome `151.0.7922.34`, Edge `151.0.7922.34`, and Firefox `153.0`. Operational artifacts include a 320 px screenshot, semantic-accessibility JSON, screen-reader semantic snapshots, chart-performance JSON, and alert-to-run timing JSON per browser.
+
+Automated semantic checks reported **zero critical or serious issues** in every browser for duplicate IDs, missing interactive/form names, table captions/headers, and page heading structure. Keyboard focus plus Enter activation reached cost evidence. Forced colors, reduced motion, 200% zoom, three semantic finance/chart tables without uPlot, direct/Back/Forward URL scope, lifecycle focus/live status, and 320 px layout all passed.
+
+### Performance and operational timing
+
+Each browser rendered ten gateway/cost samples with exactly 2,000 already-received points and deterministic bucket size 1:
+
+| Browser | Chart/table p95 | Longest observed main-thread task | Limits |
+|---|---:|---:|---|
+| Chrome | 37.2 ms | 66 ms | <=500 ms / <=200 ms |
+| Edge | 36.6 ms | 69 ms | <=500 ms / <=200 ms |
+| Firefox | 76.0 ms | 0 ms reported | <=500 ms / <=200 ms |
+
+The automated failed-alert journey opened the exact run, found retained evidence, and identified the safe recovery action ten times per browser:
+
+| Browser | Median | Successful runs | Limit |
+|---|---:|---:|---|
+| Chrome | 212.0 ms | 10/10 | <=60 s and >=90% |
+| Edge | 233.0 ms | 10/10 | <=60 s and >=90% |
+| Firefox | 311.5 ms | 10/10 | <=60 s and >=90% |
+
+The attention scenario presented the top textual `critical` condition in 301 ms on Chrome, 294 ms on Edge, and 842 ms on Firefox, all below five seconds.
+
+These deterministic browser timings prove the automated thresholds and repeatability. They do not fabricate the separate moderated human-validation success criteria. The draft-PR review can record participant observations here when conducted:
+
+| Participant | Role | Top attention + affected entity correct? | Attention time | Alert-to-run outcome | Journey time | Notes |
+|---|---|---|---:|---|---:|---|
+| P1 | Operator | Pending moderated review | — | Pending moderated review | — | — |
+| P2 | Operator | Pending moderated review | — | Pending moderated review | — | — |
+| P3 | Operator | Pending moderated review | — | Pending moderated review | — | — |
+| P4 | Operator | Pending moderated review | — | Pending moderated review | — | — |
+| P5 | Operator | Pending moderated review | — | Pending moderated review | — | — |
+| F1 | Finance/governance | Not applicable | — | Identify top cost driver and supporting records: pending moderated review | — | — |
+
+### Commands executed
+
+```powershell
+node --test tests/operational-scope.test.mjs tests/operational-analytics.test.mjs tests/operational-alert-store.test.mjs tests/operational-api.test.mjs tests/operational-realtime.test.mjs tests/realtime-coordinator.test.mjs tests/operational-recovery.test.mjs tests/operational-client.test.mjs tests/operational-chart.test.mjs tests/app-route-registry.test.mjs tests/runlog.test.mjs tests/dashboard-api-compatibility.test.mjs
+npx playwright test browser-tests/operational-overview.spec.mjs
+npx playwright test browser-tests/ui-platform.spec.mjs browser-tests/operational-overview.spec.mjs
+npx playwright test browser-tests/onboarding.spec.mjs
+npm test
+```
+
+`$speckit-converge` appended T070–T079 for discovered interface, browser-evidence, HTTP/SSE, audit, recovery, detail-route, alert, and finance-driver gaps. Each appended task is complete; the repeat assessment found no remaining unbuilt requirement.
