@@ -207,6 +207,12 @@ export function generateApiKey(db, { name, scopes }) {
  */
 export function validateApiKey(db, token) {
   if (typeof token !== 'string' || !/^mk-[a-zA-Z0-9]{32}$/.test(token)) return null;
+  ensureApiKeyLifecycle(db);
+  const lifecycle = db.prepare('SELECT overlap_until FROM management_api_key_lifecycle WHERE key_id = ?').get(token);
+  if (lifecycle?.overlap_until && lifecycle.overlap_until <= Math.floor(Date.now() / 1000)) {
+    db.prepare('UPDATE api_keys SET is_active = 0 WHERE id = ?').run(token);
+    return null;
+  }
   const row = db.prepare('SELECT * FROM api_keys WHERE id = ? AND is_active = 1').get(token);
   if (!row) return null;
   db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(Math.floor(Date.now() / 1000), token);

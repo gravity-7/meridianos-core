@@ -380,7 +380,7 @@ export class InvitationManager {
 
     // Check if invitation already exists
     const existingInvitation = this.getInvitationByEmail(email, projectId);
-    if (existingInvitation) {
+    if (existingInvitation?.status === 'pending') {
       throw new Error('Invitation already exists for this user and project');
     }
 
