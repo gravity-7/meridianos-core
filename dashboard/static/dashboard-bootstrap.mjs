@@ -40,6 +40,7 @@ import { renderSystemLog } from './daemon-console.mjs';
 import { populateControls } from './policy-levers.mjs';
 import { reportError } from './client-error-log.mjs';
 import { runPollHandlers } from './poll-dispatcher.mjs';
+import { operationalPollingInterval, operationalStatusPresentation } from '/static/app/shared/legacy-adapters.mjs';
 import './optimization.mjs';
 import './ide-integration.mjs';
 import './subscriptions.mjs';
@@ -118,7 +119,7 @@ function render(s){
   renderFounderUsage(s.budget);
   renderProviderCost(s.budget.providerUsage && s.budget.providerUsage.last7d);
   $('clock').textContent=new Date(s.ts).toLocaleTimeString();
-  window.kill=!!s.kill_switch; $('dot').style.background=window.kill?'#e34948':'#0ca30c';
+  window.kill=!!s.kill_switch; $('dot').style.background=operationalStatusPresentation({ killSwitch: window.kill }).color;
   renderParked(s.parked||[]);
   renderTaskCategories(s.taskCategories);
   renderSystemLog(s.systemLog||[]);
@@ -135,9 +136,9 @@ async function poll(){
       }
     }
     render(s);
-    if(!window.kill)$('dot').style.background='#0ca30c';
+    if(!window.kill)$('dot').style.background=operationalStatusPresentation().color;
   }
-  catch(e){ $('dot').style.background='#e34948'; $('clock').textContent='offline'; reportError('poll', e); }
+  catch(e){ const status=operationalStatusPresentation({ offline: true }); $('dot').style.background=status.color; $('clock').textContent=status.label; reportError('poll', e); }
   // 009 — Dashboard Modernization (US3/FR-008): every feature that used to chain onto poll via
   // reassign the global poll variable itself now registers through poll-dispatcher.mjs's
   // registerPollHandler() instead. Each handler's failure is isolated and reported individually;
@@ -165,7 +166,7 @@ function renderTaskCategories(categories) {
   el.innerHTML = htm;
 }
 
-const POLL_MS=10000;
+const POLL_MS=operationalPollingInterval(10000);
 let pollTimer=null;
 function startPolling(){ if(pollTimer) return; poll(); pollTimer=setInterval(()=>poll(),POLL_MS); }
 function stopPolling(){ clearInterval(pollTimer); pollTimer=null; }

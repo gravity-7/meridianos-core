@@ -55,6 +55,8 @@ import { createAios, resolveAnalyticsConfig } from './config.mjs';
 import { assembleGateway } from './gateway/index.mjs';
 import { syncFromAdo } from './azure-devops-source.mjs';
 import { validatePolicySchema } from './policy-validate.mjs';
+import { upsertAlertOccurrence } from './dashboard/operational-alert-store.mjs';
+import { publishRegisteredOperationalEvent } from './dashboard/operational-events.mjs';
 
 // Composition root: as of ★③.2 Part B, a DomainPlugin is a REQUIRED, explicitly-injected
 // dependency (there is no baked-in default tenant) — so the AIOS config can no longer be
@@ -320,6 +322,7 @@ export async function runRunnerCycle(deps) {
     _loadMeta     = loadMeta,
     _loadPolicy   = loadPolicy,
     _launchAgent  = launchAgent,
+    operationalDb = null,
   } = deps;
   const events = store.events;
 
@@ -328,6 +331,20 @@ export async function runRunnerCycle(deps) {
     const launcher = dryRun ? undefined : _launchAgent;
 
     const result = await _executeRun({ store, policy, launch: launcher, config: cfg });
+
+    const tenantId = policy?.gateway?.registry?.tenant ?? policy?.gateway?.tenant ?? cfg?.gateway?.registry?.tenant ?? cfg?.gateway?.tenant ?? 'default';
+    for (const run of result.runs ?? []) {
+      const projectId = String(run.task || '').includes('/') ? String(run.task).split('/')[0] : null;
+      publishRegisteredOperationalEvent(cfg, { type: 'run.changed', tenantId, projectId, entityId: run.run_id, correlationId: run.run_id });
+      if (operationalDb && ['failed','blocked'].includes(run.outcome)) {
+        const alert = upsertAlertOccurrence(operationalDb, {
+          source: 'failed-run', ruleId: 'failed-run', severity: run.outcome === 'blocked' ? 'warning' : 'critical',
+          title: `Run ${run.run_id} ${run.outcome}`, summary: `Run ended with typed reason ${run.reason ?? 'unknown'}.`, taskId: run.task, runId: run.run_id,
+          fingerprint: ['failed-run', tenantId, projectId, run.task, run.run_id].join(':'),
+        }, { tenantId, projectId, actor: { id: 'runner', type: 'system', role: null }, correlationId: run.run_id, now: run.ts });
+        publishRegisteredOperationalEvent(cfg, { type: 'alert.changed', tenantId, projectId, entityId: alert.occurrence.id, correlationId: run.run_id });
+      }
+    }
 
     // Re-render the board after any state changes
     try { _render(_loadMeta()); } catch (renderErr) {
@@ -380,6 +397,7 @@ async function runCycle() {
       logger,
       dryRun: process.env.AIOS_DRY_RUN === '1',
       config,
+      operationalDb: db,
     });
   } catch (e) {
     // Same belt-and-suspenders pattern as watchdogTick.
@@ -550,7 +568,7 @@ export async function start({ domain } = {}) {
             projectedTotal: forecast.projectedTotal || 0,
             forecastStatus: forecast.status || 'on-track',
             anomalies: anoms || [],
-          });
+          }, { db, tenantId: gwTenant });
           if (fired.length > 0) {
             logger.log('alerts', `${fired.length} alert(s) triggered: ${fired.map(f => f.ruleId).join(', ')}`);
           }

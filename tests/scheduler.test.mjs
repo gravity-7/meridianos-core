@@ -17,6 +17,8 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRotatingLogger } from '../daemon-logger.mjs';
+import { openDb } from '../db.mjs';
+import { listAlertOccurrences } from '../dashboard/operational-alert-store.mjs';
 
 // ---------------------------------------------------------------------------
 // Helper: build a minimal fake logger (captures calls, never writes to disk)
@@ -262,6 +264,19 @@ test('runRunnerCycle: logs fired runs when executeRun succeeds', async () => {
 
   const fired = logger.calls.find(c => c.level === 'log' && c.msg.includes('fired 1'));
   assert.ok(fired, 'should log "fired 1 run(s)"');
+});
+
+test('runRunnerCycle persists a failed-run occurrence without exposing provider output', async () => {
+  const { runRunnerCycle } = await import('../scheduler.mjs');
+  const logger = fakeLogger(); const store = stubStore(); const operationalDb = openDb(':memory:', { dbPath: ':memory:' });
+  await runRunnerCycle({
+    store, logger, dryRun: false, operationalDb, config: { gateway: { tenant: 'tenant-a' } },
+    _executeRun: async () => ({ fired: true, runs: [{ run_id: 'run-a', ts: '2026-08-11T00:00:00.000Z', task: 'project-a/task-a', outcome: 'failed', reason: 'timeout', note: 'credential=never-copy' }] }),
+    _render: () => {}, _loadMeta: () => ({}), _loadPolicy: () => ({ gateway: { tenant: 'tenant-a' } }), _launchAgent: async () => ({}),
+  });
+  const alerts = listAlertOccurrences(operationalDb, { tenantId: 'tenant-a', projectId: 'project-a' });
+  assert.equal(alerts.length, 1); assert.equal(alerts[0].run_id, 'run-a'); assert.equal(JSON.stringify(alerts).includes('never-copy'), false);
+  operationalDb.close();
 });
 
 // ---------------------------------------------------------------------------

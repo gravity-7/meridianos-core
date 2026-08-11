@@ -4,9 +4,9 @@ test('platform routes, history, themes, action states, keyboard access, and reco
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.goto('/app/foundation'); await expect(page.getByRole('heading', { name: 'Platform foundation' })).toBeVisible();
-  await page.getByRole('link', { name: 'Overview' }).click(); await expect(page).toHaveURL(/\/app$/);
-  await page.goBack(); await expect(page).toHaveURL(/\/app\/foundation$/);
-  await page.goForward(); await expect(page).toHaveURL(/\/app$/);
+  await page.getByRole('link', { name: 'Overview' }).click(); await expect(page).toHaveURL(/\/app\?.*from=/);
+  await page.goBack(); await expect(page).toHaveURL(/\/app\/foundation\?.*from=/);
+  await page.goForward(); await expect(page).toHaveURL(/\/app\?.*from=/);
   await page.goto('/app/not-found'); await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   for (const state of ['idle', 'pending', 'disabled', 'success', 'loading', 'empty', 'error', 'fatal']) {
     await page.goto(`/app?state=${state}`); await expect(page.locator(`[data-state="${state}"]`)).toBeVisible();

@@ -9,6 +9,8 @@
  * bars over `/api/ledger/spend-by-provider`, satisfying "actual chart, not a restyled tile").
  */
 import { registerPanel } from './settings-workspace.mjs';
+import { operationalPointColumns } from '/static/app/shared/legacy-adapters.mjs';
+export { operationalPointColumns } from '/static/app/shared/legacy-adapters.mjs';
 
 // 009 — Dashboard Modernization (US5/FR-010): read design-tokens.css's custom properties via
 // getComputedStyle so light/dark mode is picked up automatically — no separate dark-mode branch
@@ -41,7 +43,7 @@ function uplotAxisTheme() {
 /** Transform queryTimeseries()'s `{ series: [{ label, data: [{ts, cost, tokens}] }] }` shape into
  *  uPlot's `[xs[], ys[]]` column format, summing `field` across every series per timestamp
  *  bucket — a single combined line, not a per-provider breakdown (that's the bar panel's job). */
-function toUplotData(timeseries, field) {
+export function toUplotData(timeseries, field) {
   const byTs = new Map();
   for (const s of timeseries.series ?? []) {
     for (const point of s.data) {
@@ -97,7 +99,7 @@ async function renderTimeseriesChart(el, { field, label, colorKey, groupBy = 'pr
 
 /** Flatten providerBreakdownFromLedger()'s `{ [provider]: { [model]: {calls,tokens,cost} } }`
  *  into per-provider totals, sorted descending by cost. */
-function totalsByProvider(breakdown) {
+export function totalsByProvider(breakdown) {
   const totals = [];
   for (const [provider, models] of Object.entries(breakdown ?? {})) {
     let cost = 0;

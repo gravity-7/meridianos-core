@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateOperationsPolicy } from './dashboard/policy-schema.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = join(HERE, 'schema', 'policy.schema.json');
@@ -102,6 +103,13 @@ export function validatePolicy(policy = {}) {
         }
       }
     }
+  }
+
+  // --- UXF-004 operational overview ---
+  // The operations section is optional; when supplied, its retention, pagination, polling,
+  // and realtime limits are enforced by the same pre-write policy gate as every other lever.
+  if (policy?.dashboard?.operations != null) {
+    for (const message of validateOperationsPolicy(policy).errors) err(message);
   }
 
   // --- model coherence: routine sweep must not cost more than the default ---

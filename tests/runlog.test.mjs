@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendRun, readRuns } from '../runlog.mjs';
+import { appendRun, readRuns, queryRuns, queryRunEvidence } from '../runlog.mjs';
 
 test('appendRun writes records and readRuns returns them newest-first, with a limit', () => {
   const path = join(mkdtempSync(join(tmpdir(), 'runlog-')), 'log.jsonl');
@@ -40,4 +40,37 @@ test('readRuns tolerates a torn line and a missing file', () => {
   const recs = readRuns({ path });
   assert.equal(recs.length, 1);
   assert.equal(recs[0].run_id, 'ok1');
+});
+
+test('queryRuns uses default 50/max 200 and keeps a fixed append snapshot', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'runlog-')), 'log.jsonl');
+  for (let i = 0; i < 75; i++) appendRun({ run_id: `r${i}`, task: 'project-a/task', provider: 'openai', outcome: i % 2 ? 'ok' : 'failed' }, { path, now: i + 1 });
+  const first = queryRuns({ path, scope: { tenantId: 'tenant-a', projectId: 'project-a', provider: 'openai' } });
+  assert.equal(first.items.length, 50);
+  assert.ok(first.nextCursor);
+  appendRun({ run_id: 'new-after-snapshot', task: 'project-a/task', provider: 'openai' }, { path, now: 1000 });
+  const second = queryRuns({ path, scope: { tenantId: 'tenant-a', projectId: 'project-a', provider: 'openai' }, cursor: first.nextCursor, limit: 999 });
+  assert.equal(second.items.length, 25);
+  assert.equal(second.items.some((run) => run.run_id === 'new-after-snapshot'), false);
+  assert.equal(second.limit, 200);
+  assert.equal(second.snapshot, first.snapshot);
+});
+
+test('queryRuns rejects malformed and cross-filter cursors', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'runlog-')), 'log.jsonl');
+  appendRun({ run_id: 'one', task: 'project-a/task', provider: 'openai' }, { path, now: 1 });
+  appendRun({ run_id: 'two', task: 'project-a/task', provider: 'openai' }, { path, now: 2 });
+  assert.throws(() => queryRuns({ path, cursor: 'broken', scope: { tenantId: 't' } }), (error) => error.code === 'INVALID_CURSOR');
+  const page = queryRuns({ path, limit: 1, scope: { tenantId: 't', provider: 'openai' } });
+  assert.throws(() => queryRuns({ path, cursor: page.nextCursor, scope: { tenantId: 't', provider: 'other' } }), (error) => error.code === 'INVALID_CURSOR');
+});
+
+test('queryRunEvidence is chronological and excludes raw prompt/provider bodies', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'runlog-')), 'log.jsonl');
+  appendRun({ run_id: 'r1', task: 'p/t', outcome: 'failed', reason: 'timeout', note: 'safe note', prompt: 'secret prompt', response: 'provider body' }, { path, now: 2 });
+  const page = queryRunEvidence({ path, runId: 'r1', scope: { tenantId: 't' } });
+  assert.equal(page.items.length, 1);
+  assert.equal(page.items[0].reason, 'timeout');
+  assert.equal('prompt' in page.items[0], false);
+  assert.equal('response' in page.items[0], false);
 });
