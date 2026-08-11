@@ -1,7 +1,7 @@
 /** Durable append-only, secret-safe management evidence. */
 import { randomUUID } from 'node:crypto';
 
-const SECRET_KEYS = /secret|token|password|credential|authorization|cookie|api[_-]?key/i;
+const SECRET_KEYS = /secret|token|password|credential|authorization|cookie|session|api[_-]?key/i;
 export function redactManagementValue(value, key = '') {
   if (SECRET_KEYS.test(key)) return '[REDACTED]';
   if (Array.isArray(value)) return value.map((v) => redactManagementValue(v));
