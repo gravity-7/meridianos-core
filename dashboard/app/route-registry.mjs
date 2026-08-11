@@ -14,6 +14,17 @@ const definitions = [
   ['alert-list', '/app/observability/alerts', '/static/app/routes/observability/alerts.mjs'],
   ['alert-detail', '/app/observability/alerts/:alertId', '/static/app/routes/observability/alert-detail.mjs'],
   ['audit-detail', '/app/observability/audit/:auditId', '/static/app/routes/observability/audit-detail.mjs'],
+  ['provider-list', '/app/integrations/providers', '/static/app/routes/integrations/providers.mjs'],
+  ['provider-detail', '/app/integrations/providers/:providerId', '/static/app/routes/integrations/provider-detail.mjs'],
+  ['api-keys', '/app/integrations/api-keys', '/static/app/routes/integrations/api-keys.mjs'],
+  ['webhooks', '/app/integrations/webhooks/:webhookId', '/static/app/routes/integrations/webhooks.mjs'],
+  ['webhook-detail', '/app/integrations/webhooks/:webhookId/attempts/:attemptId', '/static/app/routes/integrations/webhook-detail.mjs'],
+  ['members', '/app/administration/members', '/static/app/routes/administration/members.mjs'],
+  ['member-detail', '/app/administration/members/:memberId', '/static/app/routes/administration/member-detail.mjs'],
+  ['tenant-settings', '/app/administration/tenant-settings', '/static/app/routes/administration/tenant-settings.mjs'],
+  ['billing', '/app/governance/billing', '/static/app/routes/governance/billing.mjs'],
+  ['security', '/app/governance/security', '/static/app/routes/governance/security.mjs'],
+  ['audit', '/app/governance/audit', '/static/app/routes/governance/audit.mjs'],
 ].map(([id, pattern, module]) => Object.freeze({ id, pattern, module }));
 
 export const APP_ROUTES = Object.freeze(definitions);

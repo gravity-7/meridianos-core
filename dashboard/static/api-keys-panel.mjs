@@ -180,6 +180,10 @@ export function initApiKeysPanel() {
       document.querySelectorAll('.modal').forEach(modal => {
         modal.classList.add('hidden');
       });
+      // One-time material must not survive modal close, Escape/cancel paths, or a later
+      // re-render. The token is never placed in a URL, storage, notification, or error.
+      const disclosure = document.getElementById('generated-token');
+      if (disclosure) disclosure.textContent = '';
     });
   });
 
@@ -244,9 +248,8 @@ export function initApiKeysPanel() {
     if (e.target.classList.contains('action-revoke')) {
       const tokenId = e.target.dataset.tokenId;
 
-      if (!confirm('Are you sure you want to revoke this API key? This action cannot be undone.')) {
-        return;
-      }
+      const phrase = prompt(`Type REVOKE ${tokenId.slice(0, 8)} to revoke this API key.`);
+      if (phrase !== `REVOKE ${tokenId.slice(0, 8)}`) return;
 
       try {
         const response = await fetch(`/api/auth/tokens/${tokenId}`, {

@@ -5,6 +5,7 @@
 
 import Database from 'better-sqlite3';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,6 +22,11 @@ const SCRYPT_PARAMS = {
   keylen: 64,    // Length of derived key
   saltlen: 32    // Length of salt
 };
+
+/** Invitation material is disclosed to the delivery channel once; only this hash is durable. */
+export function hashInvitationToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
 
 /**
  * Hash password using scrypt
@@ -86,6 +92,10 @@ export function verifyPassword(password, hash) {
  */
 export class UserStore {
   constructor(dbPath = DB_PATH) {
+    // Browser and API entry points may be the first code path to use the control plane in a
+    // fresh checkout. Create the parent before opening SQLite rather than relying on another
+    // unrelated route to have initialized runtime state first.
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     
@@ -375,7 +385,7 @@ export class InvitationManager {
 
     // Check if invitation already exists
     const existingInvitation = this.getInvitationByEmail(email, projectId);
-    if (existingInvitation) {
+    if (existingInvitation?.status === 'pending') {
       throw new Error('Invitation already exists for this user and project');
     }
 
@@ -392,7 +402,7 @@ export class InvitationManager {
     const id = crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
     
-    stmt.run(id, token, email.toLowerCase(), projectId, role, expiresAt, 'pending', now, now);
+    stmt.run(id, hashInvitationToken(token), email.toLowerCase(), projectId, role, expiresAt, 'pending', now, now);
 
     return {
       id,
@@ -452,8 +462,10 @@ export class InvitationManager {
    * @returns {Object} Validation result
    */
   validate(token) {
-    const stmt = this.userStore.db.prepare('SELECT * FROM invitations WHERE token = ?');
-    const invitation = stmt.get(token);
+    // The raw fallback preserves acceptance of pre-UXF-005 rows during migration; newly created
+    // invitations always persist the hash above.
+    const stmt = this.userStore.db.prepare('SELECT * FROM invitations WHERE token IN (?, ?)');
+    const invitation = stmt.get(hashInvitationToken(token), token);
 
     if (!invitation) {
       return { valid: false, error: 'Invalid invitation token' };
@@ -496,9 +508,9 @@ export class InvitationManager {
     const stmt = this.userStore.db.prepare(`
       UPDATE invitations 
       SET status = 'accepted', updated_at = ? 
-      WHERE token = ?
+      WHERE token IN (?, ?)
     `);
-    stmt.run(Math.floor(Date.now() / 1000), token);
+    stmt.run(Math.floor(Date.now() / 1000), hashInvitationToken(token), token);
   }
 
   /**
@@ -538,9 +550,9 @@ export class InvitationManager {
     const stmt = this.userStore.db.prepare(`
       UPDATE invitations 
       SET status = 'revoked', updated_at = ? 
-      WHERE token = ? AND status = 'pending'
+      WHERE token IN (?, ?) AND status = 'pending'
     `);
-    const result = stmt.run(Math.floor(Date.now() / 1000), token);
+    const result = stmt.run(Math.floor(Date.now() / 1000), hashInvitationToken(token), token);
     return result.changes > 0;
   }
 }
