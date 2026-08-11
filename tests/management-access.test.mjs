@@ -2,7 +2,7 @@ import test from 'node:test'; import assert from 'node:assert/strict'; import fs
 import { UserStore } from '../auth/user-store.mjs'; import { invite, listInvitations, updateInvitation, listMemberships, changeMembership, explainPermissions } from '../dashboard/management-access.mjs'; import { MANAGEMENT_SCOPE } from './management-fixtures.mjs';
 
 test('management invitations are durable, supersede safely, and membership is sourced from the user store', async () => {
-  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'meridianos-management-access-')); const store = new UserStore(path.join(folder, 'users.db'));
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'meridianos-management-access-')); const store = new UserStore(path.join(folder, 'fresh-runtime', 'users.db'));
   try {
     const original = invite(store, MANAGEMENT_SCOPE, { email: 'member@example.test', role: 'operator' }); const replacement = updateInvitation(store, MANAGEMENT_SCOPE, original.id, 'resend');
     assert.equal(listInvitations(store, MANAGEMENT_SCOPE).find((x) => x.id === original.id).status, 'superseded'); assert.equal(replacement.email, 'member@example.test'); assert.equal(JSON.stringify(replacement).includes('token'), false);

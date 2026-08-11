@@ -5,6 +5,7 @@
 
 import Database from 'better-sqlite3';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -91,6 +92,10 @@ export function verifyPassword(password, hash) {
  */
 export class UserStore {
   constructor(dbPath = DB_PATH) {
+    // Browser and API entry points may be the first code path to use the control plane in a
+    // fresh checkout. Create the parent before opening SQLite rather than relying on another
+    // unrelated route to have initialized runtime state first.
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     
