@@ -20,3 +20,15 @@
 ## Browser evidence
 
 For provider test, one-time key disclosure, revoke confirmation, webhook replay, invitation, and policy push: record keyboard-only completion, focus restoration to the invoking action, persistent status/error feedback, Back/Forward behavior for detail routes, and absence of secrets in page source/DOM after close.
+
+## Implementation validation record — 2026-08-11
+
+| Evidence | Command | Result | Duration |
+|---|---|---:|---:|
+| Management authorization, cross-tenant denial, secret containment, audit, integration, webhook idempotency, invitations, billing, router, cloud policy, and route contracts | `node --test tests/management-*.test.mjs tests/api-webhooks.test.mjs tests/app-route-registry.test.mjs` | 19 passed, 0 failed | 250ms |
+| REST/v1, dashboard compatibility, auth, and invitation regression | `node --test tests/server.test.mjs tests/dashboard-api-compatibility.test.mjs tests/api-v1.test.mjs tests/integration/test-auth-http.mjs tests/integration/test-invitation-lifecycle.mjs` | 73 passed, 0 failed | 1.1s |
+| Full native suite | `npm test` | 1,627 passed, 0 failed, 10 skipped | 24.8s |
+| Supported-browser management flow | `npx playwright test browser-tests/management-workflows.spec.mjs` | 3 passed (Chrome, Edge, Firefox) | 5.9s |
+| Whitespace | `git diff --check` | clean | <1s |
+
+Browser evidence verifies Back/Forward navigation, keyboard access to the skip link, 320px viewport, reduced-motion media, and absence of a secret sentinel from rendered UI. The management router tests prove server-derived scope, non-disclosing denial, one-time material consumption, audit serialization/redaction, and replay duplicate prevention. Audit coverage includes allowed, denied, failed, cancelled, duplicate, and conflict outcome paths through the shared serializer; public REST/v1 and gateway-metering compatibility remain protected by the full suite.

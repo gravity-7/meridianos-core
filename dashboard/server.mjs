@@ -36,7 +36,7 @@ import { readRuns } from '../runlog.mjs';
 import { getProviderHealth } from '../provider-health.mjs';
 import { detectInstalledIdes, generateProxyConfig, testIdeConnectivity, KNOWN_IDES } from '../ide-proxy.mjs';
 import { generateToken, verifyToken, refreshToken as jwtRefreshToken } from '../auth/jwt.mjs';
-import { getUserStore, verifyPassword, hashPassword, InvitationManager } from '../auth/user-store.mjs';
+import { getUserStore, verifyPassword, hashPassword, InvitationManager, hashInvitationToken } from '../auth/user-store.mjs';
 import { getActivityLogger } from '../compliance/audit-log.mjs';
 import { TaskComment } from '../project/task-comments.mjs';
 import { getReviewerAssigner } from '../control-plane.mjs';
@@ -58,6 +58,7 @@ import { createOperationalEventBroker, registerOperationalEventBroker, unregiste
 import { dispatchOperationsRequest, operationsError } from './operations-api.mjs';
 import { pruneOperationalEvidence } from './operational-alert-store.mjs';
 import { executeAuditedRestart } from './operational-recovery.mjs';
+import { handleManagementRequest } from './management-router.mjs';
 
 // Import ProjectManager for multi-tenant project management
 let _projectManager = null;
@@ -526,6 +527,15 @@ export function createDashboardServer(config) {
         const contentType = STATIC_CONTENT_TYPES[path.extname(filePath)] ?? 'application/octet-stream';
         res.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
         return res.end(readFileSync(filePath));
+      }
+      // UXF-005 management routes deliberately run before the legacy dashboard-token mutation
+      // gate. They authenticate every read and write with the verified actor, then derive scope
+      // and capability server-side; UI state and request-provided tenant values are never trusted.
+      if (url.pathname.startsWith('/api/management/')) {
+        const handled = await handleManagementRequest(req, res, url, {
+          config, db: getV1Db(), readBody, requireAuth, dashboardAuthorized: authorized,
+        });
+        if (handled) return;
       }
       // Every mutating request must be same-origin + carry the per-boot token (security P1).
       if (req.method === 'POST' && !authorized(req)) {
@@ -2893,7 +2903,7 @@ async function handleAcceptInvitation(req, res) {
 async function handleRejectInvitation(req, res) {
   try {
     const token = req.url.split('/')[4]?.split('?')[0];
-    const invitation = getUserStore().db.prepare('SELECT project_id FROM invitations WHERE token = ?').get(token);
+    const invitation = getUserStore().db.prepare('SELECT project_id FROM invitations WHERE token IN (?, ?)').get(hashInvitationToken(token), token);
     if (!invitation) return send(res, 404, JSON.stringify({ success: false, error: 'invitation not found' }));
     if (!requireProjectRole(req, res, invitation.project_id, ['admin', 'operator'])) return;
 

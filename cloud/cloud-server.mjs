@@ -12,7 +12,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   migrateCloudDb, createOrganization, createUser, authenticateUser,
-  registerMachine, listMachines, reportMetadata, pushPolicy, aggregateProviderHealth, pruneOldMetadata,
+  registerMachine, listMachines, reportMetadata, pushPolicy, previewPolicyPush, confirmPolicyPush, rollbackPolicyPush, aggregateProviderHealth, pruneOldMetadata,
 } from './cloud-control-plane.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -64,7 +64,7 @@ function sessionUser(db, req) {
   if (!row) return null;
   // Normalize to the SAME camelCase shape authenticateUser() returns — every route below reads
   // `user.orgId`, not the raw column name `org_id`.
-  return { id: row.id, orgId: row.org_id, email: row.email, role: row.role };
+  return { id: row.id, orgId: row.org_id, email: row.email, role: row.role, authenticatedAt: Number(row.last_login_at) * 1000 };
 }
 
 /** `logger` (T097) — a daemon-logger instance (see daemon-logger.mjs); optional since this is
@@ -133,6 +133,19 @@ export function createCloudServer(db, { logger } = {}) {
         if (!user) return send(res, 401, { error: 'Unauthorized' });
         const { updates } = JSON.parse((await readBody(req)) || '{}');
         return send(res, 200, { pushed: pushPolicy(db, user.orgId, updates, { actor: user.email }) });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/cloud/policy/preview') {
+        if (!user || user.role !== 'admin') return send(res, 403, { error: 'Forbidden' });
+        const { updates } = JSON.parse((await readBody(req)) || '{}'); return send(res, 200, previewPolicyPush(db, user.orgId, updates, { actor: user.email }));
+      }
+      const policyAction = url.pathname.match(/^\/api\/cloud\/policy\/(polprev-[^/]+)\/(confirm|rollback)$/);
+      if (req.method === 'POST' && policyAction) {
+        if (!user || user.role !== 'admin') return send(res, 403, { error: 'Forbidden' });
+        const body = JSON.parse((await readBody(req)) || '{}'); const result = policyAction[2] === 'confirm'
+          ? confirmPolicyPush(db, policyAction[1], { actor: user.email, authenticatedAt: user.authenticatedAt, confirmation: body.confirmation })
+          : rollbackPolicyPush(db, policyAction[1], { actor: user.email, authenticatedAt: user.authenticatedAt });
+        return send(res, 200, result);
       }
 
       if (req.method === 'GET' && url.pathname === '/api/cloud/health') {
