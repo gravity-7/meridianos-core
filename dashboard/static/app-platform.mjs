@@ -29,7 +29,7 @@ function scopedDestination(target) {
 function updateNav() { for (const link of document.querySelectorAll('.app-header a[href^="/app"]')) if (!link.pathname.startsWith('/app/setup')) link.href = scopedDestination(link.pathname); }
 function announce(message) { announcer.textContent = ''; requestAnimationFrame(() => { announcer.textContent = message; }); }
 let searchDialog = null; let searchInput = null; let searchResults = null; let searchStatus = null; let searchRestore = null; let searchTimer = null; let searchIndex = -1;
-function closeSearch() { if (!searchDialog) return; searchDialog.close(); searchDialog.remove(); searchDialog = null; searchInput = null; searchResults = null; searchStatus = null; searchIndex = -1; clearTimeout(searchTimer); searchRestore?.focus?.(); searchRestore = null; }
+function closeSearch() { if (!searchDialog) return; if (typeof searchDialog.close === 'function' && searchDialog.open) searchDialog.close(); else searchDialog.removeAttribute('open'); searchDialog.remove(); searchDialog = null; searchInput = null; searchResults = null; searchStatus = null; searchIndex = -1; clearTimeout(searchTimer); searchRestore?.focus?.(); searchRestore = null; }
 function renderSearchResults(items) {
   if (!searchResults || !searchStatus) return;
   searchResults.replaceChildren(); searchIndex = -1;
@@ -53,7 +53,9 @@ function openSearch() {
   const title = document.createElement('h2'); title.id = 'search-title'; title.textContent = 'Search MeridianOS'; const close = document.createElement('button'); close.type = 'button'; close.className = 'search-close'; close.textContent = 'Close'; close.addEventListener('click', closeSearch);
   searchInput = document.createElement('input'); searchInput.type = 'search'; searchInput.placeholder = 'Search tasks, runs, providers, or routes'; searchInput.setAttribute('aria-label', 'Search routes and records');
   searchStatus = document.createElement('p'); searchStatus.id = 'search-status'; searchStatus.className = 'search-status'; searchStatus.setAttribute('role', 'status'); searchResults = document.createElement('div'); searchResults.className = 'search-results'; searchResults.setAttribute('role', 'listbox');
-  const header = document.createElement('div'); header.className = 'search-header'; header.append(title, close); searchDialog.append(header, searchInput, searchStatus, searchResults); document.body.append(searchDialog); searchDialog.showModal(); searchInput.focus();
+  const header = document.createElement('div'); header.className = 'search-header'; header.append(title, close); searchDialog.append(header, searchInput, searchStatus, searchResults); document.body.append(searchDialog);
+  if (typeof searchDialog.showModal === 'function') searchDialog.showModal(); else searchDialog.setAttribute('open', '');
+  searchInput.focus();
   searchInput.addEventListener('input', () => { clearTimeout(searchTimer); const query = searchInput.value; searchTimer = setTimeout(() => void loadSearchResults(query), 120); });
   searchDialog.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') { event.preventDefault(); closeSearch(); }
