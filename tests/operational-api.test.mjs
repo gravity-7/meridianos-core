@@ -82,6 +82,25 @@ test('operational API shares exact scope across overview, detail, alert, and cos
   } finally { await new Promise((resolve) => value.server.close(resolve)); rmSync(value.root, { recursive: true, force: true }); }
 });
 
+test('global search is additive, bounded, scoped, and returns no unsafe task fields', async () => {
+  const value = await fixture();
+  try {
+    const search = await request(value.server, `/api/operations/search?${SCOPE}&q=task`);
+    assert.equal(search.status, 200);
+    const body = search.json();
+    assert.equal(body.scope.project, 'project-a');
+    assert.ok(body.data.results.some((item) => item.kind === 'task' && item.id === 'project-a/task-a'));
+    assert.ok(body.data.results.every((item) => item.scope.projectId === 'project-a' || item.kind === 'route'));
+    assert.equal(body.data.results.some((item) => 'note' in item || 'raw' in item || 'prompt' in item), false);
+    const invalidScope = await request(value.server, `/api/operations/search?tenant=tenant-b&${SCOPE}&q=task`);
+    assert.equal(invalidScope.status, 400);
+    assert.equal(invalidScope.json().error.code, 'INVALID_SCOPE');
+    const invalidQuery = await request(value.server, `/api/operations/search?${SCOPE}&q=${'x'.repeat(81)}`);
+    assert.equal(invalidQuery.status, 400);
+    assert.equal(invalidQuery.json().error.code, 'SEARCH_QUERY_INVALID');
+  } finally { await new Promise((resolve) => value.server.close(resolve)); rmSync(value.root, { recursive: true, force: true }); }
+});
+
 test('operational pagination, evidence availability, correlated metadata, and export formats match the additive contract', async () => {
   const value = await fixture();
   try {

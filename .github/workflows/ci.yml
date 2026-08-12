@@ -16,3 +16,5 @@ jobs:
           node-version: 24
       - run: npm ci
       - run: npm run test:ci
+      - name: UXF-006 source and release-artifact gate
+        run: node scripts/uxf-006-gates.mjs --source

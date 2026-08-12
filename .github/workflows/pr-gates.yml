@@ -26,6 +26,8 @@ jobs:
           node-version: 24
       - run: npm ci
       - run: npm test
+      - name: UXF-006 source gate
+        run: node scripts/uxf-006-gates.mjs --source
 
   # Gate 2: Request Copilot review (GitHub-hosted Copilot, independent context)
   copilot-review:

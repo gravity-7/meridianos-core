@@ -24,5 +24,15 @@ try {
   }
   if (!text.includes('Platform foundation')) throw new Error('Safari did not render the platform route before timeout');
   const screenshot = (await request('GET', `/session/${id}/screenshot`)).value; mkdirSync('artifacts/browser/safari', { recursive: true }); writeFileSync('artifacts/browser/safari/platform.png', Buffer.from(screenshot, 'base64'));
+  await request('POST', `/session/${id}/url`, { url: 'http://127.0.0.1:4319/app' });
+  await request('POST', `/session/${id}/execute/sync`, { script: "document.querySelector('#search-trigger')?.click(); return Boolean(document.querySelector('dialog'));", args: [] });
+  let palette = '';
+  for (let i = 0; i < 50; i++) {
+    palette = (await request('POST', `/session/${id}/execute/sync`, { script: 'return document.body.innerText', args: [] })).value;
+    if (palette.includes('Search MeridianOS')) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!palette.includes('Search MeridianOS')) throw new Error('Safari did not open the UXF-006 command palette');
+  const paletteScreenshot = (await request('GET', `/session/${id}/screenshot`)).value; writeFileSync('artifacts/browser/safari/uxf-006-palette.png', Buffer.from(paletteScreenshot, 'base64'));
   await request('DELETE', `/session/${id}`);
 } finally { driver.kill(); await new Promise((resolve) => server.close(resolve)); }

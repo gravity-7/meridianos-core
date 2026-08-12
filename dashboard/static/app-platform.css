@@ -28,12 +28,13 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; }
+html { overflow-x: hidden; }
+body { min-width: 0; margin: 0; }
 .app-header { display: flex; gap: var(--space); align-items: center; padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid var(--border); }
 .brand { font-weight: 700; margin-right: auto; }
 a, button, input { color: var(--accent); min-height: 2.75rem; }
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
-button { cursor: pointer; }
+button { min-width: 44px; cursor: pointer; }
 button[aria-busy=true] { cursor: progress; }
 main { max-width: 70rem; margin: auto; padding: 2rem; }
 .card, .modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--space-3); }
@@ -84,6 +85,20 @@ main { max-width: 70rem; margin: auto; padding: 2rem; }
 select, textarea { color: var(--accent); min-height: 2.75rem; }
 textarea:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 button { padding: .6rem .85rem; border: 1px solid var(--border); border-radius: .4rem; background: var(--surface); color: var(--text); }
+.app-header > button { flex: 0 0 auto; }
+.app-header kbd { color: var(--muted); font: .75rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+.search-dialog { width: min(42rem, calc(100vw - 2rem)); max-height: min(40rem, calc(100vh - 2rem)); padding: 0; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 1rem 3rem #17203340; }
+.search-dialog::backdrop { background: #17203380; }
+.search-header { display: flex; align-items: center; gap: 1rem; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }
+.search-header h2 { flex: 1; margin: 0; font-size: 1.1rem; }
+.search-close { min-width: 4.5rem; }
+.search-dialog > input { display: block; width: calc(100% - 2.5rem); margin: 1rem 1.25rem .5rem; padding: .7rem .8rem; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: .4rem; }
+.search-status { min-height: 1.5rem; margin: .25rem 1.25rem .75rem; color: var(--muted); }
+.search-results { display: grid; gap: .25rem; max-height: 24rem; overflow-y: auto; padding: 0 1.25rem 1.25rem; }
+.search-result { display: grid; gap: .15rem; min-height: 2.75rem; padding: .6rem .75rem; color: var(--text); text-decoration: none; border: 1px solid transparent; border-radius: .4rem; }
+.search-result:hover, .search-result[aria-selected=true] { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border-color: var(--accent); }
+.search-result-label { font-weight: 700; }
+.search-result-description { color: var(--muted); font-size: .85rem; }
 .scope-controls { display: grid; grid-template-columns: repeat(5, minmax(8rem, 1fr)); gap: .75rem; align-items: end; padding: 1rem; margin-bottom: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .scope-controls label { display: grid; gap: .3rem; color: var(--text); font-size: .85rem; }
 .scope-controls input, .scope-controls select, textarea { width: 100%; padding: .55rem; border: 1px solid var(--border); border-radius: .35rem; background: var(--surface); color: var(--text); }
@@ -129,6 +144,27 @@ fieldset input { width: auto; min-height: auto; }
   .scope-controls, .overview-grid { grid-template-columns: 1fr; }
   .refresh-controls { grid-column: 1; }
   .data-table, .chart-table { display: block; overflow-x: auto; }
+}
+
+@media (max-width: 1024px) {
+  .scope-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 480px) {
+  .app-header { gap: .5rem; }
+  .app-header .brand { width: 100%; }
+  .app-header > button { flex: 1 1 auto; }
+  main { padding: .75rem; }
+  .card, .modal, .chart-panel { padding: 1rem; }
+  .overview-grid, .scope-controls { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 320px) {
+  .app-header { padding: .75rem; }
+  .app-header kbd { display: none; }
+  main { padding: .5rem; }
+  .card, .modal, .chart-panel { padding: .75rem; }
+  .search-dialog { width: calc(100vw - 1rem); }
 }
 
 @media (forced-colors: active) {
