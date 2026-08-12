@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### UXF-006 Native UI Revamp Completion
+- Scope-aware global search and keyboard command palette for routes, tasks, retained runs, and provider labels, with bounded safe projections and role-aware results.
+- Responsive/focus/reduced-motion/forced-colors hardening for the native local shell and cloud control-plane preview flow.
+- Privacy-safe, opt-in UXF event envelope, deterministic quality gates, browser viewport evidence, parity ledger, rollout/rollback, migration, user, cloud, and support documentation.
+- Existing SSE reconnect/polling fallback and legacy routes remain available; no legacy module is removed by this change.
+
+### Release notes
+- Production canary, named owners, final IA/terminology/scorecard review, architecture/dependency ADR, manual NVDA/VoiceOver evidence, accessibility/performance exception authority, and release approvals remain unresolved human gates.
+
 #### Ecosystem, Distribution & Marketplace (Phase 7)
 
 **Packaged Binary & Desktop App**

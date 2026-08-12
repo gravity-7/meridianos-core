@@ -8,7 +8,7 @@ import { createRealtimeCoordinator } from '/static/app/shared/realtime-coordinat
 import { make, notice } from '/static/app/shared/view-helpers.mjs';
 
 const themeKey = 'meridianos-ui-theme'; const realtimeKey = 'meridianos-operational-realtime';
-const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme');
+const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme'); const searchTrigger = document.querySelector('#search-trigger');
 let scope = parseUrlScope(location.href); let epoch = 0; let activeOnboarding = null; let pendingMutations = 0; let realtime = null; let disposers = [];
 let realtimeScopeKey = null;
 let restoreRouteFocus = false;
@@ -28,6 +28,45 @@ function scopedDestination(target) {
 }
 function updateNav() { for (const link of document.querySelectorAll('.app-header a[href^="/app"]')) if (!link.pathname.startsWith('/app/setup')) link.href = scopedDestination(link.pathname); }
 function announce(message) { announcer.textContent = ''; requestAnimationFrame(() => { announcer.textContent = message; }); }
+let searchDialog = null; let searchInput = null; let searchResults = null; let searchStatus = null; let searchRestore = null; let searchTimer = null; let searchIndex = -1;
+function closeSearch() { if (!searchDialog) return; if (typeof searchDialog.close === 'function' && searchDialog.open) searchDialog.close(); else searchDialog.removeAttribute('open'); searchDialog.remove(); searchDialog = null; searchInput = null; searchResults = null; searchStatus = null; searchIndex = -1; clearTimeout(searchTimer); searchRestore?.focus?.(); searchRestore = null; }
+function renderSearchResults(items) {
+  if (!searchResults || !searchStatus) return;
+  searchResults.replaceChildren(); searchIndex = -1;
+  searchStatus.textContent = `${items.length} result${items.length === 1 ? '' : 's'}. Use arrow keys and Enter to open.`; announce(searchStatus.textContent);
+  for (const item of items) {
+    const link = document.createElement('a'); link.href = item.href; link.className = 'search-result'; link.dataset.searchIndex = String(searchResults.children.length); link.setAttribute('role', 'option');
+    const label = document.createElement('strong'); label.textContent = item.label; const detail = document.createElement('span'); detail.textContent = ` ${item.description || item.kind}`; link.append(label, detail);
+    link.addEventListener('click', () => closeSearch()); searchResults.append(link);
+  }
+}
+async function loadSearchResults(query) {
+  if (!searchInput || query.trim().length === 0) { renderSearchResults([]); return; }
+  searchStatus.textContent = 'Searching authorized records…';
+  try { const data = await api.read('/search', { q: query }); if (searchInput?.value !== query) return; renderSearchResults(data.results ?? []); }
+  catch (error) { if (!searchStatus) return; searchResults.replaceChildren(); searchStatus.textContent = error.code === 'SEARCH_QUERY_INVALID' ? 'Enter a shorter search.' : 'Search is unavailable. Continue with navigation.'; announce(searchStatus.textContent); }
+}
+function moveSearchFocus(delta) { const items = [...(searchResults?.querySelectorAll('a') ?? [])]; if (!items.length) return; searchIndex = (searchIndex + delta + items.length) % items.length; items[searchIndex].focus(); items.forEach((item, index) => item.setAttribute('aria-selected', String(index === searchIndex))); }
+function openSearch() {
+  if (searchDialog) { searchInput?.focus(); return; }
+  searchRestore = document.activeElement; searchDialog = document.createElement('dialog'); searchDialog.className = 'search-dialog'; searchDialog.setAttribute('aria-labelledby', 'search-title'); searchDialog.setAttribute('aria-describedby', 'search-status');
+  const title = document.createElement('h2'); title.id = 'search-title'; title.textContent = 'Search MeridianOS'; const close = document.createElement('button'); close.type = 'button'; close.className = 'search-close'; close.textContent = 'Close'; close.addEventListener('click', closeSearch);
+  searchInput = document.createElement('input'); searchInput.type = 'search'; searchInput.placeholder = 'Search tasks, runs, providers, or routes'; searchInput.setAttribute('aria-label', 'Search routes and records');
+  searchStatus = document.createElement('p'); searchStatus.id = 'search-status'; searchStatus.className = 'search-status'; searchStatus.setAttribute('role', 'status'); searchResults = document.createElement('div'); searchResults.className = 'search-results'; searchResults.setAttribute('role', 'listbox');
+  const header = document.createElement('div'); header.className = 'search-header'; header.append(title, close); searchDialog.append(header, searchInput, searchStatus, searchResults); document.body.append(searchDialog);
+  if (typeof searchDialog.showModal === 'function') searchDialog.showModal(); else searchDialog.setAttribute('open', '');
+  searchInput.focus();
+  searchInput.addEventListener('input', () => { clearTimeout(searchTimer); const query = searchInput.value; searchTimer = setTimeout(() => void loadSearchResults(query), 120); });
+  searchDialog.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); closeSearch(); }
+    else if (event.key === 'ArrowDown') { event.preventDefault(); moveSearchFocus(1); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); moveSearchFocus(-1); }
+    else if (event.key === 'Tab') {
+      const focusable = [close, searchInput, ...(searchResults?.querySelectorAll('a') ?? [])]; const current = focusable.indexOf(document.activeElement);
+      if (current >= 0 && (event.shiftKey ? current === 0 : current === focusable.length - 1)) { event.preventDefault(); focusable[event.shiftKey ? focusable.length - 1 : 0].focus(); }
+    }
+  });
+}
 function cleanupRoute() { for (const dispose of disposers.splice(0)) { try { dispose(); } catch (error) { console.error('Operational route cleanup failed.', error); } } }
 function navigate(target, { replace = false } = {}) {
   const url = new URL(target, location.origin); const destination = url.pathname.startsWith('/app/setup') ? `${url.pathname}${url.search}` : scopedDestination(`${url.pathname}${url.search}${url.hash}`);
@@ -121,6 +160,8 @@ document.addEventListener('click', (event) => {
   const link = event.target.closest('a[href^="/app"]'); if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   event.preventDefault(); navigate(link.href);
 });
+searchTrigger?.addEventListener('click', openSearch);
+document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); } });
 addEventListener('popstate', () => { restoreRouteFocus = true; void renderCurrent(); });
 themeButton.addEventListener('click', () => { const order=['system','light','dark']; const next=order[(order.indexOf(currentTheme())+1)%order.length]; localStorage.setItem(themeKey,next); applyTheme(next); });
 addEventListener('beforeunload', () => { cleanupRoute(); api.dispose(); realtime?.stop(); });

@@ -6,6 +6,9 @@ import { queryGatewayMetrics, queryUsageMetrics, queryCostMetrics, queryUsageRec
 import { retryOperationalRun } from './operational-recovery.mjs';
 import { getOperationalAudit } from './operational-audit.mjs';
 import { publicOperationalScope, scopeQuery } from './operational-scope.mjs';
+import { buildSearchResults } from './search.mjs';
+import { resolveAllProviders } from '../providers.mjs';
+import { recordUxfEvent } from './uxf-telemetry.mjs';
 
 export class OperationsApiError extends Error {
   constructor(code, message, httpStatus = 400, details = null) { super(message); this.name = 'OperationsApiError'; this.code = code; this.httpStatus = httpStatus; this.details = details; }
@@ -119,6 +122,14 @@ export function dispatchOperationsRequest({ method, pathname, url, body = {}, he
   const common = { scope: publicOperationalScope(scope), meta: { freshAsOf, correlationId, pollingIntervalMs: policy.operations.pollingIntervalMs, realtimeAvailable: policy.operations.sse.enabled } };
   const success = (data, status = 200) => ({ handled: true, status, body: { ok: true, data, ...common } });
   if (method === 'GET' && pathname === '/api/operations/overview') return success(overviewModel({ db, ledger, config, scope, policy }));
+  if (method === 'GET' && pathname === '/api/operations/search') {
+    const tasks = db.prepare('SELECT id,title,status FROM tasks ORDER BY updated_at DESC LIMIT 500').all();
+    const runs = queryRuns({ config, scope, limit: 200 }).items;
+    const providers = Object.values(resolveAllProviders({}, config)).map((provider) => ({ id: provider.name, label: provider.displayName ?? provider.name }));
+    const result = buildSearchResults({ query: url.searchParams.get('q'), scope, actor, tasks, runs, providers, limit: url.searchParams.get('limit') });
+    recordUxfEvent(null, { event: 'global_search_used', route: '/app/operations/search', scopeKey: `${scope.tenantId}/${scope.projectId ?? ''}`, role: actor?.role, featureFlag: 'uxf006.search', outcome: 'success' }, { db, enabled: policy?.telemetry?.uxfEnabled === true });
+    return success(result);
+  }
   if (method === 'GET' && pathname === '/api/operations/tasks') return success(listOperationalTasks({ db, scope, status: url.searchParams.get('status') || url.searchParams.get('state'), cursor: url.searchParams.get('cursor'), limit: readLimit(url) }));
   if (method === 'GET' && pathname === '/api/operations/runs') { const result = queryRuns({ config, scope, filters: { state: url.searchParams.get('state') || null, task: url.searchParams.get('task') || null }, cursor: url.searchParams.get('cursor'), limit: readLimit(url) }); return success({ ...result, page: { nextCursor: result.nextCursor, snapshot: result.snapshot, limit: result.limit } }); }
   if (method === 'GET' && pathname === '/api/operations/alerts') { const result = queryAlertOccurrences(db, { tenantId: scope.tenantId, projectId: scope.projectId, status: url.searchParams.get('status'), severity: url.searchParams.get('severity'), cursor: url.searchParams.get('cursor'), limit: readLimit(url) }); return success({ ...result, items: result.items.map((alert) => attentionItem(alert, scope)) }); }
