@@ -36,6 +36,7 @@ pre { background: var(--surface-1); padding: 10px; border-radius: 6px; font-size
 <div class="wizard" id="wizard"></div>
 <script>
 const AIOS_TOKEN = "__AIOS_TOKEN__";
+const SETUP_SESSION_ID = "__SETUP_SESSION_ID__";
 (function () {
   const _fetch = window.fetch;
   window.fetch = (input, init = {}) => {
@@ -47,39 +48,61 @@ const AIOS_TOKEN = "__AIOS_TOKEN__";
 
 const STORAGE_KEY = 'meridian.setupWizard.state.v1';
 const STEPS = ['welcome', 'agents', 'providers', 'budget', 'review', 'done'];
+const FALLBACK_STATE = { step: 0, tenantName: 'My Tenant', agentsRaw: 'builder,reviewer', monthlyBudgetUsd: 100, providerId: '', modelId: '' };
 
 function loadState() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { step: 0, tenantName: 'My Tenant', agentsRaw: 'builder,reviewer', monthlyBudgetUsd: 100 }; }
-  catch { return { step: 0, tenantName: 'My Tenant', agentsRaw: 'builder,reviewer', monthlyBudgetUsd: 100 }; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (!saved || typeof saved !== 'object') return { ...FALLBACK_STATE };
+    return {
+      step: Number.isInteger(saved.step) ? saved.step : FALLBACK_STATE.step,
+      tenantName: typeof saved.tenantName === 'string' ? saved.tenantName : FALLBACK_STATE.tenantName,
+      agentsRaw: typeof saved.agentsRaw === 'string' ? saved.agentsRaw : FALLBACK_STATE.agentsRaw,
+      monthlyBudgetUsd: Number(saved.monthlyBudgetUsd) > 0 ? Number(saved.monthlyBudgetUsd) : FALLBACK_STATE.monthlyBudgetUsd,
+      providerId: typeof saved.providerId === 'string' ? saved.providerId : '',
+      modelId: typeof saved.modelId === 'string' ? saved.modelId : '',
+    };
+  } catch { return { ...FALLBACK_STATE }; }
 }
-function saveState(s) { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+function saveState(s) {
+  // Credentials, validation identifiers, and setup-session identifiers are intentionally absent.
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    step: s.step, tenantName: s.tenantName, agentsRaw: s.agentsRaw, monthlyBudgetUsd: s.monthlyBudgetUsd,
+    providerId: s.providerId, modelId: s.modelId,
+  }));
+}
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+}
 
 let state = loadState();
 let detected = null;
+const transient = { sessionId: null, validationId: null, reviewId: null };
 
 async function init() {
-  const res = await fetch('/api/setup/status');
-  detected = await res.json();
-  if (detected.exists && !state.acknowledgedExisting) {
-    return renderExistingWarning();
-  }
-  render();
+  try {
+    const res = await fetch('/api/setup/status');
+    detected = await res.json();
+    transient.sessionId = SETUP_SESSION_ID || null;
+    if (detected.exists) return renderExistingWarning();
+    if (!detected.ok || !Array.isArray(detected.providers) || !transient.sessionId) return renderUnavailable();
+    render();
+  } catch { renderUnavailable(); }
 }
-
 function renderExistingWarning() {
-  const el = document.getElementById('wizard');
-  el.innerHTML = `
+  document.getElementById('wizard').innerHTML = `
     <h1>Existing configuration found</h1>
-    <div class="step-label">This directory already has a .ai/policy.yaml.</div>
-    <p style="font-size:13px">Continuing will let you overwrite it at the final step (you'll be asked to confirm again before anything is written).</p>
-    <div class="row">
-      <button class="secondary" onclick="window.location.href='/'">Cancel — back to dashboard</button>
-      <button onclick="acknowledgeExisting()">Continue anyway</button>
-    </div>
-  `;
+    <div class="step-label">This directory already contains a setup target.</div>
+    <p style="font-size:13px">For safety, first-time setup never overwrites an existing installation.</p>
+    <div class="row"><button class="secondary" onclick="window.location.href='/'">Back to dashboard</button></div>`;
 }
-window.acknowledgeExisting = () => { state.acknowledgedExisting = true; saveState(state); render(); };
-
+function renderUnavailable() {
+  document.getElementById('wizard').innerHTML = `<h1>Setup is unavailable</h1><div class="error" role="alert">The setup status could not be loaded safely. Reload and try again.</div>`;
+}
+function syntheticBanner() {
+  return detected?.synthetic ? '<div class="hint" role="status">Synthetic and disposable lab environment.</div>' : '';
+}
+function agents() { return state.agentsRaw.split(',').map((item) => item.trim()).filter(Boolean); }
 function render() {
   const step = STEPS[state.step];
   if (step === 'welcome') return renderWelcome();
@@ -88,123 +111,143 @@ function render() {
   if (step === 'budget') return renderBudget();
   if (step === 'review') return renderReview();
   if (step === 'done') return renderDone();
+  state.step = 0; renderWelcome();
 }
-
 function renderWelcome() {
   document.getElementById('wizard').innerHTML = `
-    <h1>MeridianOS Setup</h1>
-    <div class="step-label">Step 1 of 5 — Tenant name</div>
+    <h1>MeridianOS Setup</h1>${syntheticBanner()}
+    <div class="step-label">Step 1 of 5 — Installation name</div>
     <label for="tenantName">What should we call this installation?</label>
-    <input id="tenantName" value="${state.tenantName}">
-    <div class="row"><button onclick="nextFrom('welcome')">Next</button></div>
-  `;
+    <input id="tenantName" value="${escapeHtml(state.tenantName)}">
+    <div class="row"><button onclick="nextFrom('welcome')">Next</button></div>`;
 }
 function renderAgents() {
   document.getElementById('wizard').innerHTML = `
-    <h1>Agent roster</h1>
-    <div class="step-label">Step 2 of 5</div>
+    <h1>Agent roster</h1><div class="step-label">Step 2 of 5</div>
     <label for="agentsRaw">Comma-separated agent names</label>
-    <input id="agentsRaw" value="${state.agentsRaw}">
+    <input id="agentsRaw" value="${escapeHtml(state.agentsRaw)}">
     <div class="hint">These are the identities that will pick up and work tasks.</div>
-    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="nextFrom('agents')">Next</button></div>
-  `;
+    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="nextFrom('agents')">Next</button></div>`;
 }
 function renderProviders() {
-  const list = detected.providers.length
-    ? detected.providers.map((p) => `<li>${p.name} <span class="hint" style="margin:0">(${p.keyEnv} found in environment)</span></li>`).join('')
-    : '<li class="hint" style="margin:0">None auto-detected — set an API key env var (e.g. ANTHROPIC_API_KEY) and reload this page, or add one to .env after setup.</li>';
+  const providers = detected.providers;
+  if (!providers.length) {
+    document.getElementById('wizard').innerHTML = `<h1>Provider connection</h1><div class="error" role="alert">No registered BYOK provider is available for setup.</div>`;
+    return;
+  }
+  const provider = providers.find((entry) => entry.id === state.providerId) || providers[0];
+  state.providerId = provider.id;
+  state.modelId = provider.models.includes(state.modelId) ? state.modelId : provider.models[0];
+  const providerOptions = providers.map((entry) => `<option value="${escapeHtml(entry.id)}"${entry.id === state.providerId ? ' selected' : ''}>${escapeHtml(entry.displayName)}</option>`).join('');
+  const modelOptions = provider.models.map((model) => `<option value="${escapeHtml(model)}"${model === state.modelId ? ' selected' : ''}>${escapeHtml(model)}</option>`).join('');
+  const status = transient.validationId ? '<div class="hint" role="status">Connection verified. Continue to budget.</div>' : '<div class="hint">A key is sent once for validation and is never saved in this browser.</div>';
   document.getElementById('wizard').innerHTML = `
-    <h1>Providers</h1>
-    <div class="step-label">Step 3 of 5 — auto-detected from your environment</div>
-    <ul style="font-size:13px;padding-left:18px">${list}</ul>
-    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="nextFrom('providers')">Next</button></div>
-  `;
+    <h1>Provider connection</h1>${syntheticBanner()}
+    <div class="step-label">Step 3 of 5 — select and validate a registered BYOK route</div>
+    <label for="providerId">Provider</label><select id="providerId" onchange="providerChanged()">${providerOptions}</select>
+    <label for="modelId">Model</label><select id="modelId" onchange="modelChanged()">${modelOptions}</select>
+    <label for="providerKey">Provider key for ${escapeHtml(provider.keyEnv)}</label>
+    <input id="providerKey" type="password" autocomplete="off" spellcheck="false">
+    ${status}<div class="error" id="validationError" role="alert" aria-live="polite"></div>
+    <div class="row"><button class="secondary" onclick="back()">Back</button><button class="secondary" onclick="validateProvider()">Validate connection</button><button onclick="nextFrom('providers')">Continue</button></div>`;
+}
+function providerChanged() {
+  void revokeValidation();
+  state.providerId = document.getElementById('providerId').value; state.modelId = ''; saveState(state); renderProviders();
+}
+function modelChanged() {
+  void revokeValidation();
+  state.modelId = document.getElementById('modelId').value; saveState(state); renderProviders();
+}
+async function revokeValidation() {
+  const validationId = transient.validationId;
+  transient.validationId = null;
+  transient.reviewId = null;
+  if (!validationId || !transient.sessionId) return;
+  try {
+    await fetch('/api/setup/provider-validation/revoke', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ validationId, sessionId: transient.sessionId }),
+    });
+  } catch { /* Browser state is already clear; expiry is the final server-side safety net. */ }
+}
+async function validateProvider() {
+  const input = document.getElementById('providerKey');
+  const error = document.getElementById('validationError');
+  const secret = input.value;
+  input.value = '';
+  await revokeValidation();
+  if (!secret) { error.textContent = 'Enter a provider key to validate this route.'; return; }
+  try {
+    const res = await fetch('/api/setup/provider-validation', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ providerId: state.providerId, modelId: state.modelId, secret, sessionId: transient.sessionId }),
+    });
+    const body = await res.json();
+    if (!body.ok) { error.textContent = body.error || 'Connection could not be verified. Try again.'; return; }
+    transient.validationId = body.validation.id;
+    renderProviders();
+  } catch { error.textContent = 'Connection could not be verified. Try again.'; }
 }
 function renderBudget() {
   document.getElementById('wizard').innerHTML = `
-    <h1>Budget</h1>
-    <div class="step-label">Step 4 of 5</div>
+    <h1>Budget</h1><div class="step-label">Step 4 of 5</div>
     <label for="monthlyBudgetUsd">Monthly budget (USD)</label>
-    <input id="monthlyBudgetUsd" type="number" min="1" value="${state.monthlyBudgetUsd}">
-    <div class="hint">Converted into weekly / 5-hour token caps on the review step — see the estimate's own note for the assumption used.</div>
-    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="nextFrom('budget')">Next</button></div>
-  `;
+    <input id="monthlyBudgetUsd" type="number" min="1" value="${escapeHtml(state.monthlyBudgetUsd)}">
+    <div class="hint">Converted into weekly / 5-hour token caps on the review step.</div>
+    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="nextFrom('budget')">Next</button></div>`;
 }
 async function renderReview() {
   const el = document.getElementById('wizard');
   el.innerHTML = `<h1>Review</h1><div class="step-label">Step 5 of 5</div><div class="hint">Computing…</div>`;
-  const agents = state.agentsRaw.split(',').map((s) => s.trim()).filter(Boolean);
-  const res = await fetch('/api/setup/plan', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ tenantName: state.tenantName, agents, providers: detected.providers, monthlyBudgetUsd: Number(state.monthlyBudgetUsd) }),
-  });
-  const body = await res.json();
-  if (!body.ok) {
-    el.innerHTML = `<h1>Review</h1><div class="error">${body.error}</div><div class="row"><button class="secondary" onclick="back()">Back</button></div>`;
-    return;
+  try {
+    const res = await fetch('/api/setup/plan', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tenantName: state.tenantName, agents: agents(), providerId: state.providerId, modelId: state.modelId, monthlyBudgetUsd: Number(state.monthlyBudgetUsd), validationId: transient.validationId, sessionId: transient.sessionId }),
+    });
+    const body = await res.json();
+    if (!body.ok) throw new Error(body.error || 'Review unavailable.');
+    const review = body.review;
+    transient.reviewId = review.id;
+    el.innerHTML = `
+      <h1>Review</h1><div class="step-label">Step 5 of 5</div>
+      <p style="font-size:13px">Installation: <b>${escapeHtml(review.installationName)}</b><br>Agents: <b>${escapeHtml(review.agents.join(', '))}</b><br>Route: <b>${escapeHtml(review.route.displayName)} / ${escapeHtml(review.route.modelId)}</b><br>Budget: <b>$${state.monthlyBudgetUsd}/month</b> → ${review.budget.weeklyTokenCap.toLocaleString()} tokens/week (${review.budget.token_cap_5h.toLocaleString()}/5h)</p>
+      <pre>${review.files.map((file) => `${file.name} — ${file.description}`).join('\n')}</pre>
+      <div class="hint">Reviewing writes nothing. Only the final confirmation writes setup files.</div>
+      <div class="error" id="commitError" role="alert" aria-live="polite"></div>
+      <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="commit()">Confirm and write files</button></div>`;
+  } catch (error) {
+    el.innerHTML = `<h1>Review</h1><div class="error" role="alert">${escapeHtml(error.message)}</div><div class="row"><button class="secondary" onclick="back()">Back</button></div>`;
   }
-  el.innerHTML = `
-    <h1>Review</h1>
-    <div class="step-label">Step 5 of 5</div>
-    <p style="font-size:13px">
-      Tenant: <b>${state.tenantName}</b><br>
-      Agents: <b>${agents.join(', ')}</b><br>
-      Providers: <b>${detected.providers.map((p) => p.name).join(', ') || '(none)'}</b><br>
-      Budget: <b>$${state.monthlyBudgetUsd}/month</b> → ${body.budget.weeklyTokenCap.toLocaleString()} tokens/week (${body.budget.token_cap_5h.toLocaleString()}/5h)
-    </p>
-    <pre>${Object.keys(body.files).join('\n')}</pre>
-    <div class="error" id="commitError"></div>
-    <div class="row"><button class="secondary" onclick="back()">Back</button><button onclick="commit()">Write files</button></div>
-  `;
 }
 async function commit() {
-  const agents = state.agentsRaw.split(',').map((s) => s.trim()).filter(Boolean);
-  const res = await fetch('/api/setup/commit', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      tenantName: state.tenantName, agents, providers: detected.providers,
-      monthlyBudgetUsd: Number(state.monthlyBudgetUsd), force: Boolean(state.acknowledgedExisting),
-    }),
-  });
-  const body = await res.json();
-  if (!body.ok) {
-    document.getElementById('commitError').textContent = body.error;
-    return;
-  }
-  state.step = STEPS.indexOf('done');
-  saveState(state);
-  render();
+  try {
+    const res = await fetch('/api/setup/commit', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tenantName: state.tenantName, agents: agents(), providerId: state.providerId, modelId: state.modelId, monthlyBudgetUsd: Number(state.monthlyBudgetUsd), validationId: transient.validationId, reviewId: transient.reviewId, sessionId: transient.sessionId, confirmed: true }),
+    });
+    const body = await res.json();
+    if (!body.ok) throw new Error(body.error || 'Setup could not be committed.');
+    transient.validationId = null; transient.reviewId = null; state.step = STEPS.indexOf('done'); saveState(state); render();
+  } catch (error) { document.getElementById('commitError').textContent = error.message; }
 }
 function renderDone() {
   localStorage.removeItem(STORAGE_KEY);
-  document.getElementById('wizard').innerHTML = `
-    <h1>Setup complete</h1>
-    <p style="font-size:13px">Your installation is ready.</p>
-    <div class="row"><button onclick="window.location.href='/'">Go to dashboard</button></div>
-  `;
+  document.getElementById('wizard').innerHTML = `<h1>Setup complete</h1><p style="font-size:13px">Your installation is ready.</p><div class="row"><button onclick="window.location.href='/'">Go to dashboard</button></div>`;
 }
-
 function nextFrom(step) {
   if (step === 'welcome') state.tenantName = document.getElementById('tenantName').value.trim() || 'My Tenant';
-  if (step === 'agents') {
-    const val = document.getElementById('agentsRaw').value.trim();
-    if (!val) { alert('At least one agent is required.'); return; }
-    state.agentsRaw = val;
-  }
-  if (step === 'budget') {
-    const val = Number(document.getElementById('monthlyBudgetUsd').value);
-    if (!(val > 0)) { alert('Budget must be a positive number.'); return; }
-    state.monthlyBudgetUsd = val;
-  }
-  state.step += 1;
-  saveState(state);
-  render();
+  if (step === 'agents') { const value = document.getElementById('agentsRaw').value.trim(); if (!value) { alert('At least one agent is required.'); return; } state.agentsRaw = value; }
+  if (step === 'providers' && !transient.validationId) { document.getElementById('validationError').textContent = 'Validate the selected provider and model before continuing.'; return; }
+  if (step === 'budget') { const value = Number(document.getElementById('monthlyBudgetUsd').value); if (!(value > 0)) { alert('Budget must be a positive number.'); return; } state.monthlyBudgetUsd = value; }
+  state.step += 1; saveState(state); render();
 }
-function back() {
-  state.step -= 1;
-  saveState(state);
-  render();
+async function back() {
+  if (state.step >= STEPS.indexOf('providers')) await revokeValidation();
+  state.step = Math.max(0, state.step - 1); saveState(state); render();
 }
+
+window.addEventListener('pagehide', () => { void revokeValidation(); });
 
 init();
 </script>

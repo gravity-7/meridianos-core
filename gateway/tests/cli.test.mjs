@@ -379,7 +379,7 @@ test('`setup --init` writes policy.yaml/.env/tenant.yaml on a fresh checkout wit
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('`setup --init` refuses to overwrite an existing policy.yaml without --force', async () => {
+test('`setup --init` refuses to overwrite an existing policy.yaml', async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cli-setup-guard-'));
   const aiDir = join(tmpDir, '.ai');
   mkdirSync(aiDir, { recursive: true });
@@ -387,21 +387,22 @@ test('`setup --init` refuses to overwrite an existing policy.yaml without --forc
 
   const { code, stderr } = await runCliSubcommand(['setup', '--init', '--budget', '50'], { cwd: tmpDir });
   assert.notEqual(code, 0);
-  assert.match(stderr, /already exists/);
+  assert.match(stderr, /prevents first-time setup|never overwrites/i);
   assert.match(readFileSync(join(aiDir, 'policy.yaml'), 'utf8'), /must not be clobbered/);
 
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('`setup --init --force` overwrites an existing policy.yaml', async () => {
+test('`setup --init --force` still refuses to overwrite an existing policy.yaml', async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'aios-gateway-cli-setup-force-'));
   const aiDir = join(tmpDir, '.ai');
   mkdirSync(aiDir, { recursive: true });
   writeFileSync(join(aiDir, 'policy.yaml'), 'kill_switch: true\n');
 
   const { code, stderr } = await runCliSubcommand(['setup', '--init', '--budget', '50', '--force'], { cwd: tmpDir });
-  assert.equal(code, 0, `expected clean exit; stderr=${stderr}`);
-  assert.match(readFileSync(join(aiDir, 'policy.yaml'), 'utf8'), /kill_switch: false/);
+  assert.notEqual(code, 0, `expected no-overwrite rejection; stderr=${stderr}`);
+  assert.match(stderr, /prevents first-time setup|never overwrites/i);
+  assert.match(readFileSync(join(aiDir, 'policy.yaml'), 'utf8'), /kill_switch: true/);
 
   rmSync(tmpDir, { recursive: true, force: true });
 });
