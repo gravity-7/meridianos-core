@@ -147,6 +147,10 @@ export function getMetricsSummary() {
     ? (metrics.api.averageResponseTime / totalRequests).toFixed(2)
     : 0;
 
+  // Defensive numeric coercion: system collectors must never be able to poison the summary with a
+  // non-number (a string diskUsage previously crashed here — `diskUsage.toFixed is not a function`).
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
   return {
     api: {
       totalRequests,
@@ -162,9 +166,9 @@ export function getMetricsSummary() {
       queryTimeDistribution: metrics.database.queryTimeDistribution
     },
     system: {
-      cpuUsage: `${metrics.system.cpuUsage.toFixed(2)}%`,
-      memoryUsage: `${metrics.system.memoryUsage.toFixed(2)}MB`,
-      diskUsage: `${metrics.system.diskUsage.toFixed(2)}%`,
+      cpuUsage: `${num(metrics.system.cpuUsage).toFixed(2)}%`,
+      memoryUsage: `${num(metrics.system.memoryUsage).toFixed(2)}MB`,
+      diskUsage: `${num(metrics.system.diskUsage).toFixed(2)}%`,
       activeConnections: metrics.system.activeConnections
     },
     endpoints: metrics.endpoints
@@ -261,44 +265,27 @@ export function stopMetricsCollection() {
 }
 
 /**
- * Get disk usage
+ * Get disk usage.
+ *
+ * Returns a NUMBER (percent used). This previously recursively walked the ENTIRE current
+ * directory (including node_modules/.git) every 5 seconds and — because the walk was never
+ * awaited — returned the string "NaN". That pinned a CPU core, and the string then crashed
+ * `getMetricsSummary()` (`diskUsage.toFixed is not a function`), which in turn left the
+ * `/api/metrics` response hanging and leaked the dashboard server's keep-alive connection
+ * (node --test never exited). `fs.statfs` is a single cheap syscall that reports the real
+ * filesystem the cwd lives on, with no recursive scan.
  */
 async function getDiskUsage() {
   try {
     const fs = await import('node:fs/promises');
-    const stats = await fs.stat('.');
-    const total = stats.size;
-    const used = getDirectorySize('.');
-    return ((used / total) * 100).toFixed(2);
-  } catch (error) {
-    return '0.00';
+    const s = await fs.statfs('.');
+    const total = s.blocks * s.bsize;
+    const free = s.bavail * s.bsize;
+    if (!total) return 0;
+    return Number(((1 - free / total) * 100).toFixed(2));
+  } catch {
+    return 0;
   }
-}
-
-/**
- * Get directory size
- */
-async function getDirectorySize(dir) {
-  const fs = await import('node:fs/promises');
-  let size = 0;
-
-  try {
-    const files = await fs.readdir(dir, { withFileTypes: true });
-
-    for (const file of files) {
-      const path = join(dir, file.name);
-      if (file.isDirectory()) {
-        size += await getDirectorySize(path);
-      } else {
-        const stats = await fs.stat(path);
-        size += stats.size;
-      }
-    }
-  } catch (error) {
-    // Ignore errors for individual files
-  }
-
-  return size;
 }
 
 /**

@@ -54,6 +54,13 @@ paste the fenced block into the [Mermaid Live Editor](https://mermaid.live).
 - [migration-guide.md](migration-guide.md) — moving agent-roster config from the legacy
   `.ai/tenant.yaml` into the unified `policy.yaml`.
 
+## Quality assurance
+
+- [quality-assurance/README.md](quality-assurance/README.md) — persona journeys, safe fixture
+  rules, client-ready workflow runbooks, AI-agent procedure, and release evidence model. The
+  reviewed runbooks are versioned here; raw browser/CI evidence remains transient under
+  `artifacts/qa/`.
+
 ## Ecosystem &amp; distribution
 
 - [phase-7-ecosystem-distribution.md](phase-7-ecosystem-distribution.md) — the packaged binary,
