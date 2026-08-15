@@ -184,6 +184,21 @@ function loadDefaultsYaml() {
 }
 
 /**
+ * Resolve only version-controlled provider metadata shipped with MeridianOS. Unlike
+ * `resolveAllProviders`, this deliberately ignores policy and `.ai/providers.yaml` overlays.
+ * It is used for first-time credential collection, where an installation-local endpoint must
+ * never be allowed to redirect a newly submitted credential.
+ */
+export function resolveTrustedSetupProviders() {
+  const merged = { ...BUILTIN_PROVIDERS };
+  const defaultProviders = loadDefaultsYaml();
+  for (const [name, def] of Object.entries(defaultProviders)) {
+    merged[name] = deepMergeProviders(merged[name], def);
+  }
+  return merged;
+}
+
+/**
  * Read the local .ai/providers.yaml (wizard-generated state).
  * Returns parsed providers object or empty object if file missing/unparseable.
  */
@@ -228,15 +243,7 @@ export function resolveAllProviders(policy, config) {
   // Load three sources
   const policyProviders = p?.providers ?? {};
   const localProviders = loadLocalProvidersYaml(repoRoot);
-  const defaultProviders = loadDefaultsYaml();
-
-  // Start with built-in code defaults as ultimate fallback
-  const merged = { ...BUILTIN_PROVIDERS };
-
-  // Layer 1: built-in YAML defaults (lowest priority)
-  for (const [name, def] of Object.entries(defaultProviders)) {
-    merged[name] = deepMergeProviders(merged[name], def);
-  }
+  const merged = resolveTrustedSetupProviders();
 
   // Layer 2: local .ai/providers.yaml (middle priority)
   for (const [name, local] of Object.entries(localProviders)) {

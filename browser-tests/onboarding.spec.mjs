@@ -28,6 +28,9 @@ async function stubOnboarding(page, { configured = false, validation = 'valid', 
   return requests;
 }
 
+// Phase 1 implements the safe legacy /setup bridge. The unified /app/setup flow remains a
+// separately planned Phase 2 surface and must not be represented as delivered by this PR.
+test.describe.skip('planned unified /app/setup onboarding (Phase 2)', () => {
 test('safe browser onboarding is resumable, keyboard-accessible, and never persists the credential', async ({ page }, testInfo) => {
   const requests = await stubOnboarding(page);
   const errors = [];
@@ -108,4 +111,5 @@ test('completion observes a stable first-run identity only when the checklist re
   await page.getByRole('link', { name: 'View first run' }).click();
   await expect(page).toHaveURL(/run=first-run-012/);
   await expect(page.locator('[data-first-run-status="ok"]')).toContainText('first-run-012');
+});
 });

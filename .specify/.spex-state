@@ -1,0 +1,70 @@
+{
+  "mode": "flow",
+  "started_at": "2026-08-14T16:45:57Z",
+  "feature_branch": "main",
+  "spec_dir": "specs/014-visible-onboarding-journey",
+  "implemented": true,
+  "clarified": false,
+  "triage_spec_passed": false,
+  "triage_impl_passed": false,
+  "review_spec_passed": true,
+  "review_plan_passed": true,
+  "review_code_passed": true,
+  "running": "",
+  "collab": {
+    "phase_plan": [
+      {
+        "phase": 1,
+        "name": "Secure onboarding MVP",
+        "tasks": [
+          "T001",
+          "T002",
+          "T003",
+          "T004",
+          "T005",
+          "T006",
+          "T007",
+          "T008",
+          "T009",
+          "T010",
+          "T011",
+          "T012",
+          "T013",
+          "T014"
+        ]
+      },
+      {
+        "phase": 2,
+        "name": "Visible automation and recovery",
+        "tasks": [
+          "T015",
+          "T016",
+          "T017",
+          "T018",
+          "T019",
+          "T020",
+          "T021",
+          "T022"
+        ]
+      },
+      {
+        "phase": 3,
+        "name": "Canary readiness and final verification",
+        "tasks": [
+          "T023",
+          "T024",
+          "T025",
+          "T026",
+          "T027"
+        ]
+      }
+    ],
+    "completed_phases": [
+      1
+    ],
+    "current_phase": null,
+    "awaiting_approval_for_phase": 2,
+    "phase_1_review": "passed",
+    "pr_base_branch": "main"
+  }
+}

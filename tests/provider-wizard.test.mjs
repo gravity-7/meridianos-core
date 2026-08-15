@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runProviderWizard, runProviderWizardDashboard, autoDetectProviders, readPolicyState, writePolicyWithBackup } from '../provider-wizard.mjs';
+import { runProviderWizard, runProviderWizardDashboard, autoDetectProviders, listSetupProviders, resolveSetupProviderChoice, readPolicyState, writePolicyWithBackup } from '../provider-wizard.mjs';
 
 describe('Provider Wizard (US3)', () => {
   describe('autoDetectProviders', () => {
@@ -46,6 +46,49 @@ describe('Provider Wizard (US3)', () => {
     });
   });
 
+  describe('listSetupProviders', () => {
+    it('returns only non-secret BYOK metadata from the resolved registry', () => {
+      const providers = listSetupProviders({
+        registry: {
+          deepseek: {
+            name: 'deepseek', displayName: 'DeepSeek', keyEnv: 'DEEPSEEK_KEY', baseUrl: 'https://example.invalid',
+            models: { simple: 'deepseek-v4-flash', complex: 'deepseek-v4-pro' },
+          },
+          native: { name: 'native', displayName: 'Native', keyEnv: null, baseUrl: null, models: { simple: 'native' } },
+        },
+      });
+
+      assert.deepEqual(providers, [{
+        id: 'deepseek', displayName: 'DeepSeek', keyEnv: 'DEEPSEEK_KEY', models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+      }]);
+      assert.doesNotMatch(JSON.stringify(providers), /example\.invalid/);
+    });
+
+    it('ignores a mutable local provider overlay when resolving a credential destination for setup', () => {
+      const repoRoot = mkdtempSync(join(tmpdir(), 'provider-wizard-'));
+      mkdirSync(join(repoRoot, '.ai'), { recursive: true });
+      writeFileSync(join(repoRoot, '.ai', 'providers.yaml'), `providers:
+  deepseek:
+    baseUrl: https://untrusted.invalid/v1
+  untrusted:
+    name: untrusted
+    baseUrl: https://untrusted.invalid/v1
+    keyEnv: UNTRUSTED_KEY
+    models:
+      simple: synthetic-model
+`);
+
+      const providers = listSetupProviders({ config: { repoRoot } });
+      const resolved = resolveSetupProviderChoice({
+        providerId: 'deepseek', modelId: 'deepseek-v4-flash', config: { repoRoot },
+      });
+
+      assert.equal(providers.some((provider) => provider.id === 'untrusted'), false);
+      assert.equal(resolved.provider.baseUrl, 'https://api.deepseek.com');
+      assert.doesNotMatch(JSON.stringify(resolved), /untrusted\.invalid/);
+    });
+  });
+
   describe('runProviderWizard — non-interactive mode', () => {
     it('returns error without required params in non-interactive mode', async () => {
       const result = await runProviderWizard({ interactive: false, auto: false });
@@ -63,6 +106,7 @@ describe('Provider Wizard (US3)', () => {
         wire: 'openai',
         baseUrl: 'https://test.example.com/v1',
         keyEnv: 'TEST_KEY',
+        repoRoot: mkdtempSync(join(tmpdir(), 'provider-wizard-')),
       });
 
       // May fail due to missing policy.yaml in test environment, but shouldn't crash
@@ -85,7 +129,7 @@ describe('Provider Wizard (US3)', () => {
       try {
         // With no known env vars set, auto mode should return error
         // (may also succeed if policy.yaml doesn't exist)
-        const result = await runProviderWizard({ auto: true });
+        const result = await runProviderWizard({ auto: true, repoRoot: mkdtempSync(join(tmpdir(), 'provider-wizard-')) });
         // Either error or ok — should not throw
         assert.ok(result.ok !== undefined);
       } finally {
@@ -104,9 +148,17 @@ describe('Provider Wizard (US3)', () => {
     });
 
     it('accepts known provider name', async () => {
-      const result = await runProviderWizardDashboard('anthropic', 'ANTHROPIC_API_KEY', 'sk-ant-test');
-      // May succeed or fail depending on policy.yaml state
-      assert.ok(result.ok !== undefined);
+      const previous = process.env.ANTHROPIC_API_KEY;
+      try {
+        const result = await runProviderWizardDashboard(
+          'anthropic', 'ANTHROPIC_API_KEY', 'synthetic-provider-wizard-sentinel',
+          mkdtempSync(join(tmpdir(), 'provider-wizard-')),
+        );
+        assert.ok(result.ok !== undefined);
+      } finally {
+        if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
+        else process.env.ANTHROPIC_API_KEY = previous;
+      }
     });
   });
 

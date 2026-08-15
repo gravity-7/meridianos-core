@@ -1,0 +1,472 @@
+# Canonical, dependency-free source of truth for persona-based QA.
+# Normal runs are synthetic and loopback-only. See safe-fixture-design.md.
+catalog_version: 1
+default_classification: DETERMINISTIC-SIMULATED
+personas:
+  individual_first_time:
+    label: First-time individual operator
+    goal: Configure a safe local installation and reach a first bounded task.
+    access: Local administrator during setup.
+  individual_experienced:
+    label: Experienced individual operator
+    goal: Operate tasks and budgets without surprise spend or unsafe recovery.
+    access: Local administrator.
+  organization_admin:
+    label: Organization administrator
+    goal: Create projects and administer safe collaboration boundaries.
+    access: Organization and project administrator.
+  organization_operator:
+    label: Organization operator
+    goal: Execute assigned work, recover from safe failures, and escalate risks.
+    access: Project operator.
+  organization_viewer:
+    label: Organization viewer
+    goal: Observe approved work without gaining operational authority.
+    access: Project viewer.
+  integration_admin:
+    label: Provider and integration administrator
+    goal: Configure controlled provider, subscription, webhook, and reporting connections.
+    access: Provider or platform administrator.
+  desktop_admin:
+    label: Desktop first-run administrator
+    goal: Safely connect the desktop companion, local daemon, and dashboard.
+    access: Local machine administrator.
+fixture_profiles:
+  fresh_solo:
+    purpose: Empty temporary root for first-run setup.
+    reset: Delete isolated temporary root after server close.
+    dependency_mode: Loopback provider only.
+    ai_traffic_path: test-gateway -> loopback-provider
+    revision: fresh-solo-r1
+  solo_byok:
+    purpose: Configured individual workspace with a generated non-secret sentinel.
+    reset: Recreate policy, task, usage, and ledger data from fixture manifest.
+    dependency_mode: Loopback provider and test gateway only.
+    ai_traffic_path: test-gateway -> loopback-provider
+    revision: solo-byok-r1
+  organization_roles:
+    purpose: Two synthetic projects with admin, operator, and viewer memberships.
+    reset: New isolated control-plane database and generated users per worker.
+    dependency_mode: Local mail capture and deterministic task runner.
+    ai_traffic_path: test-gateway -> loopback-provider
+    revision: organization-roles-r1
+  provider_failure:
+    purpose: Configured provider route with controlled success and failure responses.
+    reset: Restart local mock and recreate generated policy.
+    dependency_mode: Loopback provider only.
+    ai_traffic_path: test-gateway -> loopback-provider
+    revision: provider-failure-r1
+  billing_entitlement:
+    purpose: Free and entitled organization states with local signed event data.
+    reset: Recreate entitlement ledger and local webhook payloads.
+    dependency_mode: In-memory payment webhook only.
+    revision: billing-entitlement-r1
+  desktop_first_run:
+    purpose: Fake keychain, daemon, and provider state for desktop recovery.
+    reset: Fresh temporary app-data root and fake keychain per run.
+    dependency_mode: Local daemon and loopback provider only.
+    ai_traffic_path: test-gateway -> loopback-provider
+    revision: desktop-first-run-r1
+dependency_scenarios:
+  provider:
+    required_variants: [success, validation-error, authorization-denied, timeout, unavailable]
+    additional_variants: [quota, malformed-response]
+  payment:
+    required_variants: [success, validation-error, authorization-denied, timeout, unavailable]
+    additional_variants: [free-gated, entitled, expired, local-webhook-invalid]
+  email:
+    required_variants: [success, validation-error, authorization-denied, timeout, unavailable]
+    additional_variants: [local-capture, expired-invitation, reused-invitation, delivery-failure]
+  webhook:
+    required_variants: [success, validation-error, authorization-denied, timeout, unavailable]
+    additional_variants: [accepted, denied, retryable-failure]
+  subscription:
+    required_variants: [success, validation-error, authorization-denied, timeout, unavailable]
+    additional_variants: [configured-synthetic-session, acknowledgement-missing]
+  browser_system:
+    required_variants: [success, validation-error, authorization-denied, timeout, unavailable]
+    additional_variants: [wide, narrow, keyboard-only, reduced-motion]
+  desktop_system:
+    required_variants: [success, validation-error, authorization-denied, timeout, unavailable]
+    additional_variants: [local-keychain-locked]
+journeys:
+  JRN-001:
+    title: First value through legacy setup and BYOK routing
+    persona: individual_first_time
+    priority: P1
+    domains: onboarding; providers-models; budget-safety
+    truth_state: CURRENT-LEGACY-COMPATIBILITY-BRIDGE
+    implementation_surface: Existing `/setup`; `/app/setup` is not implemented or claimed.
+    compatibility_bridge_target: Registered provider/model selection, one-time server validation, redacted review, and explicit first-write commit.
+    canary_boundary: DeepSeek-only manual canary preparation is deferred to Phase 3; Z.ai GLM is unregistered and unsupported.
+    fixture_profile: fresh_solo
+    dependency_scenarios: provider; browser_system
+    user_goal: Complete a safe first local configuration with a registered provider/model route.
+    business_value: Gives a new individual a truthful route selection and review-before-write boundary instead of environment-key detection.
+    risk_level: high
+    preconditions: Empty root with no `.ai/policy.yaml`, `.ai/tenant.yaml`, or `.env`; the standard loopback fixture is Phase 2 work.
+    synthetic_data_needs: Generated tenant, agents, budget, and provider sentinel for focused HTTP tests only.
+    numbered_actions: 1 welcome; 2 agents; 3 provider validation; 4 budget; 5 review and explicit commit.
+    recovery_expectations: A safe validation failure blocks review/commit; an existing setup target returns safely without overwrite. Controlled browser recovery evidence is Phase 2 work.
+    verification_method: Phase 1 focused setup contract and HTTP tests; deterministic browser, keyboard, wide/narrow evidence, and fixture redaction scans are Phase 2 work.
+    owner: Dashboard quality owner
+    expected_outcomes: `/setup` exposes only registered provider/model metadata, review is redacted and non-writing, and an explicit matching commit writes a fresh root once.
+    verification_lanes: unit-contract; http-contract; future-deterministic-browser
+    browser_expectations: `/setup` compatibility bridge only; Phase 2 adds automated desktop/narrow/keyboard evidence
+    browser_desktop: pending-phase-2
+    browser_narrow: pending-phase-2
+    browser_keyboard: pending-phase-2
+    browser_recovery: pending-phase-2
+    evidence_status: PHASE-2-PENDING
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: runbooks/JRN-001-first-value-byok.md
+  JRN-002:
+    title: Unified platform setup happy path and first task
+    persona: individual_first_time
+    priority: P2
+    domains: onboarding; projects-tasks
+    truth_state: PLANNED
+    fixture_profile: fresh_solo
+    dependency_scenarios: provider; browser_system
+    user_goal: Complete the future unified setup and start a bounded first task.
+    business_value: Defines future onboarding acceptance before the feature is implemented.
+    risk_level: high
+    preconditions: Planned /app/setup route and fresh temporary root.
+    synthetic_data_needs: Generated tenant, agents, provider sentinel, budget, and task.
+    numbered_actions: 1 begin setup; 2 configure; 3 validate; 4 review; 5 commit; 6 start task.
+    recovery_expectations: Invalid or timed-out validation retains non-secret draft and blocks commit.
+    verification_method: Specification contract followed by future deterministic browser automation.
+    owner: Onboarding product owner
+    expected_outcomes: Future /app/setup flow reaches a simulated first task without storing or displaying a secret.
+    verification_lanes: specification-contract; future-deterministic-browser
+    browser_expectations: /app/setup once implemented; resume and explicit commit states
+    evidence_status: NOT-IMPLEMENTED
+    review_status: DRAFT
+    runbook: not-required
+  JRN-003:
+    title: Budget warning, halt, and safe resume
+    persona: individual_experienced
+    priority: P1
+    domains: budget-safety; providers-models; projects-tasks
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: solo_byok
+    dependency_scenarios: provider; browser_system
+    user_goal: Understand, trigger, and safely recover from a budget enforcement event.
+    business_value: Proves spend guardrails are visible and cannot be bypassed by routine operator action.
+    risk_level: critical
+    preconditions: Generated ledger at a known threshold with test gateway enforcement enabled.
+    synthetic_data_needs: Generated policy, model route, task, frozen clock, usage ledger, and administrator.
+    numbered_actions: 1 inspect limit; 2 reach warning; 3 reach halt; 4 request permitted resume; 5 inspect ledger.
+    recovery_expectations: Unauthorized or still-over-limit resume remains blocked and offers escalation.
+    verification_method: Gateway/ledger contract plus deterministic browser and wide/narrow visual evidence.
+    owner: Gateway quality owner
+    expected_outcomes: Deterministic usage reaches warning and halt thresholds; a permitted administrator can resume safely.
+    verification_lanes: unit-contract; deterministic-browser; gateway-ledger; visual-wide-and-narrow
+    browser_expectations: Budget panel shows warning, halted state, reason, and controlled resume action
+    browser_desktop: required
+    browser_narrow: required
+    browser_keyboard: required
+    browser_recovery: required
+    evidence_status: BLOCKED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: runbooks/JRN-003-budget-safety.md
+  JRN-004:
+    title: Existing installation protection during setup
+    persona: individual_first_time
+    priority: P2
+    domains: onboarding
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: fresh_solo
+    dependency_scenarios: browser_system
+    user_goal: Avoid accidentally overwriting an existing installation during setup.
+    business_value: Protects a user's prior local configuration from mistaken first-run actions.
+    risk_level: high
+    preconditions: Temporary root seeded with generated existing policy.
+    synthetic_data_needs: Generated policy snapshot and setup-wizard state.
+    numbered_actions: 1 detect any setup target; 2 show safe return action; 3 return to dashboard without overwrite.
+    recovery_expectations: Return guarantees no change; the first-run bridge never provides an overwrite path.
+    verification_method: Setup contract and deterministic browser path.
+    owner: Setup quality owner
+    expected_outcomes: Existing policy, tenant, or `.env` target is detected and left unchanged; setup cannot continue into an overwrite path.
+    verification_lanes: unit-contract; deterministic-browser
+    browser_expectations: /setup existing-configuration warning and cancel path
+    evidence_status: PLANNED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: not-required
+  JRN-005:
+    title: Project creation and team collaboration
+    persona: organization_admin
+    priority: P1
+    domains: projects-tasks; access-control
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: organization_roles
+    dependency_scenarios: browser_system
+    user_goal: Create a project and give each generated team member the appropriate scope.
+    business_value: Proves project isolation and collaboration attribution for an organization.
+    risk_level: critical
+    preconditions: Isolated control-plane fixture with two generated projects and role memberships.
+    synthetic_data_needs: Generated users, projects, memberships, task, and activity history.
+    numbered_actions: 1 create project; 2 assign roles; 3 start allowed task; 4 inspect members; 5 inspect activity.
+    recovery_expectations: Cross-project membership attempt is denied with both projects unchanged.
+    verification_method: HTTP RBAC contract, deterministic browser, keyboard, and wide/narrow visual evidence.
+    owner: Collaboration quality owner
+    expected_outcomes: Admin creates isolated project state, grants synthetic membership, and sees attributable activity.
+    verification_lanes: http-rbac; deterministic-browser; keyboard; visual-wide-and-narrow
+    browser_expectations: Project creation, member list, role display, and activity attribution are visible
+    browser_desktop: required
+    browser_narrow: required
+    browser_keyboard: required
+    browser_recovery: required
+    evidence_status: BLOCKED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: runbooks/JRN-005-project-team.md
+  JRN-006:
+    title: Invitation acceptance and role change boundaries
+    persona: organization_admin
+    priority: P2
+    domains: access-control; integrations
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: organization_roles
+    dependency_scenarios: email; browser_system
+    user_goal: Invite a generated member and confirm role changes respect invitation boundaries.
+    business_value: Reduces unauthorized access risk in collaboration administration.
+    risk_level: high
+    preconditions: Local mail capture and generated project memberships.
+    synthetic_data_needs: Generated invitee, one-time invitation, expiry clock, and role state.
+    numbered_actions: 1 create invitation; 2 accept locally; 3 change role; 4 retry used invite; 5 test expiry.
+    recovery_expectations: Reused or expired invitation is denied and no new membership is created.
+    verification_method: HTTP RBAC contract and deterministic browser flow.
+    owner: Collaboration quality owner
+    expected_outcomes: Local-capture invitation is single-use and expired/reused invitations fail safely.
+    verification_lanes: http-rbac; deterministic-browser
+    browser_expectations: Invitation status and role-change confirmation are visible
+    evidence_status: PLANNED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: not-required
+  JRN-007:
+    title: Operator task recovery and escalation
+    persona: organization_operator
+    priority: P1
+    domains: projects-tasks; access-control
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: organization_roles
+    dependency_scenarios: provider; browser_system
+    user_goal: Complete permitted task work and safely recover or escalate an assigned failure.
+    business_value: Proves operators can move work forward without obtaining administrative control.
+    risk_level: critical
+    preconditions: Generated operator with an assigned deterministic task and controlled runner failure.
+    synthetic_data_needs: Generated project, operator, task history, failure state, and escalation target.
+    numbered_actions: 1 open assigned task; 2 run; 3 observe failure; 4 retry once; 5 escalate; 6 verify denial.
+    recovery_expectations: Escalation records context; prohibited administrative action has no side effect.
+    verification_method: Workflow domain contract, deterministic browser, keyboard, and wide/narrow visual evidence.
+    owner: Workflow quality owner
+    expected_outcomes: Operator can run allowed task actions, recover a deterministic failure, and escalate instead of bypassing policy.
+    verification_lanes: domain-contract; deterministic-browser; keyboard; visual-wide-and-narrow
+    browser_expectations: Task states, retry guidance, escalation action, and denied destructive action are visible
+    browser_desktop: required
+    browser_narrow: required
+    browser_keyboard: required
+    browser_recovery: required
+    evidence_status: BLOCKED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: runbooks/JRN-007-operator-recovery.md
+  JRN-008:
+    title: Viewer boundaries and read-only visibility
+    persona: organization_viewer
+    priority: P1
+    domains: access-control; projects-tasks
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: organization_roles
+    dependency_scenarios: browser_system
+    user_goal: View authorized project information without receiving mutation authority.
+    business_value: Proves a stakeholder role has useful visibility and safe boundaries.
+    risk_level: critical
+    preconditions: Generated viewer session for project A and isolation sentinel project B.
+    synthetic_data_needs: Generated viewer, projects, activity, and denied-action controls.
+    numbered_actions: 1 open project A; 2 inspect activity; 3 attempt mutation; 4 navigate by keyboard; 5 request project B.
+    recovery_expectations: Denial explains the boundary and preserves all project/task state.
+    verification_method: HTTP RBAC contract, deterministic browser, keyboard, and wide/narrow visual evidence.
+    owner: Access-control quality owner
+    expected_outcomes: Viewer sees permitted context while mutations and privileged actions are denied and explained.
+    verification_lanes: http-rbac; deterministic-browser; keyboard; visual-wide-and-narrow
+    browser_expectations: Read-only state and clear denied-action feedback are visible without hidden controls succeeding
+    browser_desktop: required
+    browser_narrow: required
+    browser_keyboard: required
+    browser_recovery: required
+    evidence_status: BLOCKED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: runbooks/JRN-008-viewer-boundaries.md
+  JRN-009:
+    title: Provider BYOK validation, model selection, and recovery
+    persona: integration_admin
+    priority: P1
+    domains: providers-models; integrations; budget-safety
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: provider_failure
+    dependency_scenarios: provider; browser_system
+    user_goal: Configure, validate, route, and recover a BYOK-shaped provider setup without secret exposure.
+    business_value: Proves provider administration is safe and failure states are understandable.
+    risk_level: critical
+    preconditions: Generated policy, loopback mock provider, generated sentinel, and test gateway.
+    synthetic_data_needs: Generated provider route, model list, sentinel, and failure responses.
+    numbered_actions: 1 add route; 2 validate; 3 select model; 4 simulate unavailable/quota; 5 retry; 6 inspect redaction.
+    recovery_expectations: Unvalidated route is not committed; retry or escalation preserves safe configuration.
+    verification_method: Provider contract, deterministic browser, redaction scan, and wide/narrow visual evidence.
+    owner: Provider quality owner
+    expected_outcomes: Generated sentinel validates against loopback provider; models route through gateway; failure messages redact secrets.
+    verification_lanes: provider-contract; deterministic-browser; redaction-scan; visual-wide-and-narrow
+    browser_expectations: Provider test, model selection, unavailable state, retry, and non-secret error are visible
+    browser_desktop: required
+    browser_narrow: required
+    browser_keyboard: required
+    browser_recovery: required
+    evidence_status: BLOCKED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: runbooks/JRN-009-provider-recovery.md
+  JRN-010:
+    title: Free entitlement and local billing event handling
+    persona: organization_admin
+    priority: P2
+    domains: billing-licensing
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: billing_entitlement
+    dependency_scenarios: payment; browser_system
+    user_goal: Understand free, entitled, and local billing-event states without entering a payment flow.
+    business_value: Defines entitlement boundaries while keeping normal QA cost-free.
+    risk_level: high
+    preconditions: Generated organization with in-memory signed billing event handler.
+    synthetic_data_needs: Generated organization, free/entitled ledger, and local event payloads.
+    numbered_actions: 1 view free gate; 2 apply local entitlement; 3 view entitled state; 4 simulate expiry; 5 view event error.
+    recovery_expectations: Invalid event leaves prior entitlement intact and displays recoverable error.
+    verification_method: Webhook contract and deterministic browser flow.
+    owner: Billing quality owner
+    expected_outcomes: Entitlement states change only through deterministic local events; real checkout and portal calls are excluded.
+    verification_lanes: webhook-contract; deterministic-browser
+    browser_expectations: Free gate, entitlement state, and recoverable event error are visible
+    evidence_status: PLANNED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: not-required
+  JRN-011:
+    title: Compliance export and truth-label boundaries
+    persona: integration_admin
+    priority: P2
+    domains: integrations; access-control
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: organization_roles
+    dependency_scenarios: browser_system
+    user_goal: Export authorized compliance data and distinguish real from illustrative reporting.
+    business_value: Prevents misleading compliance claims and unauthorized export access.
+    risk_level: high
+    preconditions: Generated administrator and non-admin sessions with deterministic audit data.
+    synthetic_data_needs: Generated audit ledger, export payload, role sessions, and illustrative-report labels.
+    numbered_actions: 1 request SOC2 export; 2 inspect label; 3 attempt non-admin access; 4 inspect illustrative report disclosure.
+    recovery_expectations: Denied export leaves no generated file exposed to the non-admin session.
+    verification_method: HTTP RBAC, export contract, and deterministic browser flow.
+    owner: Compliance quality owner
+    expected_outcomes: Authorized synthetic SOC2 export is available; illustrative reports are labelled and denied to non-admins.
+    verification_lanes: http-rbac; export-contract; deterministic-browser
+    browser_expectations: Export state, access denial, and illustrative-report disclosure are visible
+    evidence_status: PLANNED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: not-required
+  JRN-012:
+    title: Subscription attribution with synthetic session configuration
+    persona: integration_admin
+    priority: P2
+    domains: integrations; providers-models; billing-licensing
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: provider_failure
+    dependency_scenarios: subscription; provider; browser_system
+    user_goal: Configure synthetic subscription attribution and handle acknowledgement or availability failures.
+    business_value: Defines safe subscription-route testing without real session extraction.
+    risk_level: high
+    preconditions: Generated subscription configuration and loopback gateway route.
+    synthetic_data_needs: Generated acknowledgement, session-env name, attribution ledger, and unavailable response.
+    numbered_actions: 1 view disclaimer; 2 acknowledge; 3 configure synthetic route; 4 inspect attribution; 5 simulate unavailable.
+    recovery_expectations: Missing acknowledgement or unavailable route prevents unsafe traffic and explains next step.
+    verification_method: Gateway contract, deterministic browser, and redaction scan.
+    owner: Gateway quality owner
+    expected_outcomes: Synthetic subscription configuration acknowledges terms and produces gateway attribution without a real session token.
+    verification_lanes: gateway-contract; deterministic-browser; redaction-scan
+    browser_expectations: Subscription acknowledgement, attribution state, and unavailable state are visible
+    evidence_status: PLANNED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: not-required
+  JRN-013:
+    title: Docker deployment reaches the established dashboard safely
+    persona: organization_admin
+    priority: P1
+    domains: deployment; providers-models
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: solo_byok
+    dependency_scenarios: provider; browser_system
+    user_goal: Start a local container fixture and reach a healthy established dashboard.
+    business_value: Gives deployment users a safe readiness and recovery story before real infrastructure use.
+    risk_level: high
+    preconditions: Generated compose-style local fixture with loopback provider and test gateway.
+    synthetic_data_needs: Generated policy, health state, provider route, and controlled service fault.
+    numbered_actions: 1 start fixture; 2 open dashboard; 3 inspect health; 4 trigger unavailable state; 5 restore health.
+    recovery_expectations: Stop and recreate the temporary fixture; no production stack is changed.
+    verification_method: Local compose smoke, deterministic browser, and wide/narrow visual evidence.
+    owner: Deployment quality owner
+    expected_outcomes: Local compose-style fixture exposes health and dashboard readiness with no real provider traffic.
+    verification_lanes: compose-smoke; deterministic-browser; keyboard; visual-wide-and-narrow
+    browser_expectations: Dashboard health, gateway state, keyboard focus, narrow layout, and configuration-safe recovery surface are visible
+    browser_desktop: required
+    browser_narrow: required
+    browser_keyboard: required
+    browser_recovery: required
+    evidence_status: BLOCKED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: runbooks/JRN-013-docker-dashboard.md
+  JRN-014:
+    title: Desktop first run, daemon health, and locked keychain recovery
+    persona: desktop_admin
+    priority: P1
+    domains: desktop; deployment; providers-models
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: desktop_first_run
+    dependency_scenarios: provider; desktop_system
+    user_goal: Complete first-run desktop setup and recover safely from a locked keychain.
+    business_value: Makes desktop local-dependency risks visible before a real-device demonstration.
+    risk_level: high
+    preconditions: Fresh generated app-data root with fake daemon, fake keychain, and loopback provider.
+    synthetic_data_needs: Generated profile, sentinel, fake keychain state, daemon status, and dashboard handoff.
+    numbered_actions: 1 start wizard; 2 store sentinel in fake keychain; 3 start fake daemon; 4 hand off dashboard; 5 lock keychain; 6 recover.
+    recovery_expectations: Only fake keychain reset is allowed; real device/package work needs manual approval.
+    verification_method: Electron integration, deterministic renderer checks, and approved manual smoke.
+    owner: Desktop quality owner
+    expected_outcomes: Desktop wizard reaches fake keychain and daemon readiness; locked-keychain state gives safe recovery guidance.
+    verification_lanes: electron-integration; deterministic-renderer; keyboard; visual-wide-and-narrow; approved-manual-smoke
+    browser_expectations: Wizard, daemon-health, narrow renderer layout, keyboard focus, dashboard handoff, and locked-keychain recovery are visible
+    browser_desktop: required
+    browser_narrow: required
+    browser_keyboard: required
+    browser_recovery: required
+    evidence_status: BLOCKED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: runbooks/JRN-014-desktop-first-run.md
+  JRN-015:
+    title: Signed webhook retry and failure visibility
+    persona: integration_admin
+    priority: P3
+    domains: integrations
+    truth_state: CURRENT-SIMULATED
+    fixture_profile: provider_failure
+    dependency_scenarios: webhook
+    user_goal: Verify local signed webhook retry behavior without disclosing a payload or calling a real endpoint.
+    business_value: Defines reliable integration-failure handling before external rollout.
+    risk_level: medium
+    preconditions: Local generated receiver with controlled success and retryable failure.
+    synthetic_data_needs: Generated signing material, event ID, payload, retry clock, and receiver outcomes.
+    numbered_actions: 1 emit local event; 2 verify signature; 3 return retryable failure; 4 retry; 5 inspect redacted result.
+    recovery_expectations: Failed delivery is recorded for retry and no raw payload enters shareable evidence.
+    verification_method: Webhook contract and local receiver validation.
+    owner: Integration quality owner
+    expected_outcomes: Local receiver verifies a signed event, reports retryable failure, and records no sensitive payload in shareable evidence.
+    verification_lanes: webhook-contract; local-receiver
+    browser_expectations: Not a primary browser journey; dashboard history may be added after fixture support exists
+    evidence_status: PLANNED
+    review_status: REVIEWED-FOR-INTERNAL
+    runbook: not-required

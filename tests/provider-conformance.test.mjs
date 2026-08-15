@@ -8,7 +8,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { testProviderConnection, toSafeProviderValidationResult } from '../provider-conformance.mjs';
+import { testProviderConnection, toSafeProviderValidationResult, validateSetupProviderConnection } from '../provider-conformance.mjs';
 
 // A real local TCP server that accepts the connection but never responds — exercises
 // testProviderConnection's 5s AbortController timeout path deterministically. An earlier version of
@@ -129,6 +129,76 @@ describe('Provider Conformance (US2)', () => {
         assert.equal(result.ok, true);
         assert.equal(result.latencyMs, 0);
       }
+    });
+  });
+
+  describe('setup validation safety seam', () => {
+    it('uses an injected loopback-only fetch implementation without exposing a submitted value', async () => {
+      let redirectMode;
+      const result = await testProviderConnection(
+        { name: 'fixture-provider', wire: 'openai', baseUrl: 'http://127.0.0.1:4318/v1', keyEnv: 'FIXTURE_KEY' },
+        'synthetic-onboarding-sentinel',
+        {
+          allowUrl: (url) => url.startsWith('http://127.0.0.1:4318/'),
+          fetchImpl: async (_url, init) => {
+            redirectMode = init.redirect;
+            return new Response(JSON.stringify({ data: [{ id: 'fixture-model' }] }), { status: 200 });
+          },
+        },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(redirectMode, 'error');
+    });
+
+    it('rejects a provider redirect before a second destination could be contacted', async () => {
+      let requested = false;
+      const result = await testProviderConnection(
+        { name: 'fixture-provider', wire: 'openai', baseUrl: 'http://127.0.0.1:4318/v1', keyEnv: 'FIXTURE_KEY' },
+        'synthetic-onboarding-sentinel',
+        {
+          allowUrl: (url) => url.startsWith('http://127.0.0.1:4318/'),
+          fetchImpl: async (_url, init) => {
+            requested = true;
+            assert.equal(init.redirect, 'error');
+            const error = new TypeError('redirect mode is error');
+            error.code = 'REDIRECT_BLOCKED';
+            throw error;
+          },
+        },
+      );
+      assert.equal(requested, true);
+      assert.equal(result.ok, false);
+      assert.equal(result.errorCode, 'UNEXPECTED_RESPONSE');
+    });
+
+    it('blocks a non-permitted validation endpoint before fetch can send a credential', async () => {
+      let fetchCalled = false;
+      const result = await testProviderConnection(
+        { name: 'fixture-provider', wire: 'openai', baseUrl: 'http://not-permitted.invalid/v1', keyEnv: 'FIXTURE_KEY' },
+        'synthetic-onboarding-sentinel',
+        {
+          allowUrl: () => false,
+          fetchImpl: async () => {
+            fetchCalled = true;
+            throw new Error('fetch should not run');
+          },
+        },
+      );
+      assert.equal(fetchCalled, false);
+      assert.equal(result.ok, false);
+      assert.doesNotMatch(JSON.stringify(result), /synthetic-onboarding-sentinel|not-permitted\.invalid/);
+    });
+
+    it('maps injected failures to a stable redacted setup recovery result', async () => {
+      const result = await validateSetupProviderConnection(
+        { name: 'fixture-provider', wire: 'openai', baseUrl: 'http://127.0.0.1:4318/v1' },
+        'synthetic-onboarding-sentinel',
+        { testConnection: async () => { throw new Error('synthetic-onboarding-sentinel'); } },
+      );
+      assert.deepEqual(result, {
+        status: 'unavailable', code: 'UNAVAILABLE', summary: 'The provider is unavailable. Try again shortly.',
+      });
+      assert.doesNotMatch(JSON.stringify(result), /synthetic-onboarding-sentinel/);
     });
   });
 

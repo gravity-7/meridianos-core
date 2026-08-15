@@ -17,6 +17,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import url from 'node:url';
 import { execFile, spawn } from 'node:child_process';
+import { createSetupValidationSessionStore } from '../setup-validation-session.mjs';
+import { assertSafeSetupSecret, buildSetupPlan, buildSetupReview, detectEnvironment, detectExistingConfig, writeSetupPlan } from '../setup-wizard-core.mjs';
+import { listSetupProviders, resolveSetupProviderChoice } from '../provider-wizard.mjs';
+import { validateSetupProviderConnection } from '../provider-conformance.mjs';
 import { buildStatus } from '../status.mjs';
 import { openDb } from '../db.mjs';
 import { createProjectStore } from '../project-store.mjs';
@@ -373,6 +377,49 @@ export function createDashboardServer(config) {
     } catch { /* observability never changes setup behavior */ }
   };
   _dashboardConfig = config;
+  // This store intentionally lives for one dashboard-server process only. Its records are opaque
+  // handles for a short-lived server-side secret; neither the dashboard nor disk receives a key.
+  const setupValidations = createSetupValidationSessionStore({
+    now: config.setupValidationNow,
+    ttlMs: config.setupValidationTtlMs,
+  });
+  const setupSessions = new Map();
+  const setupSessionTtlMs = Number.isFinite(config.setupSessionTtlMs) && config.setupSessionTtlMs > 0
+    ? config.setupSessionTtlMs
+    : 15 * 60 * 1000;
+  const setupSessionNow = typeof config.setupSessionNow === 'function' ? config.setupSessionNow : () => Date.now();
+  function revokeSetupSession(id) {
+    const record = setupSessions.get(id);
+    if (record) clearTimeout(record.expiryTimer);
+    setupSessions.delete(id);
+    setupValidations.revokeSetupSession(id);
+  }
+  function issueSetupSession() {
+    const id = `setup-${randomBytes(18).toString('hex')}`;
+    const record = { expiresAt: setupSessionNow() + setupSessionTtlMs };
+    record.expiryTimer = setTimeout(() => revokeSetupSession(id), setupSessionTtlMs);
+    record.expiryTimer.unref?.();
+    setupSessions.set(id, record);
+    return id;
+  }
+  function hasLiveSetupSession(id) {
+    const record = setupSessions.get(id);
+    if (!record || record.expiresAt <= setupSessionNow()) {
+      if (record) revokeSetupSession(id);
+      return false;
+    }
+    return true;
+  }
+  const validateSetupProvider = typeof config.setupProviderValidator === 'function'
+    ? config.setupProviderValidator
+    : ({ provider, secret }) => validateSetupProviderConnection(provider, secret, config.setupValidationOptions);
+  // The older onboarding API remains available for compatibility, but it must not bypass the
+  // first-time bridge's trusted catalog by resolving mutable policy or .ai provider overlays.
+  const resolveTrustedOnboardingProvider = (providerId) => {
+    const descriptor = listSetupProviders({ config }).find((entry) => entry.id === providerId);
+    if (!descriptor?.models?.length) return null;
+    return resolveSetupProviderChoice({ providerId, modelId: descriptor.models[0], config }).provider;
+  };
   let operationalDb = null;
   let operationalLedger = null;
   let dashboardLedger = null;
@@ -442,16 +489,13 @@ export function createDashboardServer(config) {
         const html = readFileSync(INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
         return send(res, 200, html, 'text/html; charset=utf-8');
       }
+      if (req.method === 'GET' && (url.pathname === '/app/setup' || url.pathname.startsWith('/app/setup/'))) {
+        res.writeHead(302, { location: '/setup', 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
+        return res.end();
+      }
       if (req.method === 'GET' && (url.pathname === '/app' || url.pathname.startsWith('/app/'))) {
         let eligibility = { eligible: false };
         try { eligibility = evaluateUiPlatformEligibility(loadPolicy(undefined, config)); } catch { /* missing policy stays safely legacy */ }
-        // Setup is the sole platform route reachable before a policy exists.
-        // It is also a safe recovery entry point for an existing installation:
-        // the renderer shows a non-destructive status instead of redirecting it
-        // into an accidental second setup flow.
-        if (!eligibility.eligible && url.pathname.startsWith('/app/setup')) {
-          eligibility = { eligible: true };
-        }
         if (!eligibility.eligible) {
           res.writeHead(302, { location: '/', 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
           return res.end();
@@ -459,33 +503,36 @@ export function createDashboardServer(config) {
         const html = readFileSync(APP_INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
         return send(res, 200, html, 'text/html; charset=utf-8');
       }
-      // GET /setup + POST /api/setup/* (008 — End-User Configurability, US3): the browser twin of
-      // `gateway/cli.mjs setup`, both built on setup-wizard-core.mjs so the two paths can never
-      // drift into producing different policy.yaml/tenant.yaml/.env shapes (FR-009).
+      // GET /setup and the legacy CLI share file-plan primitives. The browser is the supported
+      // first-time BYOK bridge: it adds a browser-scoped validation/review handoff before writing.
       if (req.method === 'GET' && url.pathname === '/setup') {
-        const html = readFileSync(SETUP_HTML, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
+        const setupSessionId = issueSetupSession();
+        const html = readFileSync(SETUP_HTML, 'utf8')
+          .replaceAll('__AIOS_TOKEN__', AUTH_TOKEN)
+          .replaceAll('__SETUP_SESSION_ID__', setupSessionId);
         return send(res, 200, html, 'text/html; charset=utf-8');
       }
       if (req.method === 'GET' && url.pathname === '/api/setup/status') {
-        const { detectExistingConfig, detectEnvironment, detectProviders } = await import('../setup-wizard-core.mjs');
         const { exists } = detectExistingConfig(config.repoRoot);
         return send(res, 200, JSON.stringify({
           ok: true, exists, environment: detectEnvironment(),
-          providers: detectProviders().map((p) => ({ name: p.name, keyEnv: p.keyEnv })),
+          providers: listSetupProviders({ config }),
+          // Only an explicitly injected, isolated fixture may label itself synthetic. Customer
+          // dashboard instances are never inferred or presented as disposable test data.
+          synthetic: config.setupFixture?.synthetic === true,
         }));
       }
-      // Unified onboarding is additive to the legacy setup endpoints. It returns
-      // only non-secret metadata and uses the same per-boot mutation protection.
+      // Compatibility API for the legacy onboarding renderer. It shares the bridge's trusted,
+      // non-secret provider catalog; the visible first-time route remains GET /setup.
       if (req.method === 'GET' && url.pathname === '/api/onboarding/status') {
         try {
           const { detectOnboardingInstallation } = await import('../setup-wizard-core.mjs');
-          const { resolveAllProviders } = await import('../providers.mjs');
           const installation = detectOnboardingInstallation(config.repoRoot);
-          const providers = Object.values(resolveAllProviders({}, config)).map((provider) => ({
-            id: provider.name,
-            label: provider.displayName ?? provider.name,
+          const providers = listSetupProviders({ config }).map((provider) => ({
+            id: provider.id,
+            label: provider.displayName,
             requiresCredential: Boolean(provider.keyEnv),
-          })).filter((provider) => provider.requiresCredential);
+          }));
           return send(res, 200, JSON.stringify({
             ok: true, installation: installation.state, providers,
             compatibility: { legacySetupAvailable: true },
@@ -501,7 +548,7 @@ export function createDashboardServer(config) {
             id: run.run_id,
             status: typeof run.outcome === 'string' ? run.outcome : 'unknown',
             task: typeof run.task === 'string' ? run.task : null,
-            target: `/app/setup/complete?run=${encodeURIComponent(run.run_id)}`,
+            target: '/setup',
           } : null;
           return send(res, 200, JSON.stringify({ ok: true, firstRun }));
         } catch {
@@ -615,14 +662,16 @@ export function createDashboardServer(config) {
       }
       if (req.method === 'POST' && url.pathname === '/api/onboarding/provider-validation') {
         try {
+          if (detectExistingConfig(config.repoRoot).exists) {
+            return send(res, 409, JSON.stringify({ ok: false, code: 'existing_installation' }));
+          }
           const body = JSON.parse((await readBody(req)) || '{}');
           const providerId = typeof body?.provider?.id === 'string' ? body.provider.id : '';
           const credential = typeof body?.credential === 'string' ? body.credential : '';
           if (!providerId || !credential) return send(res, 400, JSON.stringify({ ok: false, code: 'provider_credential_required' }));
-          const { resolveProvider } = await import('../providers.mjs');
           const { testProviderConnection, toSafeProviderValidationResult } = await import('../provider-conformance.mjs');
-          const provider = resolveProvider(providerId, {}, config);
-          if (!provider?.keyEnv) return send(res, 400, JSON.stringify({ ok: false, code: 'provider_not_supported' }));
+          const provider = resolveTrustedOnboardingProvider(providerId);
+          if (!provider) return send(res, 400, JSON.stringify({ ok: false, code: 'provider_not_supported' }));
           const result = toSafeProviderValidationResult(await testProviderConnection(provider, credential), providerId);
           const revision = typeof body.draftRevision === 'string' && body.draftRevision ? body.draftRevision : randomUUID();
           if (result.status === 'valid') onboardingValidations.set(revision, { providerId, expiresAt: Date.now() + 10 * 60_000 });
@@ -636,11 +685,10 @@ export function createDashboardServer(config) {
         try {
           const body = JSON.parse((await readBody(req)) || '{}');
           const { validateOnboardingDraft } = await import('./static/onboarding-draft.mjs');
-          const { resolveProvider } = await import('../providers.mjs');
           const { buildOnboardingPreview } = await import('../setup-wizard-core.mjs');
           const draft = validateOnboardingDraft(body.draft);
-          const provider = resolveProvider(draft.provider.id, {}, config);
-          if (!provider?.keyEnv) return send(res, 400, JSON.stringify({ ok: false, code: 'provider_not_supported' }));
+          const provider = resolveTrustedOnboardingProvider(draft.provider.id);
+          if (!provider) return send(res, 400, JSON.stringify({ ok: false, code: 'provider_not_supported' }));
           return send(res, 200, JSON.stringify({ ok: true, review: buildOnboardingPreview({ draft, provider }) }));
         } catch {
           return send(res, 400, JSON.stringify({ ok: false, code: 'onboarding_preview_invalid' }));
@@ -650,14 +698,14 @@ export function createDashboardServer(config) {
         try {
           const body = JSON.parse((await readBody(req)) || '{}');
           const { validateOnboardingDraft } = await import('./static/onboarding-draft.mjs');
-          const { resolveProvider } = await import('../providers.mjs');
           const { commitOnboardingSetup } = await import('../setup-wizard-core.mjs');
           const draft = validateOnboardingDraft(body.draft, { requireValidation: true });
           const validation = onboardingValidations.get(draft.revision);
           if (!validation || validation.providerId !== draft.provider.id || validation.expiresAt < Date.now()) {
             return send(res, 409, JSON.stringify({ ok: false, code: 'provider_validation_required' }));
           }
-          const provider = resolveProvider(draft.provider.id, {}, config);
+          const provider = resolveTrustedOnboardingProvider(draft.provider.id);
+          if (!provider) return send(res, 400, JSON.stringify({ ok: false, code: 'provider_not_supported' }));
           const result = commitOnboardingSetup({ draft, provider, credential: body.credential, repoRoot: config.repoRoot });
           onboardingValidations.delete(draft.revision);
           void recordOnboardingEvent({ event: 'onboarding_completed', providerId: draft.provider.id, agentCount: draft.agents.length, outcome: 'committed', elapsedMs: body.elapsedMs });
@@ -694,29 +742,120 @@ export function createDashboardServer(config) {
         getV1Logger().error(source, `${message}${suffix}`, stack);
         return send(res, 200, JSON.stringify({ ok: true }));
       }
-      // POST /api/setup/plan + /api/setup/commit (008 — End-User Configurability, US3) — placed
-      // AFTER the authorized() gate above like every other mutating route; these write files to
-      // the filesystem (commit) or at minimum echo back generated content (plan), so both require
-      // the same per-boot token as POST /api/policy.
+      // The setup mutation routes are all protected by the dashboard token above. Their browser
+      // responses are deliberately redacted: an approved key lives only in setupValidations until
+      // a matching explicit commit consumes it.
+      if (req.method === 'POST' && url.pathname === '/api/setup/provider-validation') {
+        try {
+          if (detectExistingConfig(config.repoRoot).exists) {
+            return send(res, 409, JSON.stringify({ ok: false, error: 'Setup is available only for a new installation.' }));
+          }
+          const body = JSON.parse((await readBody(req)) || '{}');
+          const { provider, choice } = resolveSetupProviderChoice({
+            providerId: body.providerId,
+            modelId: body.modelId,
+            config,
+          });
+          if (typeof body.secret !== 'string' || body.secret.length === 0 || typeof body.sessionId !== 'string') {
+            return send(res, 400, JSON.stringify({ ok: false, error: 'Enter a provider key to validate this route.' }));
+          }
+          try {
+            assertSafeSetupSecret(body.secret);
+          } catch {
+            return send(res, 400, JSON.stringify({ ok: false, error: 'Enter a provider key to validate this route.' }));
+          }
+          if (!hasLiveSetupSession(body.sessionId)) {
+            return send(res, 403, JSON.stringify({ ok: false, error: 'Setup session expired. Reload and try again.' }));
+          }
+          const result = await validateSetupProvider({ provider, modelId: choice.modelId, secret: body.secret });
+          if (result?.status !== 'valid') {
+            return send(res, 200, JSON.stringify({
+              ok: false,
+              code: result?.code ?? 'UNAVAILABLE',
+              error: result?.summary ?? 'The provider is unavailable. Try again shortly.',
+            }));
+          }
+          const validation = setupValidations.createValidated({ choice, secret: body.secret, sessionId: body.sessionId });
+          return send(res, 200, JSON.stringify({
+            ok: true,
+            validation: { ...validation, provider: choice.providerId, model: choice.modelId },
+          }));
+        } catch {
+          return send(res, 400, JSON.stringify({ ok: false, error: 'Select a registered provider and supported model.' }));
+        }
+      }
+      if (req.method === 'POST' && url.pathname === '/api/setup/provider-validation/revoke') {
+        try {
+          const body = JSON.parse((await readBody(req)) || '{}');
+          if (!hasLiveSetupSession(body.sessionId)) {
+            return send(res, 403, JSON.stringify({ ok: false, error: 'Setup session expired. Reload and try again.' }));
+          }
+          setupValidations.revokeValidatedChoice({ validationId: body.validationId, sessionId: body.sessionId });
+          return send(res, 200, JSON.stringify({ ok: true }));
+        } catch {
+          return send(res, 400, JSON.stringify({ ok: false, error: 'Provider validation could not be cancelled safely.' }));
+        }
+      }
       if (req.method === 'POST' && url.pathname === '/api/setup/plan') {
         try {
-          const { buildSetupPlan } = await import('../setup-wizard-core.mjs');
+          if (detectExistingConfig(config.repoRoot).exists) {
+            return send(res, 409, JSON.stringify({ ok: false, error: 'Setup is available only for a new installation.' }));
+          }
           const body = JSON.parse((await readBody(req)) || '{}');
-          const plan = buildSetupPlan(body);
-          return send(res, 200, JSON.stringify({ ok: true, files: plan.files, budget: plan.budget }));
-        } catch (err) {
-          return send(res, 200, JSON.stringify({ ok: false, error: err.message }));
+          if (!hasLiveSetupSession(body.sessionId)) {
+            return send(res, 403, JSON.stringify({ ok: false, error: 'Setup session expired. Reload and try again.' }));
+          }
+          const validated = setupValidations.getValidatedChoice({ validationId: body.validationId, sessionId: body.sessionId });
+          if (body.providerId !== validated.choice.providerId || body.modelId !== validated.choice.modelId) {
+            return send(res, 400, JSON.stringify({ ok: false, error: 'Provider validation does not match this review.' }));
+          }
+          const review = buildSetupReview({ ...body, choice: validated.choice });
+          const reviewId = setupValidations.createReviewedSetup({
+            validationId: body.validationId,
+            sessionId: body.sessionId,
+            review,
+          });
+          return send(res, 200, JSON.stringify({ ok: true, review: { ...review, id: reviewId } }));
+        } catch {
+          return send(res, 400, JSON.stringify({ ok: false, error: 'Provider validation is no longer available. Validate the selected route again.' }));
         }
       }
       if (req.method === 'POST' && url.pathname === '/api/setup/commit') {
         try {
-          const { buildSetupPlan, writeSetupPlan } = await import('../setup-wizard-core.mjs');
+          if (detectExistingConfig(config.repoRoot).exists) {
+            return send(res, 409, JSON.stringify({ ok: false, error: 'Setup is available only for a new installation.' }));
+          }
           const body = JSON.parse((await readBody(req)) || '{}');
-          const plan = buildSetupPlan(body);
-          writeSetupPlan(plan, config.repoRoot, { force: Boolean(body.force) });
+          if (!hasLiveSetupSession(body.sessionId)) {
+            return send(res, 403, JSON.stringify({ ok: false, error: 'Setup session expired. Reload and try again.' }));
+          }
+          if (body.confirmed !== true) {
+            return send(res, 400, JSON.stringify({ ok: false, error: 'Review the setup plan and explicitly confirm before writing files.' }));
+          }
+          const validated = setupValidations.getValidatedChoice({ validationId: body.validationId, sessionId: body.sessionId });
+          if (body.providerId !== validated.choice.providerId || body.modelId !== validated.choice.modelId) {
+            return send(res, 400, JSON.stringify({ ok: false, error: 'Provider validation does not match this setup.' }));
+          }
+          const review = buildSetupReview({ ...body, choice: validated.choice });
+          // Commit is bound to the exact redacted review generated by /api/setup/plan. The
+          // generated credential text remains in this server stack and is never returned.
+          const reviewed = setupValidations.getReviewedChoice({
+            reviewId: body.reviewId,
+            validationId: body.validationId,
+            sessionId: body.sessionId,
+            review,
+          });
+          const plan = buildSetupPlan({ ...body, choice: reviewed.choice, providerSecret: reviewed.secret });
+          writeSetupPlan(plan, config.repoRoot);
+          setupValidations.consumeReviewedChoice({
+            reviewId: body.reviewId,
+            validationId: body.validationId,
+            sessionId: body.sessionId,
+            review,
+          });
           return send(res, 200, JSON.stringify({ ok: true, filesWritten: Object.keys(plan.files) }));
-        } catch (err) {
-          return send(res, 200, JSON.stringify({ ok: false, error: err.message }));
+        } catch {
+          return send(res, 400, JSON.stringify({ ok: false, error: 'Setup could not be committed. Validate the route again and review the setup.' }));
         }
       }
       if (req.method === 'GET' && url.pathname === '/api/status') {

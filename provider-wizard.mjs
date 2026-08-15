@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, existsSync, statSync, copyFileSync, mkdirS
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml } from './yaml-lite.mjs';
+import { resolveTrustedSetupProviders } from './providers.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -39,6 +40,61 @@ function loadKnownProviders() {
 function lookupKnownProvider(name) {
   const known = loadKnownProviders();
   return known.find((p) => p.name === name) ?? null;
+}
+
+/**
+ * Return the non-secret, registered BYOK choices supported by the setup compatibility bridge.
+ * This deliberately resolves only the version-controlled trusted registry rather than
+ * auto-detecting environment variables or reading installation-local overlays: a key's presence
+ * or a mutable endpoint does not make an unregistered provider a supported route.
+ *
+ * @param {{registry?: Record<string, object>, config?: object}} [options]
+ * @returns {Array<{id: string, displayName: string, keyEnv: string, models: string[]}>}
+ */
+export function listSetupProviders({ registry, config } = {}) {
+  void config; // Customer setup must not consume policy or .ai/providers.yaml endpoint overrides.
+  const resolved = registry ?? resolveTrustedSetupProviders();
+  return Object.entries(resolved)
+    .filter(([, provider]) => (
+      provider
+      && typeof provider.keyEnv === 'string'
+      && provider.keyEnv.length > 0
+      && typeof provider.baseUrl === 'string'
+      && provider.baseUrl.length > 0
+      && provider.models
+      && typeof provider.models === 'object'
+    ))
+    .map(([id, provider]) => ({
+      id,
+      displayName: typeof provider.displayName === 'string' ? provider.displayName : id,
+      keyEnv: provider.keyEnv,
+      models: [...new Set(Object.values(provider.models).filter((model) => typeof model === 'string' && model.length > 0))],
+    }))
+    .filter((provider) => provider.models.length > 0)
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+/**
+ * Resolve a submitted setup choice against the registered provider catalog. The descriptor is
+ * server-only; callers must expose only `choice`, never the descriptor's endpoint data.
+ */
+export function resolveSetupProviderChoice({ providerId, modelId, registry, config } = {}) {
+  void config; // See listSetupProviders: the setup catalog has no installation-local overlays.
+  const resolved = registry ?? resolveTrustedSetupProviders();
+  const provider = resolved?.[providerId];
+  const safe = listSetupProviders({ registry: resolved }).find((entry) => entry.id === providerId);
+  if (!provider || !safe || !safe.models.includes(modelId)) {
+    throw new Error('Select a registered provider and supported model.');
+  }
+  return {
+    provider,
+    choice: {
+      providerId: safe.id,
+      displayName: safe.displayName,
+      keyEnv: safe.keyEnv,
+      modelId,
+    },
+  };
 }
 
 /**

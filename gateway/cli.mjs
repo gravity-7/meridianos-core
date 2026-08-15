@@ -560,8 +560,9 @@ async function handleProfileList(_flags) {
 
 // ─── Subcommand: setup (008 — End-User Configurability, US3) ───────────────
 // `setup-wizard-core.mjs`'s buildSetupPlan()/writeSetupPlan() do the actual work — this is just
-// the CLI's flag-parsing/prompting layer over it, the non-interactive twin of `GET /setup`
-// (dashboard/server.mjs), matching Independent Test: `setup --init --providers deepseek --budget 50`.
+// the CLI's flag-parsing/prompting layer over it. Browser onboarding at `GET /setup` provides the
+// supported first-time BYOK validation and review flow; this legacy command only scaffolds a new
+// installation, matching Independent Test: `setup --init --providers deepseek --budget 50`.
 
 async function handleSetupCommand(args, flags) {
   if (flags.init) return handleSetupInit(flags);
@@ -570,11 +571,12 @@ async function handleSetupCommand(args, flags) {
 
 async function handleSetupInit(flags) {
   try {
-    const { buildSetupPlan, writeSetupPlan, detectExistingConfig, detectProviders } = await import('../setup-wizard-core.mjs');
+    const { buildSetupPlan, writeSetupPlan, detectExistingConfig } = await import('../setup-wizard-core.mjs');
+    const { listSetupProviders } = await import('../provider-wizard.mjs');
     const repoRoot = process.cwd();
-    const { exists } = detectExistingConfig(repoRoot);
-    if (exists && !flags.force) {
-      process.stderr.write('.ai/policy.yaml already exists — re-run with --force to overwrite (FR-010: the wizard never silently overwrites an existing installation).\n');
+    const { exists, existingTargets } = detectExistingConfig(repoRoot);
+    if (exists) {
+      process.stderr.write(`Existing setup target prevents first-time setup: ${existingTargets.join(', ')}. Setup never overwrites an installation.\n`);
       process.exit(1);
     }
 
@@ -583,25 +585,25 @@ async function handleSetupInit(flags) {
       : ['builder', 'reviewer'];
     const monthlyBudgetUsd = flags.budget !== undefined ? Number(flags.budget) : 100;
 
-    const detected = detectProviders();
-    let providers;
+    let providers = [];
     if (typeof flags.providers === 'string') {
       const wanted = flags.providers.split(',').map((s) => s.trim()).filter(Boolean);
       providers = wanted.map((name) => {
-        const d = detected.find((x) => x.name === name);
-        return d ? { name: d.name, keyEnv: d.keyEnv, apiKey: process.env[d.keyEnv] } : { name, keyEnv: `${name.toUpperCase()}_KEY` };
+        const provider = listSetupProviders().find((entry) => entry.id === name);
+        if (!provider) throw new Error(`Unsupported setup provider: ${name}`);
+        // Legacy CLI scaffolding writes only a placeholder. It never imports an inherited
+        // credential; supported BYOK validation happens through the authenticated /setup bridge.
+        return { name: provider.id, keyEnv: provider.keyEnv };
       });
-    } else {
-      providers = detected.map((d) => ({ name: d.name, keyEnv: d.keyEnv, apiKey: process.env[d.keyEnv] }));
     }
 
     const plan = buildSetupPlan({ tenantName: flags.name, agents, providers, monthlyBudgetUsd });
-    writeSetupPlan(plan, repoRoot, { force: Boolean(flags.force) });
+    writeSetupPlan(plan, repoRoot);
 
     process.stdout.write(`Setup complete — wrote ${Object.keys(plan.files).join(', ')} to ${repoRoot}\n`);
     process.stdout.write(`Budget: $${monthlyBudgetUsd}/month → ${plan.budget.weeklyTokenCap.toLocaleString()} tokens/week (${plan.budget.token_cap_5h.toLocaleString()}/5h)\n`);
     if (providers.length === 0) {
-      process.stdout.write('No providers auto-detected or specified — edit .env to add your API keys.\n');
+      process.stdout.write('No providers selected — use the authenticated /setup bridge to validate a BYOK route, or add a placeholder after setup.\n');
     } else {
       process.stdout.write(`Providers: ${providers.map((p) => p.name).join(', ')}\n`);
     }
@@ -613,12 +615,12 @@ async function handleSetupInit(flags) {
 
 async function handleSetupInteractive(flags) {
   const { createInterface } = await import('node:readline');
-  const { buildSetupPlan, writeSetupPlan, detectExistingConfig, detectProviders, computeBudgetFromDollars } = await import('../setup-wizard-core.mjs');
+  const { buildSetupPlan, writeSetupPlan, detectExistingConfig, computeBudgetFromDollars } = await import('../setup-wizard-core.mjs');
   const repoRoot = process.cwd();
 
-  const { exists } = detectExistingConfig(repoRoot);
-  if (exists && !flags.force) {
-    process.stderr.write('.ai/policy.yaml already exists. Re-run with --force to reconfigure, or --resume to continue a prior wizard session.\n');
+  const { exists, existingTargets } = detectExistingConfig(repoRoot);
+  if (exists) {
+    process.stderr.write(`Existing setup target prevents first-time setup: ${existingTargets.join(', ')}. Setup never overwrites an installation.\n`);
     process.exit(1);
   }
 
@@ -646,13 +648,11 @@ async function handleSetupInteractive(flags) {
   const agents = agentsRaw.split(',').map((s) => s.trim()).filter(Boolean);
   saveProgress({ agentsRaw });
 
-  const detected = detectProviders();
-  if (detected.length > 0) {
-    process.stdout.write(`Auto-detected providers (API key found in environment): ${detected.map((d) => d.name).join(', ')}\n`);
-  } else {
-    process.stdout.write('No providers auto-detected — set an API key env var (e.g. ANTHROPIC_API_KEY) and re-run, or edit .env after setup.\n');
-  }
-  const providers = detected.map((d) => ({ name: d.name, keyEnv: d.keyEnv, apiKey: process.env[d.keyEnv] }));
+  // This legacy scaffold intentionally does not inspect environment credentials. The supported
+  // first-time BYOK route is the authenticated browser /setup flow, which validates one submitted
+  // credential and keeps it out of every review surface.
+  const providers = [];
+  process.stdout.write('Provider keys are not imported by this legacy CLI. Use the authenticated /setup bridge for BYOK validation.\n');
 
   const budgetRaw = await ask('Monthly budget in USD', saved.budgetRaw ?? '100');
   const monthlyBudgetUsd = Number(budgetRaw);
@@ -670,7 +670,7 @@ async function handleSetupInteractive(flags) {
   }
 
   const plan = buildSetupPlan({ tenantName, agents, providers, monthlyBudgetUsd });
-  writeSetupPlan(plan, repoRoot, { force: Boolean(flags.force) });
+  writeSetupPlan(plan, repoRoot);
   process.stdout.write(`\nSetup complete — wrote ${Object.keys(plan.files).join(', ')} to ${repoRoot}\n`);
 }
 

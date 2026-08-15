@@ -101,19 +101,21 @@ test('GET /app falls back to the legacy dashboard while the platform flag is dis
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
-test('unified onboarding is available on a fresh installation, exposes no secret in status, and rejects unauthenticated mutation', async () => {
+test('the legacy setup bridge is available on a fresh installation and /app/setup redirects without claiming a platform route', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'srv-onboarding-'));
   const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot }));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const request = (path, { method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port: server.address().port, path, method, headers }, (res) => {
-      let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ status: res.statusCode, location: res.headers.location, body: data }));
     }); req.on('error', reject); if (body) req.write(body); req.end();
   });
   try {
     const shell = await request('/app/setup');
-    assert.equal(shell.status, 200);
-    assert.match(shell.body, /window\.AIOS_TOKEN = "/);
+    assert.deepEqual(shell, { status: 302, location: '/setup', body: '' });
+    const bridge = await request('/setup');
+    assert.equal(bridge.status, 200);
+    assert.match(bridge.body, /const AIOS_TOKEN = "/);
     const status = await request('/api/onboarding/status');
     assert.equal(status.status, 200);
     assert.equal(JSON.parse(status.body).installation, 'fresh');
@@ -123,7 +125,7 @@ test('unified onboarding is available on a fresh installation, exposes no secret
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
-test('unified onboarding gives an existing installation a non-destructive recovery entry point', async () => {
+test('the legacy setup bridge redirects /app/setup and keeps an existing installation non-destructive', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'srv-onboarding-existing-'));
   mkdirSync(join(repoRoot, '.ai'), { recursive: true });
   writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), SAMPLE);
@@ -131,9 +133,9 @@ test('unified onboarding gives an existing installation a non-destructive recove
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const result = await new Promise((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app/setup' }, (res) => resolve({ status: res.statusCode })); req.on('error', reject); req.end();
+      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app/setup' }, (res) => resolve({ status: res.statusCode, location: res.headers.location })); req.on('error', reject); req.end();
     });
-    assert.deepEqual(result, { status: 200 });
+    assert.deepEqual(result, { status: 302, location: '/setup' });
     const status = await new Promise((resolve, reject) => {
       const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/api/onboarding/status' }, (res) => {
         let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve(JSON.parse(body)));
@@ -180,7 +182,7 @@ test('onboarding checklist exposes a stable run target only after a run exists',
     assert.equal(JSON.parse(none.body).firstRun, null);
     appendRun({ run_id: 'first-run-012', task: 'first-task-012', outcome: 'ok' }, { config: tenantConfig });
     const available = JSON.parse((await httpRequest({ port, path: '/api/onboarding/checklist', method: 'GET' })).body);
-    assert.deepEqual(available.firstRun, { id: 'first-run-012', task: 'first-task-012', status: 'ok', target: '/app/setup/complete?run=first-run-012' });
+    assert.deepEqual(available.firstRun, { id: 'first-run-012', task: 'first-task-012', status: 'ok', target: '/setup' });
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
@@ -334,7 +336,7 @@ function httpRequest({ port, path, method, token, body }) {
     }, (res) => {
       let out = '';
       res.on('data', (c) => (out += c));
-      res.on('end', () => resolve({ status: res.statusCode, body: out }));
+      res.on('end', () => resolve({ status: res.statusCode, body: out, headers: res.headers }));
     });
     req.on('error', reject);
     if (data) req.write(data);
@@ -485,6 +487,50 @@ function setupFreshRepoRoot() {
   return resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot });
 }
 
+function setupSyntheticSetupConfig() {
+  const config = setupFreshRepoRoot();
+  config.setupProviderValidator = async () => ({ status: 'valid', summary: 'Connection verified. Continue to budget.' });
+  return config;
+}
+
+async function validateSyntheticSetupRoute(port, token) {
+  const sessionId = await issueSyntheticSetupSession(port);
+  const response = await httpRequest({
+    port, path: '/api/setup/provider-validation', method: 'POST', token,
+    body: {
+      providerId: 'deepseek', modelId: 'deepseek-v4-flash', secret: 'synthetic-onboarding-sentinel',
+      sessionId,
+    },
+  });
+  const parsed = JSON.parse(response.body);
+  assert.equal(response.status, 200);
+  assert.equal(parsed.ok, true);
+  assert.doesNotMatch(response.body, /synthetic-onboarding-sentinel/);
+  return { sessionId, validationId: parsed.validation.id };
+}
+
+async function issueSyntheticSetupSession(port) {
+  const page = await httpRequest({ port, path: '/setup', method: 'GET' });
+  assert.equal(page.status, 200);
+  const match = page.body.match(/const SETUP_SESSION_ID = "([^"]+)"/);
+  assert.ok(match, 'setup page should contain a browser-scoped session identifier');
+  return match[1];
+}
+
+async function createSyntheticSetupReview(port, token, validation, overrides = {}) {
+  const response = await httpRequest({
+    port, path: '/api/setup/plan', method: 'POST', token,
+    body: {
+      tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100,
+      providerId: 'deepseek', modelId: 'deepseek-v4-flash', ...validation, ...overrides,
+    },
+  });
+  const parsed = JSON.parse(response.body);
+  assert.equal(response.status, 200);
+  assert.equal(parsed.ok, true);
+  return { ...validation, reviewId: parsed.review.id };
+}
+
 test('GET /setup serves the wizard page with the dashboard token injected', async () => {
   const tenantConfig = setupFreshRepoRoot();
   const server = createDashboardServer(tenantConfig);
@@ -494,7 +540,9 @@ test('GET /setup serves the wizard page with the dashboard token injected', asyn
     const res = await httpRequest({ port, path: '/setup', method: 'GET' });
     assert.equal(res.status, 200);
     assert.doesNotMatch(res.body, /__AIOS_TOKEN__/);
+    assert.doesNotMatch(res.body, /__SETUP_SESSION_ID__/);
     assert.match(res.body, /AIOS_TOKEN = "/);
+    assert.match(res.body, /SETUP_SESSION_ID = "setup-/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -512,6 +560,9 @@ test('GET /api/setup/status reports exists:false on a fresh repoRoot', async () 
     assert.equal(parsed.ok, true);
     assert.equal(parsed.exists, false);
     assert.ok(Array.isArray(parsed.providers));
+    assert.ok(parsed.providers.some((provider) => provider.id === 'deepseek'));
+    assert.equal(parsed.providers.some((provider) => /z\.ai|glm/i.test(`${provider.id} ${provider.displayName}`)), false);
+    assert.equal('setupSessionId' in parsed, false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -545,48 +596,109 @@ test('POST /api/setup/plan and /api/setup/commit require the dashboard auth toke
   }
 });
 
-test('POST /api/setup/plan returns the plan without writing any file', async () => {
-  const tenantConfig = setupFreshRepoRoot();
+test('POST /api/setup/plan returns a redacted validated review without writing any file', async () => {
+  const tenantConfig = setupSyntheticSetupConfig();
   const server = createDashboardServer(tenantConfig);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   try {
     const token = await getDashToken(port);
+    const validation = await validateSyntheticSetupRoute(port, token);
     const res = await httpRequest({
       port, path: '/api/setup/plan', method: 'POST', token,
-      body: { tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100 },
+      body: {
+        tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100,
+        providerId: 'deepseek', modelId: 'deepseek-v4-flash', ...validation,
+      },
     });
     assert.equal(res.status, 200);
     const parsed = JSON.parse(res.body);
     assert.equal(parsed.ok, true);
-    assert.ok(parsed.files['.ai/policy.yaml']);
+    assert.deepEqual(parsed.review.files.map((file) => file.name), ['.ai/policy.yaml', '.ai/tenant.yaml', '.env']);
+    assert.equal(parsed.review.route.modelId, 'deepseek-v4-flash');
+    assert.ok(typeof parsed.review.id === 'string' && parsed.review.id.length > 0);
+    assert.doesNotMatch(res.body, /synthetic-onboarding-sentinel|DEEPSEEK_KEY=/);
     assert.equal(existsSync(join(tenantConfig.repoRoot, '.ai', 'policy.yaml')), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test('POST /api/setup/commit writes the plan to the tenant repoRoot (not process.cwd())', async () => {
-  const tenantConfig = setupFreshRepoRoot();
+test('POST /api/setup/commit consumes a validated review and writes only to tenant repoRoot', async () => {
+  const tenantConfig = setupSyntheticSetupConfig();
   const server = createDashboardServer(tenantConfig);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   try {
     const token = await getDashToken(port);
+    const validation = await validateSyntheticSetupRoute(port, token);
+    const reviewed = await createSyntheticSetupReview(port, token, validation);
     const res = await httpRequest({
       port, path: '/api/setup/commit', method: 'POST', token,
-      body: { tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100 },
+      body: {
+        tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100, confirmed: true,
+        providerId: 'deepseek', modelId: 'deepseek-v4-flash', ...reviewed,
+      },
     });
     assert.equal(res.status, 200);
     assert.equal(JSON.parse(res.body).ok, true);
+    assert.doesNotMatch(res.body, /synthetic-onboarding-sentinel/);
     assert.ok(existsSync(tenantConfig.policyPath));
     assert.equal(parseYaml(readFileSync(tenantConfig.policyPath, 'utf8')).kill_switch, false);
+    const replay = await httpRequest({
+      port, path: '/api/setup/commit', method: 'POST', token,
+      body: {
+        tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100, confirmed: true,
+        providerId: 'deepseek', modelId: 'deepseek-v4-flash', ...validation,
+      },
+    });
+    assert.equal(JSON.parse(replay.body).ok, false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test('POST /api/setup/commit refuses to overwrite an existing policy.yaml without force', async () => {
+test('POST /api/setup/commit requires an explicit confirmation without consuming its review', async () => {
+  const tenantConfig = setupSyntheticSetupConfig();
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const token = await getDashToken(port);
+    const validation = await validateSyntheticSetupRoute(port, token);
+    const reviewed = await createSyntheticSetupReview(port, token, validation);
+    const body = {
+      tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100,
+      providerId: 'deepseek', modelId: 'deepseek-v4-flash', ...reviewed,
+    };
+    const rejected = await httpRequest({ port, path: '/api/setup/commit', method: 'POST', token, body: { ...body, confirmed: false } });
+    assert.equal(rejected.status, 400);
+    assert.equal(existsSync(tenantConfig.policyPath), false);
+
+    const accepted = await httpRequest({ port, path: '/api/setup/commit', method: 'POST', token, body: { ...body, confirmed: true } });
+    assert.equal(accepted.status, 200);
+    assert.equal(JSON.parse(accepted.body).ok, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('GET /app/setup paths explicitly redirect to the implemented legacy setup bridge', async () => {
+  const tenantConfig = setupFreshRepoRoot();
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const res = await httpRequest({ port, path: '/app/setup', method: 'GET' });
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.location, '/setup');
+    const nested = await httpRequest({ port, path: '/app/setup/complete', method: 'GET' });
+    assert.equal(nested.status, 302);
+    assert.equal(nested.headers.location, '/setup');
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('POST /api/setup/commit refuses every existing installation target', async () => {
   const tenantConfig = setupTenantConfig(); // seeds .ai/policy.yaml already
   const server = createDashboardServer(tenantConfig);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -597,11 +709,233 @@ test('POST /api/setup/commit refuses to overwrite an existing policy.yaml withou
       port, path: '/api/setup/commit', method: 'POST', token,
       body: { tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100 },
     });
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 409);
     const parsed = JSON.parse(res.body);
     assert.equal(parsed.ok, false);
-    assert.match(parsed.error, /exists|force/i);
+    assert.match(parsed.error, /new installation/i);
     assert.equal(parseYaml(readFileSync(tenantConfig.policyPath, 'utf8')).kill_switch, false); // SAMPLE's original value, untouched
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('provider-validation revoke destroys a cancelled browser validation without affecting another browser session', async () => {
+  const tenantConfig = setupSyntheticSetupConfig();
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const token = await getDashToken(port);
+    const first = await validateSyntheticSetupRoute(port, token);
+    const second = await validateSyntheticSetupRoute(port, token);
+    assert.notEqual(first.sessionId, second.sessionId);
+
+    const revoke = await httpRequest({
+      port, path: '/api/setup/provider-validation/revoke', method: 'POST', token,
+      body: { validationId: first.validationId, sessionId: first.sessionId },
+    });
+    assert.deepEqual(JSON.parse(revoke.body), { ok: true });
+
+    const cancelledPlan = await httpRequest({
+      port, path: '/api/setup/plan', method: 'POST', token,
+      body: { tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100, providerId: 'deepseek', modelId: 'deepseek-v4-flash', ...first },
+    });
+    assert.equal(cancelledPlan.status, 400);
+    const unaffectedReview = await createSyntheticSetupReview(port, token, second);
+    assert.ok(unaffectedReview.reviewId);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('browser-session expiry revokes validation and blocks review or commit', async () => {
+  let now = 1_000;
+  const tenantConfig = setupSyntheticSetupConfig();
+  tenantConfig.setupSessionNow = () => now;
+  tenantConfig.setupValidationNow = () => now;
+  tenantConfig.setupSessionTtlMs = 50;
+  tenantConfig.setupValidationTtlMs = 50;
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const token = await getDashToken(port);
+    const validation = await validateSyntheticSetupRoute(port, token);
+    const reviewed = await createSyntheticSetupReview(port, token, validation);
+    now += 51;
+    const body = {
+      tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100,
+      providerId: 'deepseek', modelId: 'deepseek-v4-flash', ...reviewed,
+    };
+    const plan = await httpRequest({ port, path: '/api/setup/plan', method: 'POST', token, body });
+    const commit = await httpRequest({ port, path: '/api/setup/commit', method: 'POST', token, body: { ...body, confirmed: true } });
+    assert.equal(plan.status, 403);
+    assert.equal(commit.status, 403);
+    assert.equal(existsSync(tenantConfig.policyPath), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('secret-facing setup validation and revoke endpoints reject unauthenticated requests before validation', async () => {
+  const tenantConfig = setupFreshRepoRoot();
+  let validatorCalls = 0;
+  tenantConfig.setupProviderValidator = async () => {
+    validatorCalls += 1;
+    return { status: 'valid', summary: 'Connection verified. Continue to budget.' };
+  };
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const sessionId = await issueSyntheticSetupSession(port);
+    const validation = await httpRequest({
+      port, path: '/api/setup/provider-validation', method: 'POST',
+      body: { providerId: 'deepseek', modelId: 'deepseek-v4-flash', secret: 'synthetic-onboarding-sentinel', sessionId },
+    });
+    const revoke = await httpRequest({
+      port, path: '/api/setup/provider-validation/revoke', method: 'POST',
+      body: { validationId: 'opaque-synthetic-id', sessionId },
+    });
+    assert.equal(validation.status, 403);
+    assert.equal(revoke.status, 403);
+    assert.equal(validatorCalls, 0);
+    assert.doesNotMatch(validation.body, /synthetic-onboarding-sentinel/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('POST /api/setup/commit requires the exact prior redacted review', async () => {
+  const tenantConfig = setupSyntheticSetupConfig();
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const token = await getDashToken(port);
+    const validation = await validateSyntheticSetupRoute(port, token);
+    const directCommit = await httpRequest({
+      port, path: '/api/setup/commit', method: 'POST', token,
+      body: { tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 100, confirmed: true, providerId: 'deepseek', modelId: 'deepseek-v4-flash', ...validation },
+    });
+    assert.equal(JSON.parse(directCommit.body).ok, false);
+    assert.equal(existsSync(tenantConfig.policyPath), false);
+
+    const reviewed = await createSyntheticSetupReview(port, token, validation);
+    const changedCommit = await httpRequest({
+      port, path: '/api/setup/commit', method: 'POST', token,
+      body: { tenantName: 'Test Co', agents: ['builder'], monthlyBudgetUsd: 101, confirmed: true, providerId: 'deepseek', modelId: 'deepseek-v4-flash', ...reviewed },
+    });
+    assert.equal(JSON.parse(changedCommit.body).ok, false);
+    assert.equal(existsSync(tenantConfig.policyPath), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+for (const target of ['.ai/tenant.yaml', '.env']) {
+  test(`setup status blocks an existing ${target} without reading or replacing it`, async () => {
+    const tenantConfig = setupFreshRepoRoot();
+    const existing = join(tenantConfig.repoRoot, target);
+    mkdirSync(join(existing, '..'), { recursive: true });
+    writeFileSync(existing, 'pre-existing setup target\n');
+    const server = createDashboardServer(tenantConfig);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    try {
+      const status = JSON.parse((await httpRequest({ port, path: '/api/setup/status', method: 'GET' })).body);
+      assert.equal(status.exists, true);
+      const token = await getDashToken(port);
+      const commit = await httpRequest({ port, path: '/api/setup/commit', method: 'POST', token, body: { confirmed: true } });
+      assert.equal(commit.status, 409);
+      assert.equal(readFileSync(existing, 'utf8'), 'pre-existing setup target\n');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+}
+
+test('provider validation returns a safe recoverable error without exposing submitted data', async () => {
+  const tenantConfig = setupFreshRepoRoot();
+  tenantConfig.setupProviderValidator = async () => ({ status: 'invalid', code: 'AUTH_FAILED', summary: 'Authentication failed. Check the key and try again.' });
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const token = await getDashToken(port);
+    const sessionId = await issueSyntheticSetupSession(port);
+    const response = await httpRequest({
+      port, path: '/api/setup/provider-validation', method: 'POST', token,
+      body: { providerId: 'deepseek', modelId: 'deepseek-v4-flash', secret: 'synthetic-onboarding-sentinel', sessionId },
+    });
+    const parsed = JSON.parse(response.body);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.code, 'AUTH_FAILED');
+    assert.doesNotMatch(response.body, /synthetic-onboarding-sentinel/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('provider validation rejects an unregistered provider before it can invoke the validator', async () => {
+  const tenantConfig = setupFreshRepoRoot();
+  let validatorCalls = 0;
+  tenantConfig.setupProviderValidator = async () => {
+    validatorCalls += 1;
+    return { status: 'valid', summary: 'Connection verified. Continue to budget.' };
+  };
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const token = await getDashToken(port);
+    const sessionId = await issueSyntheticSetupSession(port);
+    const response = await httpRequest({
+      port, path: '/api/setup/provider-validation', method: 'POST', token,
+      body: { providerId: 'unregistered-provider', modelId: 'synthetic-model', secret: 'synthetic-onboarding-sentinel', sessionId },
+    });
+    assert.equal(response.status, 400);
+    assert.equal(validatorCalls, 0);
+    assert.doesNotMatch(response.body, /synthetic-onboarding-sentinel|unregistered-provider/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('provider validation rejects an unsupported model before it can invoke the validator', async () => {
+  const tenantConfig = setupFreshRepoRoot();
+  let validatorCalls = 0;
+  tenantConfig.setupProviderValidator = async () => {
+    validatorCalls += 1;
+    return { status: 'valid', summary: 'Connection verified. Continue to budget.' };
+  };
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const token = await getDashToken(port);
+    const sessionId = await issueSyntheticSetupSession(port);
+    const response = await httpRequest({
+      port, path: '/api/setup/provider-validation', method: 'POST', token,
+      body: { providerId: 'deepseek', modelId: 'unsupported-synthetic-model', secret: 'synthetic-onboarding-sentinel', sessionId },
+    });
+    assert.equal(response.status, 400);
+    assert.equal(validatorCalls, 0);
+    assert.doesNotMatch(response.body, /synthetic-onboarding-sentinel|unsupported-synthetic-model|validationId/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('the synthetic/disposable setup label is enabled only by an injected fixture', async () => {
+  const tenantConfig = setupFreshRepoRoot();
+  tenantConfig.setupFixture = { synthetic: true };
+  const server = createDashboardServer(tenantConfig);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const status = JSON.parse((await httpRequest({ port, path: '/api/setup/status', method: 'GET' })).body);
+    assert.equal(status.synthetic, true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
