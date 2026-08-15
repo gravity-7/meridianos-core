@@ -22,6 +22,8 @@ jobs:
       - run: npm ci
       - run: npx playwright install firefox
       - run: npm run test:browser
+      - name: UXF-006 source gate
+        run: node scripts/uxf-006-gates.mjs --source
       - name: Upload browser screenshots
         if: always()
         uses: actions/upload-artifact@v4

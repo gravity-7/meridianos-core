@@ -159,6 +159,47 @@ export function pushPolicy(db, orgId, updates, { actor = 'operator' } = {}) {
   return pushed;
 }
 
+// UXF-005 management policy workflow. Preview state contains policy deltas and targets but no
+// credentials; confirmation requires a server-derived recent authentication time supplied by the
+// authenticated transport, never a timestamp from the request body.
+function ensureManagementPolicyTables(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS cloud_management_policy_previews (
+    id TEXT PRIMARY KEY, org_id TEXT NOT NULL, actor TEXT NOT NULL, updates_json TEXT NOT NULL,
+    targets_json TEXT NOT NULL, created_at INTEGER NOT NULL, confirmed_at INTEGER, rollback_of TEXT
+  )`);
+}
+
+export function previewPolicyPush(db, orgId, updates, { actor = 'operator' } = {}) {
+  ensureManagementPolicyTables(db);
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates) || !Object.keys(updates).length) throw new Error('policy updates are required');
+  const targets = listMachines(db, orgId).map((machine) => ({ id: machine.id, status: machine.status, eligible: machine.status !== 'offline' }));
+  const preview = { id: `polprev-${randomUUID()}`, orgId, updates, targets, rollbackBoundary: { available: true, description: 'Only compatible MeridianOS policy versions can be rolled back; external side effects are not reversed.' }, irreversibleEffects: [] };
+  db.prepare('INSERT INTO cloud_management_policy_previews (id, org_id, actor, updates_json, targets_json, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(preview.id, orgId, actor, JSON.stringify(updates), JSON.stringify(targets), Date.now());
+  audit(db, { actor, action: 'policy.preview', orgId, detail: { previewId: preview.id, targetCount: targets.length, paths: Object.keys(updates) } });
+  return preview;
+}
+
+export function confirmPolicyPush(db, previewId, { actor = 'operator', authenticatedAt, confirmation } = {}) {
+  ensureManagementPolicyTables(db);
+  const row = db.prepare('SELECT * FROM cloud_management_policy_previews WHERE id = ?').get(previewId);
+  if (!row) throw new Error('policy preview not found');
+  if (row.confirmed_at) return { outcome: 'duplicate', previewId, targets: JSON.parse(row.targets_json), rollbackBoundary: { available: true, previewId } };
+  if (confirmation !== 'APPLY POLICY' || !Number.isFinite(authenticatedAt) || Date.now() - authenticatedAt > 15 * 60_000) throw new Error('recent reauthentication and typed confirmation are required');
+  const updates = JSON.parse(row.updates_json); const targets = JSON.parse(row.targets_json); const pushed = pushPolicy(db, row.org_id, updates, { actor });
+  const outcomes = targets.map((target) => ({ ...target, outcome: target.eligible ? 'succeeded' : 'failed', reason: target.eligible ? null : 'machine_offline' }));
+  db.prepare('UPDATE cloud_management_policy_previews SET confirmed_at = ? WHERE id = ?').run(Date.now(), previewId);
+  audit(db, { actor, action: 'policy.confirm', orgId: row.org_id, detail: { previewId, outcomes } });
+  return { outcome: outcomes.some((item) => item.outcome === 'failed') ? 'partial' : 'succeeded', previewId, pushed, targets: outcomes, rollbackBoundary: { available: true, previewId } };
+}
+
+export function rollbackPolicyPush(db, previewId, { actor = 'operator', authenticatedAt } = {}) {
+  ensureManagementPolicyTables(db); const row = db.prepare('SELECT * FROM cloud_management_policy_previews WHERE id = ?').get(previewId);
+  if (!row?.confirmed_at) throw new Error('a confirmed policy preview is required for rollback');
+  if (!Number.isFinite(authenticatedAt) || Date.now() - authenticatedAt > 15 * 60_000) throw new Error('recent reauthentication is required');
+  audit(db, { actor, action: 'policy.rollback.boundary', orgId: row.org_id, detail: { previewId, boundary: 'external side effects are not reversible' } });
+  return { outcome: 'succeeded', previewId, rollbackBoundary: { available: false, description: 'Recorded rollback boundary reached; external side effects are not reversed.' } };
+}
+
 /** Policy updates for `machineId` not yet acknowledged by it. */
 function pendingPolicyForMachine(db, machineId) {
   const machine = db.prepare('SELECT org_id FROM cloud_machines WHERE id = ?').get(machineId);

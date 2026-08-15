@@ -18,6 +18,7 @@
  */
 import { appendFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 
 /** Unique-ish id: base36 time + 4 random chars. Callers may pass their own for determinism. */
 export function newRunId(now = Date.now()) {
@@ -63,4 +64,58 @@ export function readRuns({ path = undefined, limit = 50, config } = {}) {
   }
   recs.reverse();
   return limit ? recs.slice(0, limit) : recs;
+}
+
+export class RunCursorError extends Error {
+  constructor(code, message) { super(message); this.name = 'RunCursorError'; this.code = code; this.httpStatus = 400; }
+}
+
+const fingerprint = (value) => createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 20);
+const encodeCursor = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+function decodeCursor(value) {
+  try {
+    const parsed = JSON.parse(Buffer.from(String(value), 'base64url').toString('utf8'));
+    if (parsed?.v !== 1 || !Number.isInteger(parsed.n) || !Number.isInteger(parsed.o) || typeof parsed.f !== 'string') throw new Error('shape');
+    return parsed;
+  } catch { throw new RunCursorError('INVALID_CURSOR', 'cursor is malformed or unsupported'); }
+}
+
+function safeRun(run) {
+  const allowed = ['run_id','ts','agent','model','provider','harness','session','task','tokens','usage','outcome','reason','reset_at','note'];
+  return Object.fromEntries(allowed.filter((key) => Object.hasOwn(run, key)).map((key) => [key, run[key]]));
+}
+
+function filterRuns(records, scope = {}, filters = {}) {
+  return records.filter((run) => {
+    if (scope.from && (!run.ts || run.ts < scope.from)) return false;
+    if (scope.to && (!run.ts || run.ts >= scope.to)) return false;
+    if (scope.projectId && !(String(run.task || '').startsWith(`${scope.projectId}/`) || run.project_id === scope.projectId)) return false;
+    if (scope.provider && run.provider !== scope.provider) return false;
+    if (filters.state && run.outcome !== filters.state) return false;
+    if (filters.task && run.task !== filters.task) return false;
+    if (filters.runId && run.run_id !== filters.runId) return false;
+    return true;
+  });
+}
+
+export function queryRuns({ path = undefined, config, scope = {}, filters = {}, cursor = null, limit = 50 } = {}) {
+  path = path ?? config?.runsPath;
+  const all = readRuns({ path, limit: 0, config });
+  const key = fingerprint({ tenantId: scope.tenantId ?? null, projectId: scope.projectId ?? null, provider: scope.provider ?? null, filters });
+  const decoded = cursor ? decodeCursor(cursor) : { v: 1, n: all.length, o: 0, f: key };
+  if (decoded.f !== key) throw new RunCursorError('INVALID_CURSOR', 'cursor does not match the authorized filters');
+  if (decoded.n > all.length) throw new RunCursorError('EXPIRED_CURSOR', 'run snapshot is no longer retained; restart pagination');
+  const snapshotRuns = all.slice(all.length - decoded.n);
+  const visible = filterRuns(snapshotRuns, scope, filters);
+  const pageLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+  const items = visible.slice(decoded.o, decoded.o + pageLimit).map(safeRun);
+  const nextOffset = decoded.o + items.length;
+  const nextCursor = nextOffset < visible.length ? encodeCursor({ v: 1, n: decoded.n, o: nextOffset, f: key }) : null;
+  return { items, nextCursor, snapshot: encodeCursor({ v: 1, n: decoded.n, o: 0, f: key }), limit: pageLimit };
+}
+
+export function queryRunEvidence({ path = undefined, config, runId, scope = {}, cursor = null, limit = 50 } = {}) {
+  if (!runId) throw new RunCursorError('INVALID_CURSOR', 'runId is required');
+  const page = queryRuns({ path, config, scope, filters: { runId }, cursor, limit });
+  return { ...page, items: [...page.items].reverse() };
 }

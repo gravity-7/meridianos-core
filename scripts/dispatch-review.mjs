@@ -141,8 +141,11 @@ export function parseVerdict(output) {
   const matches = [...String(output).matchAll(/^#{1,6}\s+Verdict:\s*(APPROVE|REQUEST_CHANGES|ERROR)\s*$/gm)];
   if (matches.length !== 1) return { verdict: "ERROR", error: "Malformed reviewer verdict: exactly one machine-readable verdict is required." };
   let verdict = matches[0][1];
-  if (verdict === "APPROVE" && /\b(?:CRITICAL|HIGH)\b/i.test(output)) verdict = "REQUEST_CHANGES";
-  if (verdict === "APPROVE" && /\bMEDIUM\b/i.test(output) && !/Human disposition:\s*\S+/i.test(output)) verdict = "REQUEST_CHANGES";
+  // A reviewer may accurately say "No Critical, High, Medium, or Low findings".
+  // Treat only a severity field or a numbered finding heading as a real finding.
+  const findingSeverity = /(?:^Severity:\s*|^#{1,6}\s+\d+\.\s*\[)(CRITICAL|HIGH|MEDIUM)\b/im.exec(String(output))?.[1]?.toUpperCase();
+  if (verdict === "APPROVE" && (findingSeverity === "CRITICAL" || findingSeverity === "HIGH")) verdict = "REQUEST_CHANGES";
+  if (verdict === "APPROVE" && findingSeverity === "MEDIUM" && !/Human disposition:\s*\S+/i.test(output)) verdict = "REQUEST_CHANGES";
   return { verdict };
 }
 

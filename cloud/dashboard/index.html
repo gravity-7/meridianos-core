@@ -4,22 +4,35 @@
 <meta charset="UTF-8">
 <title>MeridianOS Cloud Control Plane</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: -apple-system, Segoe UI, sans-serif; max-width: 900px; margin: 32px auto; padding: 0 20px; }
-  h1 { font-size: 1.5em; }
-  section { margin-bottom: 32px; }
+  :root { color-scheme: light dark; --surface: Canvas; --text: CanvasText; --muted: GrayText; --border: ButtonBorder; --focus: Highlight; }
+  * { box-sizing: border-box; }
+  html { overflow-x: hidden; }
+  body { min-width: 0; font-family: system-ui, sans-serif; color: var(--text); background: var(--surface); max-width: 900px; margin: 0 auto; padding: 2rem 1.25rem; }
+  h1 { font-size: 1.5rem; }
+  section { margin-bottom: 2rem; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #8883; }
-  .status-online { color: #1a7f37; }
+  th, td { text-align: left; padding: .65rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  .table-wrap { overflow-x: auto; }
+  .status-online, .status-ok { color: #1a7f37; }
   .status-degraded { color: #9a6700; }
-  .status-offline { color: #cf222e; }
-  input, select { padding: 6px; margin: 4px 0; }
-  button { padding: 6px 14px; cursor: pointer; }
+  .status-offline, .status-down { color: #cf222e; }
+  input, select, button { min-height: 2.75rem; }
+  input, select { width: 100%; max-width: 32rem; padding: .6rem; margin: .25rem 0; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: .35rem; }
+  button { padding: .6rem 1rem; cursor: pointer; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: .35rem; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+  .skip-link { position: absolute; left: -9999px; }
+  .skip-link:focus { left: 1rem; top: 1rem; z-index: 2; padding: .5rem; background: var(--surface); }
+  .status { min-height: 1.5rem; color: var(--muted); }
   #login-form { max-width: 320px; }
   .hidden { display: none; }
+  @media (max-width: 480px) { body { padding: 1rem .75rem; } }
+  @media (max-width: 320px) { body { padding: .75rem .5rem; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+  @media (forced-colors: active) { .status-online, .status-ok, .status-degraded, .status-offline, .status-down { color: CanvasText; } }
 </style>
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
   <h1>MeridianOS Cloud Control Plane</h1>
 
   <section id="login-section">
@@ -28,36 +41,40 @@
       <label>Password <input type="password" id="login-password" required></label><br>
       <button type="submit">Log in</button>
     </form>
-    <p id="login-error" style="color:#cf222e"></p>
+    <p id="login-error" class="status" role="alert"></p>
   </section>
 
-  <section id="app-section" class="hidden">
+  <main id="main-content">
+  <section id="app-section" class="hidden" aria-live="polite">
     <section>
       <h2>Connected Machines</h2>
-      <table id="machines-table">
+      <div class="table-wrap"><table id="machines-table">
         <thead><tr><th>Name</th><th>OS</th><th>Version</th><th>Status</th><th>Last Seen</th></tr></thead>
         <tbody></tbody>
-      </table>
+      </table></div>
     </section>
 
     <section>
       <h2>Provider Health (aggregate)</h2>
-      <table id="health-table">
+      <div class="table-wrap"><table id="health-table">
         <thead><tr><th>Provider</th><th>Overall</th><th># Machines Reporting</th></tr></thead>
         <tbody></tbody>
-      </table>
+      </table></div>
     </section>
 
     <section>
       <h2>Push Configuration Change</h2>
-      <form id="policy-form">
+      <form id="policy-form" aria-describedby="policy-help">
+        <p id="policy-help">Preview changes before the administrator confirms a push. Existing machine policy remains unchanged until confirmation.</p>
         <label>Policy path <input type="text" id="policy-path" placeholder="agent_budget.warn_pct" required></label><br>
         <label>Value (JSON) <input type="text" id="policy-value" placeholder="90" required></label><br>
-        <button type="submit">Push to all machines</button>
+        <button type="submit">Preview policy change</button>
       </form>
-      <p id="policy-result"></p>
+      <p id="policy-result" class="status" role="status" aria-live="polite"></p>
+      <div id="policy-preview" class="hidden" aria-live="polite"></div>
     </section>
   </section>
+  </main>
 
   <script type="module" src="app.js"></script>
 </body>

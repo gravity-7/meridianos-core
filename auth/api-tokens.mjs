@@ -169,6 +169,10 @@ const VALID_SCOPES = new Set([
   'config:read', 'config:write',
 ]);
 
+function ensureLocalApiKeyTable(db) {
+  db.exec('CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, name TEXT NOT NULL, scopes TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER, is_active INTEGER NOT NULL DEFAULT 1)');
+}
+
 /** Generate a `mk-{32 hex chars}` key id — matches data-model.md's `^mk-[a-zA-Z0-9]{32}$`. */
 function generateKeyId() {
   return `mk-${crypto.randomBytes(16).toString('hex')}`;
@@ -181,6 +185,7 @@ function generateKeyId() {
  * @returns {{id: string, name: string, scopes: string, created_at: number, is_active: number}}
  */
 export function generateApiKey(db, { name, scopes }) {
+  ensureLocalApiKeyTable(db);
   const scopeList = Array.isArray(scopes) ? scopes : String(scopes || '').split(',').map((s) => s.trim()).filter(Boolean);
   const invalid = scopeList.filter((s) => !VALID_SCOPES.has(s));
   if (scopeList.length === 0 || invalid.length > 0) {
@@ -202,6 +207,12 @@ export function generateApiKey(db, { name, scopes }) {
  */
 export function validateApiKey(db, token) {
   if (typeof token !== 'string' || !/^mk-[a-zA-Z0-9]{32}$/.test(token)) return null;
+  ensureApiKeyLifecycle(db);
+  const lifecycle = db.prepare('SELECT overlap_until FROM management_api_key_lifecycle WHERE key_id = ?').get(token);
+  if (lifecycle?.overlap_until && lifecycle.overlap_until <= Math.floor(Date.now() / 1000)) {
+    db.prepare('UPDATE api_keys SET is_active = 0 WHERE id = ?').run(token);
+    return null;
+  }
   const row = db.prepare('SELECT * FROM api_keys WHERE id = ? AND is_active = 1').get(token);
   if (!row) return null;
   db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(Math.floor(Date.now() / 1000), token);
@@ -216,7 +227,27 @@ export function hasScope(apiKeyRow, scope) {
 
 /** Revoke a local API key (is_active = 0). Returns true if a row was changed. */
 export function revokeApiKey(db, id) {
+  ensureLocalApiKeyTable(db);
   return db.prepare('UPDATE api_keys SET is_active = 0 WHERE id = ?').run(id).changes > 0;
+}
+
+/** Durable management metadata for local REST keys. It is additive to the frozen api_keys contract. */
+export function ensureApiKeyLifecycle(db) {
+  ensureLocalApiKeyTable(db);
+  db.exec('CREATE TABLE IF NOT EXISTS management_api_key_lifecycle (key_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT, replacement_for TEXT, overlap_until INTEGER, created_at INTEGER NOT NULL)');
+}
+
+export function registerManagedApiKey(db, { keyId, tenantId, projectId = null, replacementFor = null, overlapUntil = null }) {
+  ensureApiKeyLifecycle(db);
+  db.prepare('INSERT OR REPLACE INTO management_api_key_lifecycle (key_id, tenant_id, project_id, replacement_for, overlap_until, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(keyId, tenantId, projectId, replacementFor, overlapUntil, Math.floor(Date.now() / 1000));
+}
+
+export function listManagedApiKeys(db, { tenantId, projectId = null }) {
+  ensureApiKeyLifecycle(db);
+  const rows = db.prepare('SELECT k.*, m.project_id, m.replacement_for, m.overlap_until FROM api_keys k JOIN management_api_key_lifecycle m ON m.key_id = k.id WHERE m.tenant_id = ? AND (? IS NULL OR m.project_id = ?) ORDER BY k.created_at DESC').all(tenantId, projectId, projectId);
+  const now = Math.floor(Date.now() / 1000);
+  for (const row of rows) if (row.overlap_until && row.overlap_until <= now && row.is_active) db.prepare('UPDATE api_keys SET is_active = 0 WHERE id = ?').run(row.id);
+  return rows.map((row) => ({ ...row, is_active: row.overlap_until && row.overlap_until <= now ? 0 : row.is_active }));
 }
 
 /** List local API keys, most recently created first. */

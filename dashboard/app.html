@@ -2,12 +2,14 @@
 <html lang="en" data-theme="system">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MeridianOS</title><link rel="stylesheet" href="/static/app-platform.css">
+  <title>MeridianOS</title><link rel="stylesheet" href="/static/vendor/uplot.min.css"><link rel="stylesheet" href="/static/app-platform.css">
 </head>
 <body>
+  <script>window.AIOS_TOKEN = "__AIOS_TOKEN__";</script>
   <a class="skip-link" href="#main">Skip to content</a>
-  <header class="app-header"><a class="brand" href="/app">MeridianOS</a><nav aria-label="Application"><a href="/app">Overview</a><a href="/app/foundation">Foundation</a></nav><button id="theme" type="button" aria-label="Change color theme">Theme: system</button></header>
-  <main id="main" tabindex="-1"><div id="app" aria-live="polite"></div></main>
+  <header class="app-header"><a class="brand" href="/app">MeridianOS</a><nav aria-label="Application"><a href="/app">Overview</a><a href="/app/operations/tasks">Tasks</a><a href="/app/operations/runs">Runs</a><a href="/app/observability/alerts">Alerts</a><a href="/app/observability/gateway">Gateway</a><a href="/app/observability/cost">Cost</a><a href="/app/integrations/providers">Integrations</a><a href="/app/administration/members">Administration</a><a href="/app/governance/billing">Governance</a><a href="/app/setup">Setup</a></nav><button id="search-trigger" type="button" aria-label="Search routes and records">Search <kbd>Ctrl/⌘ K</kbd></button><button id="theme" type="button" aria-label="Change color theme">Theme: system</button></header>
+  <main id="main" tabindex="-1"><div id="announcer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div><div id="app"></div></main>
+  <script src="/static/vendor/uplot.iife.min.js"></script>
   <script type="module" src="/static/app-platform.mjs"></script>
 </body>
 </html>

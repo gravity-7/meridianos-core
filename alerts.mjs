@@ -9,6 +9,24 @@
  */
 
 import { sendEmail } from './smtp-mailer.mjs';
+import { upsertAlertOccurrence, normalizeAlertSeverity } from './dashboard/operational-alert-store.mjs';
+
+export function normalizeOperationalAlertCandidate(input = {}) {
+  const type = String(input.type || input.source || 'legacy');
+  const ruleId = String(input.ruleId || input.rule_id || input.id || type).slice(0, 200);
+  return {
+    source: String(input.source || (input.ruleId ? 'analytics-rule' : 'legacy-escalation')).slice(0, 100),
+    ruleId,
+    fingerprint: input.fingerprint || [type, ruleId, input.projectId ?? null, input.provider ?? null, input.taskId ?? input.task ?? null, input.runId ?? input.run_id ?? null].join(':'),
+    severity: normalizeAlertSeverity(input.severity),
+    title: String(input.title || 'Operational condition').slice(0, 200),
+    summary: String(input.summary || input.message || 'Operational evidence is available.').slice(0, 2000),
+    taskId: input.taskId ?? input.task ?? null,
+    runId: input.runId ?? input.run_id ?? null,
+    gatewayEventId: input.gatewayEventId ?? input.gateway_event_id ?? null,
+    relatedEntities: Array.isArray(input.relatedEntities) ? input.relatedEntities.filter((item) => item && typeof item.type === 'string' && typeof item.id === 'string').map((item) => ({ type: item.type.slice(0, 100), id: item.id.slice(0, 500) })) : [],
+  };
+}
 
 /**
  * Check if a rule is in cooldown. Reads alert_state table.
@@ -201,7 +219,7 @@ export async function dispatchAlert(alert, channels = []) {
  * @param {object} state - Current analytics state: { spendToDate, monthlyLimit, pctUsed, projectedTotal, forecastStatus, anomalies[] }
  * @returns {Promise<Array>} Array of fired alert descriptors
  */
-export async function evaluateAlerts(db, analyticsConfig, state = {}) {
+export async function evaluateAlerts(db, analyticsConfig, state = {}, operational = null) {
   const fired = [];
   const rules = analyticsConfig?.alerts?.rules ?? [];
   const channels = analyticsConfig?.alerts?.channels ?? [];
@@ -209,8 +227,7 @@ export async function evaluateAlerts(db, analyticsConfig, state = {}) {
   for (const rule of rules) {
     if (rule.enabled === false) continue;
 
-    // Check cooldown
-    if (checkCooldown(db, rule.id, rule.cooldownSeconds || 3600)) continue;
+    const inCooldown = checkCooldown(db, rule.id, rule.cooldownSeconds || 3600);
 
     let shouldFire = false;
     let alert = null;
@@ -223,8 +240,6 @@ export async function evaluateAlerts(db, analyticsConfig, state = {}) {
         // at or above this threshold, suppress re-firing.
         const prevRow = db.prepare('SELECT last_value FROM alert_state WHERE rule_id = ?').get(rule.id);
         const prevValue = prevRow?.last_value ?? 0;
-        if (prevValue >= threshold) continue; // Still above threshold from last fire — skip
-
         shouldFire = true;
         alert = {
           type: 'budget_threshold',
@@ -269,9 +284,20 @@ export async function evaluateAlerts(db, analyticsConfig, state = {}) {
     }
 
     if (shouldFire && alert) {
+      const thresholdAlreadyFired = alert.type === 'budget_threshold' && (db.prepare('SELECT last_value FROM alert_state WHERE rule_id = ?').get(rule.id)?.last_value ?? 0) >= (rule.thresholdPct || 80);
+      const suppressionReason = inCooldown ? 'duplicate suppressed by configured rule cooldown' : thresholdAlreadyFired ? 'threshold remains crossed; duplicate delivery suppressed' : null;
+      let canonical = null;
+      if (operational?.db && operational.tenantId) {
+        canonical = upsertAlertOccurrence(operational.db, { ...normalizeOperationalAlertCandidate({ ...alert, source: 'analytics-rule', ruleId: rule.id, projectId: operational.projectId }), notificationSuppressionReason: suppressionReason }, {
+          tenantId: operational.tenantId, projectId: operational.projectId ?? null, actor: { id: 'analytics-alert-engine', type: 'system', role: null }, correlationId: operational.correlationId,
+        });
+      }
+      const escalated = canonical?.event?.event_type === 'escalated';
+      const acknowledged = canonical?.occurrence?.status === 'acknowledged' || canonical?.event?.event_type === 'notification_suppressed';
+      if ((suppressionReason || acknowledged) && !escalated) continue;
       const results = await dispatchAlert(alert, channels);
       recordAlert(db, rule.id, state.pctUsed || 0);
-      fired.push({ ruleId: rule.id, alert, results });
+      fired.push({ ruleId: rule.id, alert, results, occurrenceId: canonical?.occurrence?.id ?? null });
     }
   }
 

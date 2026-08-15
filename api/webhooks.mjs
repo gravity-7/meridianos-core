@@ -95,6 +95,18 @@ async function attemptDelivery(webhook, body, fetchImpl) {
   }
 }
 
+/** Replay a single retained delivery through the same signing, timeout and durable-log contract.
+ * An unknown or inactive webhook is ineligible and makes zero outbound requests. */
+export async function replayWebhookDelivery(db, { webhookId, eventType, data, fetchImpl = fetch } = {}) {
+  const webhook = db.prepare('SELECT * FROM webhooks WHERE id = ? AND is_active = 1').get(webhookId);
+  if (!webhook || !webhook.events.split(',').map((event) => event.trim()).includes(eventType)) return { outcome: 'ineligible', outbound: false };
+  const payload = JSON.stringify({ event: eventType, timestamp: Math.floor(Date.now() / 1000), data });
+  const result = await attemptDelivery(webhook, payload, fetchImpl);
+  logDelivery(db, { webhookId: webhook.id, eventType, payload, status: result.success ? 'success' : 'failed', httpStatus: result.httpStatus, errorMessage: result.error, attemptNumber: 1 });
+  db.prepare('UPDATE webhooks SET last_delivery_at = ?, failure_count = ? WHERE id = ?').run(Math.floor(Date.now() / 1000), result.success ? 0 : webhook.failure_count + 1, webhook.id);
+  return { outcome: result.success ? 'succeeded' : 'failed', outbound: true, httpStatus: result.httpStatus ?? null };
+}
+
 /**
  * Deliver `eventType`/`data` to every active webhook subscribed to it, retrying failures up to
  * `MAX_ATTEMPTS` times with exponential backoff. Resolves once all webhooks have settled

@@ -14,8 +14,10 @@ import {
   computeBudgetFromDollars,
   buildSetupPlan,
   buildSetupReview,
+  commitOnboardingSetup,
   writeSetupPlan,
   detectExistingConfig,
+  detectOnboardingInstallation,
 } from '../setup-wizard-core.mjs';
 import { parseYaml } from '../yaml-lite.mjs';
 
@@ -277,5 +279,50 @@ describe('legacy setup CLI credential boundary', () => {
     const envContent = readFileSync(join(repoRoot, '.env'), 'utf8');
     assert.match(envContent, /DEEPSEEK_KEY=your-key-here/);
     assert.doesNotMatch(envContent, /synthetic-inherited-provider-value/);
+  });
+});
+
+describe('detectOnboardingInstallation', () => {
+  it('distinguishes a fresh directory, a partial repair state, and complete non-secret configuration', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'onboarding-state-'));
+    assert.equal(detectOnboardingInstallation(dir).state, 'fresh');
+    mkdirSync(join(dir, '.ai'), { recursive: true });
+    writeFileSync(join(dir, '.ai', 'policy.yaml'), 'kill_switch: false\n');
+    assert.equal(detectOnboardingInstallation(dir).state, 'repair_needed');
+    writeFileSync(join(dir, '.ai', 'tenant.yaml'), 'agents: [builder]\n');
+    assert.equal(detectOnboardingInstallation(dir).state, 'configured');
+  });
+
+  it('routes every generated policy tier through the selected provider', () => {
+    const plan = buildSetupPlan({ tenantName: 'Test Co', agents: ['builder'], providers: [{ name: 'openrouter', keyEnv: 'OPENROUTER_KEY', models: { simple: 'openrouter/auto', standard: 'openrouter/auto', complex: 'openrouter/auto' } }], monthlyBudgetUsd: 150 });
+    const routing = parseYaml(plan.files['.ai/policy.yaml']).model_routing;
+    assert.deepEqual(Object.values(routing).map((tier) => tier.provider), ['openrouter', 'openrouter', 'openrouter']);
+  });
+});
+
+describe('commitOnboardingSetup', () => {
+  const draft = () => ({ installationName: 'New Tenant', agents: ['builder'], monthlyBudgetUsd: 100, reviewConfirmed: true });
+  const provider = { name: 'deepseek', keyEnv: 'DEEPSEEK_API_KEY', models: { simple: 'deepseek-chat' } };
+
+  it('writes no .env when the credential is owned by the Electron keychain', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'onboarding-keychain-'));
+    const result = commitOnboardingSetup({ draft: draft(), provider, repoRoot: dir, credentialStore: 'keychain' });
+    assert.ok(existsSync(join(dir, '.ai', 'policy.yaml')));
+    assert.ok(existsSync(join(dir, '.ai', 'tenant.yaml')));
+    assert.equal(existsSync(join(dir, '.env')), false);
+    assert.deepEqual(result.filesWritten.sort(), ['.ai/policy.yaml', '.ai/tenant.yaml']);
+  });
+
+  it('refuses to overwrite a pre-existing .env during a browser onboarding commit', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'onboarding-existing-env-'));
+    writeFileSync(join(dir, '.env'), 'DEEPSEEK_API_KEY=existing-value\n');
+    assert.throws(() => commitOnboardingSetup({ draft: draft(), provider, credential: 'new-secret', repoRoot: dir }), /existing installation/i);
+    assert.match(readFileSync(join(dir, '.env'), 'utf8'), /existing-value/);
+  });
+
+  it('writes a browser secret file with owner-only permissions when supported', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'onboarding-env-permissions-'));
+    commitOnboardingSetup({ draft: draft(), provider, credential: 'test-only-secret', repoRoot: dir });
+    if (process.platform !== 'win32') assert.equal(statSync(join(dir, '.env')).mode & 0o077, 0);
   });
 });

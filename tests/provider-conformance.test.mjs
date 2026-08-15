@@ -8,7 +8,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { testProviderConnection, validateSetupProviderConnection } from '../provider-conformance.mjs';
+import { testProviderConnection, toSafeProviderValidationResult, validateSetupProviderConnection } from '../provider-conformance.mjs';
 
 // A real local TCP server that accepts the connection but never responds — exercises
 // testProviderConnection's 5s AbortController timeout path deterministically. An earlier version of
@@ -200,6 +200,17 @@ describe('Provider Conformance (US2)', () => {
       });
       assert.doesNotMatch(JSON.stringify(result), /synthetic-onboarding-sentinel/);
     });
+  });
+
+  it('normalizes upstream errors into a safe onboarding result', () => {
+    const safe = toSafeProviderValidationResult({
+      ok: false, errorCode: 'CONNECTION_FAILED', errorMessage: 'https://provider.test/?api_key=secret', latencyMs: 3,
+    }, 'deepseek');
+    assert.deepEqual(safe, {
+      providerId: 'deepseek', status: 'unreachable', retryable: true,
+      messageCode: 'provider_unreachable', latencyMs: 3, modelsFound: null,
+    });
+    assert.doesNotMatch(JSON.stringify(safe), /provider\.test|api_key|secret/);
   });
 });
 

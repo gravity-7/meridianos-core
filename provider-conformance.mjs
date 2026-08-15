@@ -191,6 +191,29 @@ export async function validateSetupProviderConnection(providerConfig, secret, { 
 }
 
 /**
+ * Convert a conformance result to the fixed, non-secret shape permitted to cross
+ * the onboarding UI/audit boundary. In particular never propagate an upstream
+ * error message, request URL, headers, or credential-derived detail.
+ */
+export function toSafeProviderValidationResult(result, providerId) {
+  const code = result?.errorCode;
+  const statusByCode = { AUTH_FAILED: 'invalid', CONNECTION_FAILED: 'unreachable', TIMEOUT: 'timeout' };
+  const status = result?.ok === true ? 'valid' : (statusByCode[code] ?? 'invalid');
+  const messageByStatus = {
+    valid: 'provider_valid', invalid: 'provider_auth_failed',
+    unreachable: 'provider_unreachable', timeout: 'provider_timeout',
+  };
+  return {
+    providerId: typeof providerId === 'string' ? providerId : 'unknown',
+    status,
+    retryable: status === 'unreachable' || status === 'timeout',
+    messageCode: messageByStatus[status],
+    latencyMs: Number.isFinite(result?.latencyMs) ? Math.max(0, result.latencyMs) : null,
+    modelsFound: Number.isFinite(result?.modelsFound) ? Math.max(0, result.modelsFound) : null,
+  };
+}
+
+/**
  * Classify HTTP error responses into error codes.
  */
 function classifyError(status, body) {

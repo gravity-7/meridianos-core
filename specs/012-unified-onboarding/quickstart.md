@@ -48,3 +48,15 @@
 3. Verify current-step announcement, error-summary focus, visible focus, status announcements, no horizontal overflow, and operable checklist links.
 
 **Evidence**: Browser screenshots, automated accessibility report, keyboard trace, responsive assertions, and supported-browser matrix results.
+
+## Recorded implementation evidence (2026-08-11)
+
+- `npm test`: 1,562 passed, 0 failed, 10 skipped.
+- Focused onboarding native coverage (`server`, draft, security, setup-core, Electron): 74 passed, 0 failed; final server/source-quality/provider/desktop checks: 53 passed, 0 failed.
+- `npx playwright test browser-tests/onboarding.spec.mjs`: 15 passed across Chrome, Edge, and Firefox.
+- Browser scenarios cover safe resume after reload, no browser-persisted/URL/review credential,
+  failed-validation focus and retry state, storage-unavailable recovery, existing/repair-needed
+  recovery, completion checklist persistence, available/unavailable first-run observation,
+  semantic step count, and 375 px evidence.
+- Electron structural/keychain coverage proves the allow-listed bridge, keychain-only commit,
+  no `.env` fallback, and retained explicit legacy-wizard compatibility switch.

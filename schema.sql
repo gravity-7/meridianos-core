@@ -110,6 +110,110 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_ts    ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_level ON events(level);
 
+-- UXF-004 canonical operational alert episodes. Alert lifecycle belongs to the state/control
+-- plane; gateway alert_state remains notification-rule cooldown and token_events remains metering.
+CREATE TABLE IF NOT EXISTS alert_occurrences (
+  id                              TEXT PRIMARY KEY,
+  tenant_id                       TEXT NOT NULL,
+  project_id                      TEXT NOT NULL DEFAULT '',
+  source                          TEXT NOT NULL,
+  rule_id                         TEXT NOT NULL,
+  fingerprint                     TEXT NOT NULL,
+  severity                        TEXT NOT NULL CHECK (severity IN ('info','warning','critical')),
+  status                          TEXT NOT NULL CHECK (status IN ('open','acknowledged','resolved')),
+  title                           TEXT NOT NULL,
+  summary                         TEXT NOT NULL,
+  task_id                         TEXT,
+  run_id                          TEXT,
+  gateway_event_id                TEXT,
+  related_entities_json           TEXT NOT NULL DEFAULT '[]',
+  previous_occurrence_id          TEXT,
+  first_seen_at                   TEXT NOT NULL,
+  last_seen_at                    TEXT NOT NULL,
+  occurrence_count                INTEGER NOT NULL DEFAULT 1,
+  acknowledged_at                 TEXT,
+  acknowledged_by                 TEXT,
+  acknowledgement_reason          TEXT,
+  resolved_at                     TEXT,
+  resolved_by                     TEXT,
+  resolution_reason               TEXT,
+  notification_suppressed_until   TEXT,
+  notification_suppression_reason TEXT,
+  latest_event_id                 TEXT,
+  version                         INTEGER NOT NULL DEFAULT 1,
+  created_at                      TEXT NOT NULL,
+  updated_at                      TEXT NOT NULL,
+  FOREIGN KEY (previous_occurrence_id) REFERENCES alert_occurrences(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alert_active_fingerprint
+  ON alert_occurrences(tenant_id, project_id, fingerprint)
+  WHERE status IN ('open','acknowledged');
+CREATE INDEX IF NOT EXISTS idx_alert_scope_attention
+  ON alert_occurrences(tenant_id, project_id, status, severity, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_task ON alert_occurrences(task_id);
+CREATE INDEX IF NOT EXISTS idx_alert_run ON alert_occurrences(run_id);
+
+CREATE TABLE IF NOT EXISTS alert_events (
+  id             TEXT PRIMARY KEY,
+  alert_id       TEXT NOT NULL,
+  tenant_id      TEXT NOT NULL,
+  project_id     TEXT NOT NULL DEFAULT '',
+  event_type     TEXT NOT NULL,
+  actor_type     TEXT NOT NULL CHECK (actor_type IN ('user','system')),
+  actor_id       TEXT NOT NULL,
+  actor_role     TEXT,
+  from_status    TEXT,
+  to_status      TEXT,
+  from_severity  TEXT,
+  to_severity    TEXT,
+  reason         TEXT,
+  target_type    TEXT,
+  target_id      TEXT,
+  result         TEXT NOT NULL CHECK (result IN ('recorded','succeeded','failed','denied')),
+  correlation_id TEXT NOT NULL,
+  metadata_json  TEXT NOT NULL DEFAULT '{}',
+  created_at     TEXT NOT NULL,
+  FOREIGN KEY (alert_id) REFERENCES alert_occurrences(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_alert_events_alert ON alert_events(alert_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_alert_events_scope ON alert_events(tenant_id, project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS operational_recovery_requests (
+  idempotency_key TEXT PRIMARY KEY,
+  correlation_id TEXT NOT NULL,
+  run_id          TEXT NOT NULL,
+  task_id         TEXT NOT NULL,
+  actor_id        TEXT NOT NULL,
+  actor_role      TEXT NOT NULL,
+  reason          TEXT NOT NULL,
+  result_json     TEXT NOT NULL,
+  created_at      TEXT NOT NULL
+);
+
+-- Append-only evidence for operational mutations that are not themselves alert lifecycle
+-- transitions (retry/restart intent and definitive outcome). It deliberately contains no raw
+-- provider payload, prompt, credential, or process output.
+CREATE TABLE IF NOT EXISTS operational_audit_events (
+  id             TEXT PRIMARY KEY,
+  tenant_id      TEXT NOT NULL,
+  project_id     TEXT NOT NULL DEFAULT '',
+  event_type     TEXT NOT NULL,
+  actor_id       TEXT NOT NULL,
+  actor_role     TEXT,
+  target_type    TEXT NOT NULL,
+  target_id      TEXT NOT NULL,
+  before_json    TEXT,
+  after_json     TEXT,
+  reason         TEXT,
+  result         TEXT NOT NULL,
+  correlation_id TEXT NOT NULL,
+  metadata_json  TEXT NOT NULL DEFAULT '{}',
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_operational_audit_scope ON operational_audit_events(tenant_id, project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_operational_audit_target ON operational_audit_events(target_type, target_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_operational_recovery_run ON operational_recovery_requests(run_id, created_at DESC);
+
 -- Verification attempt counter, PERSISTED (postmortem A7). The verify loop bounces a failing task
 -- for rework up to MAX_VERIFY_ATTEMPTS times, then blocks + escalates. Keeping that counter only in
 -- process memory meant a daemon restart (frequent — 29 in the incident window) reset the 3-strike
