@@ -881,7 +881,11 @@ export function createDashboardServer(config) {
       // Prometheus/Grafana setup — GET-only, read-only, no token required (same precedent as
       // /api/status).
       if (url.pathname === '/api/metrics') {
-        return createMetricsEndpoint()(req, res);
+        // `await` so any rejection from the metrics report is caught by this handler's outer
+        // try/catch (which ends the response). Returning the bare promise let a throw escape as
+        // an unhandled rejection — the response was never written, and the client's keep-alive
+        // connection plus this server stayed open forever (hanging node --test runs).
+        return await createMetricsEndpoint()(req, res);
       }
       if (req.method === 'GET' && url.pathname === '/metrics') {
         let webhookDeliveries, apiKeysActive;

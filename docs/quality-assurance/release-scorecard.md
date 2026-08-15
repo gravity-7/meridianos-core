@@ -1,0 +1,31 @@
+# P1 release scorecard — baseline
+
+The blueprint is now defined; browser fixture helpers and end-to-end evidence
+are the next implementation feature. Therefore no P1 is prematurely marked
+passing.
+
+| Journey | Current evidence | Last execution | Commit / fixture revision | Evidence reference | Freshness | Release status | Owner | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| JRN-001 first value/BYOK | Unit/setup coverage; no persona browser bundle | Not executed | Not available | Not available | BLOCKED: no bundle | PHASE-2-PENDING | Dashboard quality owner | Build real-dashboard fixture and Playwright journey |
+| JRN-003 budget safety | Domain/gateway coverage; no browser bundle | Not executed | Not available | Not available | BLOCKED: no bundle | BLOCKED | Gateway quality owner | Seed deterministic ledger and add P1 browser journey |
+| JRN-005 project/team | HTTP collaboration coverage; no browser bundle | Not executed | Not available | Not available | BLOCKED: no bundle | BLOCKED | Collaboration quality owner | Isolate control-plane stores then automate |
+| JRN-007 operator recovery | Domain tests; no browser bundle | Not executed | Not available | Not available | BLOCKED: no bundle | BLOCKED | Workflow quality owner | Add task state fixture and denial checks |
+| JRN-008 viewer boundaries | HTTP role coverage; no browser bundle | Not executed | Not available | Not available | BLOCKED: no bundle | BLOCKED | Access-control quality owner | Add role storage states and UI assertions |
+| JRN-009 provider recovery | Mock provider tests; no browser bundle | Not executed | Not available | Not available | BLOCKED: no bundle | BLOCKED | Provider quality owner | Add provider resolver seam and redaction checks |
+| JRN-013 Docker dashboard | Compose/deployment material; no journey bundle | Not executed | Not available | Not available | BLOCKED: no bundle | BLOCKED | Deployment quality owner | Define local compose fixture and health checks |
+| JRN-014 desktop first run | Integration material; no deterministic renderer bundle | Not executed | Not available | Not available | BLOCKED: no bundle | BLOCKED | Desktop quality owner | Add fake keychain/daemon fixture then run deterministic renderer checks |
+
+## Freshness and exceptions
+
+Evidence is current only when it matches the release commit and fixture revision,
+has a retained evidence-bundle reference, and is no more than 14 calendar days
+old. Re-run immediately on a material UI, role, provider, billing, gateway, or
+desktop change. `Not executed` is deliberately not a date and never passes the
+freshness check.
+
+The release owner may accept a documented exception only with a named owner,
+reason, expiry, risk, and next action; it remains visible as `BLOCKED` or
+`SKIPPED`, never as `PASS`. A `PASS` requires an evidence bundle that records
+its run ID, tested commit, fixture revision, execution time, retention expiry,
+and reviewer. A `MANUAL-CANARY` additionally requires a completed
+[live-canary approval](templates/live-canary-approval.md) and the same evidence identity.
