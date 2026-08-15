@@ -27,11 +27,13 @@ try {
   await request('POST', `/session/${id}/url`, { url: 'http://127.0.0.1:4319/app' });
   let triggerReady = false;
   for (let i = 0; i < 50; i++) {
-    triggerReady = Boolean((await request('POST', `/session/${id}/execute/sync`, { script: "return Boolean(document.querySelector('#search-trigger'));", args: [] })).value);
+    // The trigger is present in the static shell before app-platform.mjs registers its listener.
+    // route-root is created by renderCurrent(), which runs after that listener is attached.
+    triggerReady = Boolean((await request('POST', `/session/${id}/execute/sync`, { script: "return Boolean(document.querySelector('#search-trigger') && document.querySelector('#app .route-root'));", args: [] })).value);
     if (triggerReady) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  if (!triggerReady) throw new Error('Safari did not render the UXF-006 search trigger');
+  if (!triggerReady) throw new Error('Safari did not initialize the UXF-006 search trigger');
   await request('POST', `/session/${id}/execute/sync`, { script: "document.querySelector('#search-trigger').click(); return true;", args: [] });
   let palette = '';
   for (let i = 0; i < 50; i++) {
