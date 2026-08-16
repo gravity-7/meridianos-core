@@ -72,11 +72,11 @@
 
 **Independent Test**: Run the named browser journey from a clean process; verify all checkpoints and inspect its manifest/result without finding a sentinel or non-loopback attempt.
 
-- [ ] T015 [P] [US2] Implement `tests/fixtures/onboarding-fixture.mjs` to create a temporary root, sanitized child environment, loopback mock provider/gateway, requested-or-ephemeral dashboard port, redaction scan, and cleanup lifecycle.
-- [ ] T016 [P] [US2] Extend `tests/fixtures/persona-network-guard.mjs` and `tests/onboarding-fixture.test.mjs` with browser/origin allowlisting, redirect rejection, inherited-key isolation, and attempt-ledger assertions.
-- [ ] T017 [US2] Implement desktop, narrow, keyboard, review-before-commit, explicit-commit, DOM-sentinel, and safe-evidence checks in `browser-tests/legacy-setup-onboarding.spec.mjs`; disable raw trace retention for this journey.
-- [ ] T018 [US2] Implement the redacted manifest/result/diagnostic writer and non-pass triage generation in `tests/fixtures/onboarding-fixture.mjs`, validating it through `tests/onboarding-fixture.test.mjs` and `tests/fixtures/evidence-contract.mjs`.
-- [ ] T019 [US2] Add `scripts/run-visible-onboarding.mjs` to start the same isolated fixture in a headed fresh browser on a user-selected free local port and print only synthetic-safe walkthrough information.
+- [X] T015 [P] [US2] Implement `tests/fixtures/onboarding-fixture.mjs` to create a temporary root, sanitized child environment, loopback mock provider/gateway, requested-or-ephemeral dashboard port, redaction scan, and cleanup lifecycle.
+- [X] T016 [P] [US2] Extend `tests/fixtures/persona-network-guard.mjs` and `tests/onboarding-fixture.test.mjs` with browser/origin allowlisting, redirect rejection, inherited-key isolation, and attempt-ledger assertions.
+- [X] T017 [US2] Implement desktop, narrow, keyboard, review-before-commit, explicit-commit, DOM-sentinel, and safe-evidence checks in `browser-tests/legacy-setup-onboarding.spec.mjs`; disable raw trace retention for this journey.
+- [X] T018 [US2] Implement the redacted manifest/result/diagnostic writer and non-pass triage generation in `tests/fixtures/onboarding-fixture.mjs`, validating it through `tests/onboarding-fixture.test.mjs` and `tests/fixtures/evidence-contract.mjs`.
+- [X] T019 [US2] Add `scripts/run-visible-onboarding.mjs` to start the same isolated fixture in a headed fresh browser on a user-selected free local port and print only synthetic-safe walkthrough information.
 
 **Checkpoint**: A focused standard run produces safe evidence and a founder can watch the identical journey on a disposable local dashboard.
 
@@ -88,9 +88,9 @@
 
 **Independent Test**: Switch the loopback provider to authorization, timeout, or unavailable behavior, confirm completion is blocked, then retry a success state without losing non-secret decisions.
 
-- [ ] T020 [P] [US3] Add failure/retry contract tests for authorization, timeout, unavailable, no-secret persistence, and completion blocking in `tests/setup-onboarding-contract.test.mjs`.
-- [ ] T021 [US3] Implement visible non-secret recovery, retry/back handling, focus management, and validation-session replacement in `dashboard/setup.html` and `dashboard/server.mjs`.
-- [ ] T022 [US3] Extend `browser-tests/legacy-setup-onboarding.spec.mjs` and `tests/onboarding-fixture.test.mjs` with controlled provider failure → retry → success evidence.
+- [X] T020 [P] [US3] Add failure/retry contract tests for authorization, timeout, unavailable, no-secret persistence, and completion blocking in `tests/setup-onboarding-contract.test.mjs`.
+- [X] T021 [US3] Implement visible non-secret recovery, retry/back handling, focus management, and validation-session replacement in `dashboard/setup.html` and `dashboard/server.mjs`.
+- [X] T022 [US3] Extend `browser-tests/legacy-setup-onboarding.spec.mjs` and `tests/onboarding-fixture.test.mjs` with controlled provider failure → retry → success evidence.
 
 **Checkpoint**: Failed provider validation cannot commit configuration and has an understandable recovery path at both required viewport widths.
 

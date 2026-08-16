@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { listSetupProviders } from '../provider-wizard.mjs';
 import { createSetupValidationSessionStore } from '../setup-validation-session.mjs';
 import { buildSetupReview } from '../setup-wizard-core.mjs';
+import { validateSetupProviderConnection } from '../provider-conformance.mjs';
 
 const SYNTHETIC_SECRET = 'synthetic-onboarding-sentinel';
 const CHOICE = {
@@ -119,4 +120,32 @@ test('legacy setup source has accessible provider controls and does not persist 
     assert.match(savedState[1], new RegExp(`\\b${field}\\b`));
   }
   assert.doesNotMatch(savedState[1], /providerKey|secret|validationId|reviewId|sessionId/);
+});
+
+test('provider recovery maps authorization, timeout, and unavailable results without secret reflection', async () => {
+  const provider = { name: 'deepseek', wire: 'openai', baseUrl: 'http://127.0.0.1:9', keyEnv: 'DEEPSEEK_KEY' };
+  const cases = [
+    [{ ok: false, errorCode: 'AUTH_FAILED' }, 'invalid', 'AUTH_FAILED'],
+    [{ ok: false, errorCode: 'TIMEOUT' }, 'timeout', 'TIMEOUT'],
+    [{ ok: false, errorCode: 'CONNECTION_FAILED' }, 'unavailable', 'UNAVAILABLE'],
+  ];
+  for (const [result, status, code] of cases) {
+    const recovery = await validateSetupProviderConnection(provider, SYNTHETIC_SECRET, {
+      testConnection: async (_provider, secret) => {
+        assert.equal(secret, SYNTHETIC_SECRET);
+        return result;
+      },
+    });
+    assert.equal(recovery.status, status);
+    if (status !== 'valid') assert.equal(recovery.code, code);
+    assert.doesNotMatch(JSON.stringify(recovery), new RegExp(SYNTHETIC_SECRET));
+  }
+});
+
+test('an invalid provider result cannot create a validation handle or pass the browser completion gate', async () => {
+  const source = await (await import('node:fs/promises')).readFile(new URL('../dashboard/setup.html', import.meta.url), 'utf8');
+  assert.match(source, /if \(step === 'providers' && !transient\.validationId\)/);
+  assert.match(source, /Validate the selected provider and model before continuing/);
+  const sessions = createSetupValidationSessionStore({ ttlMs: 60_000 });
+  assert.throws(() => sessions.getValidatedChoice({ validationId: 'invalid', sessionId: 'browser-a' }), /validation/i);
 });

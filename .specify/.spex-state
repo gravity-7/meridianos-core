@@ -1,7 +1,7 @@
 {
   "mode": "flow",
   "started_at": "2026-08-14T16:45:57Z",
-  "feature_branch": "main",
+  "feature_branch": "agent/014-visible-onboarding-phase-2",
   "spec_dir": "specs/014-visible-onboarding-journey",
   "implemented": true,
   "clarified": false,
@@ -10,7 +10,7 @@
   "review_spec_passed": true,
   "review_plan_passed": true,
   "review_code_passed": true,
-  "running": "",
+  "running": "phase-2",
   "collab": {
     "phase_plan": [
       {
@@ -62,8 +62,7 @@
     "completed_phases": [
       1
     ],
-    "current_phase": null,
-    "awaiting_approval_for_phase": 2,
+    "current_phase": 2,
     "phase_1_review": "passed",
     "pr_base_branch": "main"
   }
