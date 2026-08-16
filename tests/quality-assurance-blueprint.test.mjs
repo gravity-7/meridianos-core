@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseYaml } from '../yaml-lite.mjs';
 import { assertLoopbackEndpoint, createLoopbackFetch } from './fixtures/persona-network-guard.mjs';
-import { validateEvidenceManifest, validateLiveCanaryApproval } from './fixtures/evidence-contract.mjs';
+import { isLiveCanaryReady, validateEvidenceManifest, validateLiveCanaryApproval } from './fixtures/evidence-contract.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const qaRoot = join(repoRoot, 'docs', 'quality-assurance');
@@ -165,17 +165,28 @@ test('evidence and live-canary contracts reject stale or incomplete release clai
     journey_id: 'JRN-001', fixture_revision: 'fresh-solo-r1', tested_commit: '0123456789ab',
     run_id: 'qa-20260814-001', completed_at: '2026-08-14T11:00:00Z',
     reviewer: 'qa-owner', retention_until: '2026-08-21T11:00:00Z',
+    result: 'passed', dependency_mode: 'loopback-simulated',
   };
   assert.doesNotThrow(() => validateEvidenceManifest(manifest, { now, expectedCommit: '0123456789ab' }));
   assert.throws(() => validateEvidenceManifest({ ...manifest, completed_at: '2026-07-01T11:00:00Z' }, { now }));
   assert.throws(() => validateEvidenceManifest({ ...manifest, completed_at: '2026-08-14T13:00:00Z' }, { now }));
   assert.throws(() => validateEvidenceManifest(manifest, { now, expectedCommit: 'different-commit' }));
   const approval = {
-    journey_id: 'JRN-001', run_id: 'qa-20260814-001', approver: 'release-owner', scope: 'single test account provider check',
-    max_spend_usd: '1.00', approved_at: '2026-08-14T10:30:00Z', expires_at: '2026-08-15T11:30:00Z',
+    journey_id: 'JRN-001', run_id: 'qa-20260814-001', approver: 'release-owner', key_owner: 'local-key-owner',
+    provider: 'deepseek', model: 'deepseek-v4-flash', scope: 'single test account provider check',
+    max_spend_usd: '1.00', max_duration_minutes: '10', approved_at: '2026-08-14T10:30:00Z', expires_at: '2026-08-15T11:30:00Z',
     rollback: 'revoke test credential', stop_condition: 'stop on any non-test data or cost boundary breach',
+    evidence_classification: 'LIVE-CANARY-RESTRICTED', key_revocation: 'local-key-owner revokes the key after the run',
   };
   assert.doesNotThrow(() => validateLiveCanaryApproval(approval, manifest, { now }));
+  assert.equal(isLiveCanaryReady(approval, manifest, { now }), true);
+  for (const field of ['approver', 'key_owner', 'provider', 'model', 'max_spend_usd', 'max_duration_minutes', 'stop_condition', 'rollback', 'evidence_classification', 'key_revocation']) {
+    const incomplete = { ...approval };
+    delete incomplete[field];
+    assert.equal(isLiveCanaryReady(incomplete, manifest, { now }), false, `missing ${field} cannot mark a canary ready`);
+  }
+  assert.equal(isLiveCanaryReady({ ...approval, provider: 'zai', model: 'glm-4' }, manifest, { now }), false);
+  assert.equal(isLiveCanaryReady(approval, { ...manifest, result: 'failed' }, { now }), false);
   assert.throws(() => validateLiveCanaryApproval({ ...approval, max_spend_usd: '-1.00' }, manifest, { now }));
   assert.throws(() => validateLiveCanaryApproval({ ...approval, journey_id: 'JRN-003' }, manifest, { now }));
   assert.throws(() => validateLiveCanaryApproval({ ...approval, run_id: 'other-run' }, manifest, { now }));
