@@ -1,6 +1,6 @@
 # UXF-006 Validation Quickstart
 
-This guide is the evidence index for the autonomous portion of UXF-006. Results below are from the isolated Windows worktree on 2026-08-12. An unavailable manual environment is recorded as unavailable, not passed.
+This guide is the evidence index for the autonomous portion of UXF-006. Historical results below are from the isolated Windows worktree on 2026-08-12; the post-merge focused recheck was run on `origin/main` in an isolated Windows worktree on 2026-08-16. An unavailable manual environment is recorded as unavailable, not passed.
 
 ## Prerequisites
 
@@ -28,9 +28,9 @@ Record command, date, commit, duration, pass/fail count, and artifact paths here
 | Search/auth contract | focused UXF Node tests; `tests/operational-api.test.mjs` | 11 + 6 passed, 0 failed, 0.113s + 1.088s | Scope, role, malformed-input, safe projection, and HTTP compatibility output |
 | Telemetry privacy | focused UXF Node tests | 11 passed, 0 failed | Allowlist, pseudonym, URL/query, prompt/key/raw-content negatives |
 | SSE reconnect/fallback | realtime Node tests | 5 passed, 0 failed, 0.085s | Reconnect, dedupe, cursor, visibility, three-failure polling fallback |
-| Viewport/keyboard/focus | `npm run test:browser -- --grep UXF-006` | 6 project-runs passed, 3.5s targeted | `artifacts/browser/report`, `artifacts/playwright-results` |
+| Viewport/keyboard/focus | `npm run test:browser -- --grep UXF-006` | Post-merge focused recheck: 12 project-runs passed, 52.2s targeted; includes native and dialog-fallback focus, local seven-viewport shell, and cloud seven-viewport variant coverage | `artifacts/browser/report`, `artifacts/playwright-results` |
 | Visual regression | `npm run test:browser` screenshots | 54 passed, 0 failed, 1.3m | Browser report/screenshots; baseline approval remains a human release gate |
-| Performance budgets | `node scripts/uxf-006-gates.mjs --source` plus browser assertions | Source passed; critical JS 5,489 bytes gzip; chart p95 24.2/23.6/47ms; long task 0 | Full artifact mode is fail-closed and requires all measurements |
+| Performance budgets | `node scripts/uxf-006-gates.mjs --source` plus browser assertions | Post-merge source gate passed; critical JS 5,580 bytes gzip; runtime LCP/interaction/table/refresh measurements remain uncollected | Full artifact mode is fail-closed and requires all measurements |
 | API/secret compatibility | `npm test` and `npm run test:ci` | 1,642/1,652 and 1,586/1,596 passed; 10 skips each; 0 failures | Existing API/v1, auth, gateway, onboarding, cloud, and secret tests |
 | Source hygiene | `git diff --check` | passed | No whitespace errors |
 
@@ -50,7 +50,7 @@ The gate is fail-closed for missing measurements. Required thresholds are initia
 
 | Measurement | Target | Observed | Artifact/exception |
 |---|---:|---:|---|
-| Initial shell/critical JS gzip | ≤220 KB | 5,489 bytes for `dashboard/static/app-platform.mjs` | Source gate JSON |
+| Initial shell/critical JS gzip | ≤220 KB | 5,580 bytes for `dashboard/static/app-platform.mjs` in the post-merge focused recheck | Source gate JSON |
 | Local LCP p75 | ≤2.5 s | Not collected by this host’s browser artifact | Must be supplied to `--evidence`; no pass claimed |
 | Cloud LCP p75 | ≤3.5 s | Not collected | Cloud host evidence required |
 | Interaction p95 | ≤100 ms | Not collected as a release artifact | Gate fails closed when absent |
@@ -95,4 +95,4 @@ npm run test:browser
 git diff --check
 ```
 
-Final local report: all required Node and Chrome/Edge/Firefox browser checks passed. Safari, Electron, manual NVDA/VoiceOver, full runtime performance artifact collection, visual-baseline approval, named owners, canary approval, and release sign-off remain explicitly unresolved external gates. No test failures were caused by missing dependencies or secrets after `npm ci` in the isolated worktree.
+Final historical report: required Node and Chrome/Edge/Firefox browser checks passed on the pre-merge evidence run. Post-merge focused recheck passed 11 UXF Node tests and 12 Chrome/Edge/Firefox project-runs, including dialog fallback, cloud seven-viewport, dark/reduced-motion/forced-colors checks; the full suite and full browser suite were not repeated for this audit. Safari, Electron, manual NVDA/VoiceOver, full runtime performance artifact collection, visual-baseline approval, named owners, canary approval, and release sign-off remain explicitly unresolved external gates. No test failures were caused by missing dependencies or secrets in the isolated worktree.
