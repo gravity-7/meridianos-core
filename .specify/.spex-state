@@ -10,7 +10,7 @@
   "review_spec_passed": true,
   "review_plan_passed": true,
   "review_code_passed": true,
-  "running": "phase-3",
+  "running": "done",
   "collab": {
     "phase_plan": [
       {
@@ -61,11 +61,13 @@
     ],
     "completed_phases": [
       1,
-      2
+      2,
+      3
     ],
-    "current_phase": 3,
+    "current_phase": null,
     "phase_1_review": "passed",
     "phase_2_review": "passed",
+    "phase_3_review": "passed",
     "pr_base_branch": "main"
   }
 }
