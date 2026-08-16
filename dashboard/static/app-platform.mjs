@@ -63,7 +63,7 @@ function openSearch() {
     else if (event.key === 'ArrowUp') { event.preventDefault(); moveSearchFocus(-1); }
     else if (event.key === 'Tab') {
       const focusable = [close, searchInput, ...(searchResults?.querySelectorAll('a') ?? [])]; const current = focusable.indexOf(document.activeElement);
-      if (current >= 0 && (event.shiftKey ? current === 0 : current === focusable.length - 1)) { event.preventDefault(); focusable[event.shiftKey ? focusable.length - 1 : 0].focus(); }
+      if (current < 0 || (event.shiftKey ? current === 0 : current === focusable.length - 1)) { event.preventDefault(); focusable[event.shiftKey ? focusable.length - 1 : 0]?.focus(); }
     }
   });
 }
