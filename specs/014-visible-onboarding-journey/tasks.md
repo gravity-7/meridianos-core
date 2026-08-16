@@ -102,8 +102,8 @@
 
 **Independent Test**: A reviewer can fill a complete DeepSeek approval record and see Z.ai GLM reported as unregistered; no focused command makes a live request.
 
-- [ ] T023 [US4] Update `docs/quality-assurance/templates/live-canary-approval.md`, `docs/quality-assurance/evidence-and-release-model.md`, and `docs/quality-assurance/release-scorecard.md` with the DeepSeek-only readiness criteria, local-key ownership, spend/duration caps, stop/revocation action, and unregistered-provider block.
-- [ ] T024 [US4] Add focused contract coverage in `tests/quality-assurance-blueprint.test.mjs` and `tests/setup-onboarding-contract.test.mjs` proving a standard run cannot be marked live-canary-ready without a complete approval and that Z.ai GLM is not presented as registered.
+- [X] T023 [US4] Update `docs/quality-assurance/templates/live-canary-approval.md`, `docs/quality-assurance/evidence-and-release-model.md`, and `docs/quality-assurance/release-scorecard.md` with the DeepSeek-only readiness criteria, local-key ownership, spend/duration caps, stop/revocation action, and unregistered-provider block.
+- [X] T024 [US4] Add focused contract coverage in `tests/quality-assurance-blueprint.test.mjs` and `tests/setup-onboarding-contract.test.mjs` proving a standard run cannot be marked live-canary-ready without a complete approval and that Z.ai GLM is not presented as registered.
 
 **Checkpoint**: The project has a truthful manual-canary preparation layer without automated or hidden use of any real key.
 
@@ -113,9 +113,16 @@
 
 **Purpose**: Verify the integrated slice, documentation, and evidence boundaries.
 
-- [ ] T025 Update `specs/014-visible-onboarding-journey/quickstart.md` with the implemented focused commands, visible-run behavior, expected evidence locations, and cleanup steps.
-- [ ] T026 Run focused Node and browser checks named by this feature, inspect generated safe evidence, and record results in `specs/014-visible-onboarding-journey/tasks.md` without running the full test suite.
-- [ ] T027 Run `git diff --check`, confirm no test has `.only()`, verify that no real key/artifact is tracked, and update `specs/014-visible-onboarding-journey/tasks.md` with final status.
+- [X] T025 Update `specs/014-visible-onboarding-journey/quickstart.md` with the implemented focused commands, visible-run behavior, expected evidence locations, and cleanup steps.
+- [X] T026 Run focused Node and browser checks named by this feature, inspect generated safe evidence, and record results in `specs/014-visible-onboarding-journey/tasks.md` without running the full test suite.
+- [X] T027 Run `git diff --check`, confirm no test has `.only()`, verify that no real key/artifact is tracked, and update `specs/014-visible-onboarding-journey/tasks.md` with final status.
+
+### Phase 3 verification record — 2026-08-16
+
+- **T023/T024:** DeepSeek-only manual canary preparation now requires named approval, local key ownership, registered provider/model scope, finite spend and duration caps, explicit stop/rollback actions, restricted evidence classification, post-run key revocation, and a passed synthetic prerequisite. Incomplete approval is not ready; Z.ai GLM is not registered or eligible.
+- **T025:** `quickstart.md` records the focused Node and Playwright commands, headed `/setup` walkthrough, `/app/setup` redirect boundary, evidence locations, recovery, and cleanup. No client-ready demo package or Spec 016 work was started.
+- **T026:** `node --disable-warning=ExperimentalWarning --test tests/quality-assurance-blueprint.test.mjs tests/setup-onboarding-contract.test.mjs tests/onboarding-fixture.test.mjs` — **18 passed, 0 failed**. `npx --no-install playwright test --config=playwright.onboarding.config.mjs` — **2 passed, 0 failed**. Generated evidence under `artifacts/qa/<run-id>/` contained two passing and one intentional non-pass/triage result; all inspected results were loopback-simulated, had zero external attempts, retained no raw traces, and passed sentinel scans. Passing runs recorded cleanup `removed`; inspected screenshots showed only redacted review/completion states. Full `npm test` was not run.
+- **T027:** `git diff --check` — **pass**; test `.only()` matches — **0**; tracked artifact paths — **0**; tracked secret filenames — **0**; tracked real-key-pattern files — **0**. Generated QA evidence remains ignored/untracked.
 
 ## Dependencies and Execution Order
 

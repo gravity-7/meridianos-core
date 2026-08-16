@@ -1,3 +1,5 @@
+import { listSetupProviders } from '../../provider-wizard.mjs';
+
 function requiredString(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${label} must be a non-empty string`);
 }
@@ -50,19 +52,46 @@ export function validateEvidenceManifest(manifest, { now = Date.now(), maxAgeDay
 }
 
 export function validateLiveCanaryApproval(approval, evidenceManifest, { now = Date.now() } = {}) {
-  for (const field of ['journey_id', 'run_id', 'approver', 'scope', 'max_spend_usd', 'approved_at', 'expires_at', 'rollback', 'stop_condition']) {
+  for (const field of [
+    'journey_id', 'run_id', 'approver', 'key_owner', 'provider', 'model', 'scope',
+    'max_spend_usd', 'max_duration_minutes', 'approved_at', 'expires_at', 'rollback',
+    'stop_condition', 'evidence_classification', 'key_revocation',
+  ]) {
     requiredString(approval?.[field], `approval.${field}`);
   }
   if (approval.journey_id !== evidenceManifest?.journey_id) throw new TypeError('approval journey must match evidence journey');
   if (approval.run_id !== evidenceManifest?.run_id) throw new TypeError('approval run must match evidence run');
+  const registeredProvider = listSetupProviders().find((provider) => provider.id === approval.provider);
+  if (approval.provider !== 'deepseek' || !registeredProvider?.models.includes(approval.model)) {
+    throw new TypeError('approval provider/model is not registered for the DeepSeek-only canary');
+  }
   if (!/^\d+(\.\d{1,2})?$/.test(approval.max_spend_usd) || Number(approval.max_spend_usd) < 0) {
     throw new TypeError('approval.max_spend_usd must be a non-negative decimal string');
+  }
+  if (!/^\d+$/.test(approval.max_duration_minutes) || Number(approval.max_duration_minutes) <= 0) {
+    throw new TypeError('approval.max_duration_minutes must be a positive integer');
+  }
+  if (approval.evidence_classification !== 'LIVE-CANARY-RESTRICTED') {
+    throw new TypeError('approval.evidence_classification must be LIVE-CANARY-RESTRICTED');
   }
   const approvedAt = validDate(approval.approved_at, 'approval.approved_at');
   if (approvedAt > now) throw new TypeError('approval cannot be in the future');
   if (approvedAt > validDate(evidenceManifest?.completed_at, 'evidence.completed_at')) {
     throw new TypeError('approval must predate the evidence execution');
   }
-  if (validDate(approval.expires_at, 'approval.expires_at') <= now) throw new TypeError('approval has expired');
+  const expiresAt = validDate(approval.expires_at, 'approval.expires_at');
+  if (expiresAt <= approvedAt) throw new TypeError('approval expiry must follow approval time');
+  if (expiresAt <= now) throw new TypeError('approval has expired');
   return approval;
+}
+
+/** Return true only for a complete, current approval paired with passed synthetic evidence. */
+export function isLiveCanaryReady(approval, evidenceManifest, { now = Date.now() } = {}) {
+  try {
+    validateLiveCanaryApproval(approval, evidenceManifest, { now });
+    return evidenceManifest?.result === 'passed'
+      && evidenceManifest?.dependency_mode === 'loopback-simulated';
+  } catch {
+    return false;
+  }
 }

@@ -31,6 +31,12 @@ test('setup catalog exposes registered provider metadata only and excludes Z.ai 
   assert.doesNotMatch(JSON.stringify(providers), new RegExp(SYNTHETIC_SECRET));
 });
 
+test('live-canary provider scope follows the registry and keeps Z.ai GLM unsupported', () => {
+  const providers = listSetupProviders();
+  assert.ok(providers.some((provider) => provider.id === 'deepseek' && provider.models.includes('deepseek-v4-flash')));
+  assert.equal(providers.some((provider) => provider.id === 'zai' || /z\.ai|glm/i.test(`${provider.id} ${provider.displayName}`)), false);
+});
+
 test('validation sessions expire, bind to one setup session, and are consumed only by commit', () => {
   let now = 1_000;
   const sessions = createSetupValidationSessionStore({ now: () => now, ttlMs: 50, randomId: () => 'opaque-id' });
