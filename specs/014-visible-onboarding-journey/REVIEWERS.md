@@ -58,3 +58,29 @@ No open questions identified for the synthetic first-time individual scope. Z.ai
 - [ ] Standard fixture blocks non-loopback egress and inherited real provider keys.
 - [ ] Browser proof covers wide/narrow, keyboard, explicit pre-commit, commit, and recovery.
 - [ ] DeepSeek live-canary documentation is manual/approved only and Z.ai GLM is not misrepresented.
+
+---
+
+## Phase 2: Visible automation and recovery (2026-08-15)
+
+### What Changed
+
+Phase 2 adds the disposable loopback onboarding fixture, sanitized child process, browser journey, redacted evidence writer, headed founder launcher, and controlled authorization/timeout/unavailable recovery coverage. The browser proof exercises the existing `/setup` route only, including review-before-commit, explicit commit, wide/narrow layouts, keyboard focus, and retry-to-success.
+
+### Spec Compliance
+
+The Phase 2 review covers FR-001 through FR-009 and FR-011 as exercised by T015–T022. The focused fixture and browser checks passed; evidence reports loopback-simulated dependencies, zero external attempts, no raw traces, cleanup status, and sentinel-scan results. FR-010 and T023–T027 remain outside this phase and are not marked complete.
+
+### Focus Areas for Review
+
+- Verify that the child environment is allowlisted and never inherits provider-key names or values.
+- Verify exact loopback origin/dependency checks, redirect rejection, and absence of `/app/setup` claims; `/app/setup` remains a redirect to `/setup`.
+- Inspect the browser evidence path for DOM, URL, storage, console, screenshot, and generated-artifact sentinel scanning.
+- Confirm failed validation clears the key, focuses a safe recovery alert, blocks progression, preserves non-secret choices, and allows a successful retry.
+- Confirm fixture cleanup removes only its generated temporary root and dashboard/dependency processes.
+
+### AI Assumptions
+
+- Provider validation uses the existing conformance seam with an exact loopback provider URL; no simulated model execution is introduced, so the loopback gateway is provisioned but not exercised by this setup-only journey.
+- The headed launcher uses the installed Chrome channel when available and falls back to an ephemeral loopback dashboard port if the requested port is occupied.
+- Full `npm test` was intentionally not run because the phase request restricts verification to focused relevant tests.

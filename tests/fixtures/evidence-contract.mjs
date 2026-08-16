@@ -9,6 +9,31 @@ function validDate(value, label) {
   return timestamp;
 }
 
+const ONBOARDING_RESULTS = new Set(['passed', 'failed', 'abandoned']);
+
+/** Validate the redacted result shape emitted by the visible onboarding fixture. */
+export function validateOnboardingResult(result) {
+  requiredString(result?.journey_id, 'onboarding.journey_id');
+  requiredString(result?.fixture_revision, 'onboarding.fixture_revision');
+  requiredString(result?.run_id, 'onboarding.run_id');
+  if (!ONBOARDING_RESULTS.has(result?.result)) throw new TypeError('onboarding.result is invalid');
+  if (!Array.isArray(result?.checkpoints)) throw new TypeError('onboarding.checkpoints must be an array');
+  for (const [index, checkpoint] of result.checkpoints.entries()) {
+    requiredString(checkpoint?.id, `onboarding.checkpoints[${index}].id`);
+    if (!['passed', 'failed'].includes(checkpoint?.outcome)) throw new TypeError(`onboarding.checkpoints[${index}].outcome is invalid`);
+  }
+  if (result?.safety?.dependency_mode !== 'loopback-simulated') {
+    throw new TypeError('onboarding evidence must use loopback-simulated dependencies');
+  }
+  if (result?.safety?.raw_trace_retained !== false) throw new TypeError('onboarding evidence must not retain raw traces');
+  if (!['pending', 'removed', 'failed'].includes(result?.safety?.cleanup)) throw new TypeError('onboarding cleanup result is invalid');
+  if (!Number.isInteger(result?.safety?.external_attempt_count) || result.safety.external_attempt_count !== 0) {
+    throw new TypeError('onboarding evidence contains an external dependency attempt');
+  }
+  if (result?.safety?.sentinel_scan?.passed !== true) throw new TypeError('onboarding evidence sentinel scan failed');
+  return result;
+}
+
 export function validateEvidenceManifest(manifest, { now = Date.now(), maxAgeDays = 14, expectedCommit = null } = {}) {
   for (const field of ['journey_id', 'fixture_revision', 'tested_commit', 'run_id', 'completed_at', 'reviewer', 'retention_until']) {
     requiredString(manifest?.[field], `evidence.${field}`);

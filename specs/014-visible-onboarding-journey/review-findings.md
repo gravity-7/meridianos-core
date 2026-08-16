@@ -42,3 +42,34 @@ node --test --test-name-pattern="setup --init" gateway/tests/cli.test.mjs
 
 No full `npm test` run, browser automation, live provider request, key use, commit, push, or PR
 was performed.
+
+---
+
+# Deep Review Findings — Phase 2
+
+**Scope:** T015–T022
+**Date:** 2026-08-15
+**Mode:** Local sequential fallback; external review tools disabled by repository configuration
+
+## Gate
+
+**PASS** — 0 Critical, 0 Important findings.
+
+The six required review perspectives were applied to the Phase 2 diff: correctness, architecture/idioms, security, production readiness, test quality, and goal alignment. The only evidence issue found during review was fixed before this report: console output is now captured for sentinel scanning, and in-memory `Buffer` values are scanned by the redaction helper.
+
+| Perspective | Critical | Important | Notable | Status |
+|---|---:|---:|---:|---|
+| Correctness | 0 | 0 | 0 | complete |
+| Architecture and idioms | 0 | 0 | 1 | complete |
+| Security | 0 | 0 | 0 | complete |
+| Production readiness | 0 | 0 | 0 | complete |
+| Test quality | 0 | 0 | 0 | complete |
+| Goal alignment | 0 | 0 | 0 | complete |
+
+## Notable Observation
+
+The fixture provisions a loopback gateway for dependency completeness, but this setup-only journey performs provider validation rather than simulated model execution. No gateway traffic is expected in T015–T022; gateway exercise remains outside this phase's task scope.
+
+## Focused Verification
+
+The focused Node contract/fixture tests passed 14/14, and the dedicated Playwright browser journey passed 2/2. Full `npm test` was intentionally skipped per the user-specified Phase 2 boundary.

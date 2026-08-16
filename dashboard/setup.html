@@ -148,8 +148,14 @@ function renderProviders() {
     <label for="modelId">Model</label><select id="modelId" onchange="modelChanged()">${modelOptions}</select>
     <label for="providerKey">Provider key for ${escapeHtml(provider.keyEnv)}</label>
     <input id="providerKey" type="password" autocomplete="off" spellcheck="false">
-    ${status}<div class="error" id="validationError" role="alert" aria-live="polite"></div>
+    ${status}<div class="error" id="validationError" role="alert" aria-live="polite" tabindex="-1"></div>
     <div class="row"><button class="secondary" onclick="back()">Back</button><button class="secondary" onclick="validateProvider()">Validate connection</button><button onclick="nextFrom('providers')">Continue</button></div>`;
+}
+function showValidationError(message) {
+  const error = document.getElementById('validationError');
+  if (!error) return;
+  error.textContent = message;
+  error.focus();
 }
 function providerChanged() {
   void revokeValidation();
@@ -173,21 +179,20 @@ async function revokeValidation() {
 }
 async function validateProvider() {
   const input = document.getElementById('providerKey');
-  const error = document.getElementById('validationError');
   const secret = input.value;
   input.value = '';
   await revokeValidation();
-  if (!secret) { error.textContent = 'Enter a provider key to validate this route.'; return; }
+  if (!secret) { showValidationError('Enter a provider key to validate this route.'); return; }
   try {
     const res = await fetch('/api/setup/provider-validation', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ providerId: state.providerId, modelId: state.modelId, secret, sessionId: transient.sessionId }),
     });
     const body = await res.json();
-    if (!body.ok) { error.textContent = body.error || 'Connection could not be verified. Try again.'; return; }
+    if (!body.ok) { showValidationError(body.error || 'Connection could not be verified. Try again.'); return; }
     transient.validationId = body.validation.id;
     renderProviders();
-  } catch { error.textContent = 'Connection could not be verified. Try again.'; }
+  } catch { showValidationError('Connection could not be verified. Try again.'); }
 }
 function renderBudget() {
   document.getElementById('wizard').innerHTML = `
@@ -238,7 +243,7 @@ function renderDone() {
 function nextFrom(step) {
   if (step === 'welcome') state.tenantName = document.getElementById('tenantName').value.trim() || 'My Tenant';
   if (step === 'agents') { const value = document.getElementById('agentsRaw').value.trim(); if (!value) { alert('At least one agent is required.'); return; } state.agentsRaw = value; }
-  if (step === 'providers' && !transient.validationId) { document.getElementById('validationError').textContent = 'Validate the selected provider and model before continuing.'; return; }
+  if (step === 'providers' && !transient.validationId) { showValidationError('Validate the selected provider and model before continuing.'); return; }
   if (step === 'budget') { const value = Number(document.getElementById('monthlyBudgetUsd').value); if (!(value > 0)) { alert('Budget must be a positive number.'); return; } state.monthlyBudgetUsd = value; }
   state.step += 1; saveState(state); render();
 }
