@@ -57,7 +57,7 @@ test('fixture allowlists the exact browser origin and rejects external/redirect 
     assert.throws(() => assertLoopbackEndpoint('http://127.0.0.1.evil.invalid/models'), /loopback/i);
     assert.throws(() => assertNoInheritedProviderKeys({ DEEPSEEK_KEY: 'not-read' }), /provider key/i);
     const guarded = createLoopbackFetch(async () => ({ status: 200, redirected: false }));
-    await assert.rejects(() => guarded('https://example.invalid/provider'), /loopback/i);
+    assert.throws(() => guarded('https://example.invalid/provider'), /loopback/i);
     assert.equal(guarded.externalAttemptCount, 1);
     assert.equal(guarded.attempts[0].allowed, false);
   } finally {

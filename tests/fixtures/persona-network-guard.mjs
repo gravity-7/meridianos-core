@@ -47,7 +47,7 @@ export function assertNoInheritedProviderKeys(environment) {
 export function createLoopbackFetch(fetchImpl) {
   if (typeof fetchImpl !== 'function') throw new TypeError('A fetch implementation is required');
   const attempts = [];
-  const guardedFetch = async (input, init) => {
+  const guardedFetch = (input, init) => {
     const value = typeof input === 'string' || input instanceof URL ? input.toString() : input?.url;
     const attempt = { method: init?.method ?? input?.method ?? 'GET', endpoint: String(value), allowed: false, status: null };
     try {
@@ -58,18 +58,26 @@ export function createLoopbackFetch(fetchImpl) {
       attempts.push(attempt);
       throw error;
     }
+    attempts.push(attempt);
     // A local mock must not bounce a fixture into an external destination.
+    let responsePromise;
     try {
-      const response = await fetchImpl(input, { ...(init ?? {}), redirect: 'error' });
-      attempt.status = response?.status ?? null;
-      if (response?.redirected) throw new Error('Fixture dependency followed a redirect');
-      attempts.push(attempt);
-      return response;
+      responsePromise = Promise.resolve(fetchImpl(input, { ...(init ?? {}), redirect: 'error' }));
     } catch (error) {
       attempt.error = 'blocked-or-failed';
-      attempts.push(attempt);
       throw error;
     }
+    return responsePromise.then((response) => {
+      attempt.status = response?.status ?? null;
+      if (response?.redirected) {
+        attempt.error = 'blocked-or-failed';
+        throw new Error('Fixture dependency followed a redirect');
+      }
+      return response;
+    }, (error) => {
+      attempt.error = 'blocked-or-failed';
+      throw error;
+    });
   };
   Object.defineProperty(guardedFetch, 'attempts', { value: attempts, enumerable: true });
   Object.defineProperty(guardedFetch, 'externalAttemptCount', {
