@@ -95,7 +95,7 @@
 - [X] T034 Run `npm test`, `git diff --check`, and the supported local browser checks; fix regressions without changing Spec 014/015 artifacts or root-worktree state.
 - [X] T035 Run `$speckit-converge`, append any discovered unbuilt Spec 017 requirements to this file, and complete every appended task before proceeding.
 - [X] T036 Prepare redacted review evidence and the parity disposition summary for Founder review in `specs/017-platform-observability-dashboard/quickstart.md` and `specs/017-platform-observability-dashboard/parity-inventory.md`.
-- [ ] T037 Create or update the implementation PR branch and review evidence in `specs/017-platform-observability-dashboard/quickstart.md` only when all local validation is green, wait for required CI, dispatch Antigravity review, apply accepted blocking findings, rerun validation/convergence, and leave the PR unmerged for Founder review.
+- [X] T037 Create or update the implementation PR branch and review evidence in `specs/017-platform-observability-dashboard/quickstart.md` only when all local validation is green, wait for required CI, dispatch Antigravity review, apply accepted blocking findings, rerun validation/convergence, and leave the PR unmerged for Founder review.
 
 ## Phase 8: Hard visual-reference acceptance
 

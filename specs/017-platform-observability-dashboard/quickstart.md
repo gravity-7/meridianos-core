@@ -68,6 +68,8 @@ npm test
 
 Then run `$speckit-converge` and the repository's required Antigravity review dispatcher against the implementation PR. Do not merge the PR.
 
+Recorded handoff (2026-08-18): PR [#101](https://github.com/gravity-7/meridianos-core/pull/101) is open and unmerged on `spec/017-platform-observability-dashboard` at commit `810777020081b43ae8b1d8e97b8058bdf8130a50`. The repository CI watcher (`node scripts/watch-pr-ci.mjs 101 30`) exited 0 after the rerun; `gh pr checks 101` reported every check passing, including the full test job. The required command `node scripts/dispatch-review.mjs 101 --spec=specs/017-platform-observability-dashboard --agent=antigravity` posted an Antigravity verdict of `APPROVE` with no blocking findings. The local dispatcher wrapper timed out after publishing the review, so the PR comment and review artifact are the authoritative evidence. No code changes were required after review.
+
 ## Review evidence boundary
 
 Redacted evidence locations are the ignored `artifacts/qa/client-demo/<run-id>/manifest.json` and `result.json` paths generated only when a fixture run is explicitly stopped. Source-quality evidence is in `tests/dashboard-source-quality.test.mjs`, and parity dispositions are in `parity-inventory.md`. No secrets, provider keys, raw requests, browser profiles, or capture assets are retained.
