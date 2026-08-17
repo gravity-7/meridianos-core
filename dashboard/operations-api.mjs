@@ -43,6 +43,7 @@ function overviewModel({ db, ledger, config, scope, policy }) {
   const tasks = db.prepare(`SELECT id,status,lease_owner,lease_expires FROM tasks ${taskScope}`).all(...taskParams);
   const failedRuns = queryRuns({ config, scope, filters: { state: 'failed' }, limit: 200 }).items;
   const gateway = queryGatewayMetrics(ledger, scope);
+  const usage = queryUsageMetrics(ledger, scope);
   const cost = queryCostMetrics(ledger, scope, { monthlyLimit: policy?.analytics?.budget?.monthlyLimit ?? 0 });
   const now = new Date().toISOString();
   return {
@@ -66,6 +67,15 @@ function overviewModel({ db, ledger, config, scope, policy }) {
       definition: 'Active agents use current, unexpired task leases; failed runs use retained failed outcomes in the selected interval.',
     },
     cost: { ...cost.summary, drilldown: { entityType: 'cost', label: 'Open cost drivers', href: href('/app/observability/cost', scope) } },
+    usage: usage.summary,
+    trends: {
+      requests: gateway.series?.requests ?? { points: [], aggregation: 'none', freshAsOf: gateway.freshAsOf },
+      errorRate: gateway.series?.errorRate ?? { points: [], aggregation: 'none', freshAsOf: gateway.freshAsOf },
+      latencyP50: gateway.series?.latencyP50 ?? { points: [], aggregation: 'none', freshAsOf: gateway.freshAsOf },
+      latencyP95: gateway.series?.latencyP95 ?? { points: [], aggregation: 'none', freshAsOf: gateway.freshAsOf },
+      tokens: usage.series?.totalTokens ?? { points: [], aggregation: 'none', freshAsOf: usage.freshAsOf },
+      cost: cost.series?.cost ?? { points: [], aggregation: 'none', freshAsOf: cost.freshAsOf },
+    },
     regions: { attention: 'fresh', health: 'fresh', work: 'fresh', cost: 'fresh' },
     freshAsOf: new Date().toISOString(),
   };

@@ -123,7 +123,7 @@ test('finance view reconciles chart/table evidence with uPlot unavailable and pa
 test('2,000-point chart and table updates stay within the p95 performance budget', async ({ page }, testInfo) => {
   await page.addInitScript(() => { window.__longTasks = []; new PerformanceObserver((list) => window.__longTasks.push(...list.getEntries().map((entry) => entry.duration))).observe({ type: 'longtask', buffered: true }); });
   await stubOperations(page, { points: 2000 }); await page.goto(scopedPath('/app/observability/gateway'));
-  for (let index = 0; index < 9; index++) { const label = index % 2 ? 'Gateway' : 'Cost'; await page.getByRole('navigation', { name: 'Application' }).getByRole('link', { name: label }).click(); await expect(page.locator('.chart-table tbody tr')).toHaveCount(2000); }
+  for (let index = 0; index < 9; index++) { const label = index % 2 ? 'Gateway' : 'Cost'; await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: label }).click(); await expect(page.locator('.chart-table tbody tr')).toHaveCount(2000); }
   const evidence = await page.evaluate(() => ({ durations: performance.getEntriesByName('operational-chart-render').map((entry) => entry.duration), longTasks: window.__longTasks }));
   const ordered = [...evidence.durations].sort((a,b) => a-b); const p95 = ordered[Math.max(0, Math.ceil(ordered.length * .95) - 1)]; const maxLongTaskMs = Math.max(0, ...evidence.longTasks);
   const environment = await page.evaluate(() => ({ userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, deviceMemoryGiB: navigator.deviceMemory ?? null }));

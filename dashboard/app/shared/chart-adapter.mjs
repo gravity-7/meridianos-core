@@ -51,7 +51,7 @@ export function renderOperationalChart(containerOrContract, inputOrRuntime, runt
     const section = documentRef.createElement('section'); section.className = 'chart-panel'; section.setAttribute('aria-labelledby', `${input.id}-title`);
     const heading = text(documentRef, 'h2', model.title); heading.id = `${input.id}-title`;
     const summary = text(documentRef, 'p', model.summary); summary.className = 'chart-summary';
-    const meta = text(documentRef, 'p', `${model.unit} · ${model.scopeLabel} · Fresh as of ${model.freshAsOf ?? 'unknown'}`); meta.className = 'chart-meta';
+    const meta = text(documentRef, 'p', `Series: ${model.unit} · ${model.scopeLabel} · Fresh as of ${model.freshAsOf ?? 'unknown'}`); meta.className = 'chart-meta';
     const visual = documentRef.createElement('div'); visual.className = 'chart-visual'; visual.setAttribute('aria-hidden', 'true');
     const details = documentRef.createElement('details'); details.className = 'chart-table'; details.open = !uPlotCtor;
     details.append(text(documentRef, 'summary', `Data table for ${model.title}`));
@@ -75,7 +75,8 @@ export function renderOperationalChart(containerOrContract, inputOrRuntime, runt
     container.replaceChildren(section);
     let plot = null;
     if (uPlotCtor && model.rows.length) {
-      plot = new uPlotCtor({ width: Math.max(280, visual.clientWidth || 640), height: 240, series: [{}, { label: model.unit, stroke: '#315efb', width: 2 }], axes: [{}, {}] }, prepareUPlotData(model), visual);
+      const accent = documentRef.defaultView?.getComputedStyle?.(documentRef.documentElement)?.getPropertyValue('--accent')?.trim() || '#315efb';
+      plot = new uPlotCtor({ width: Math.max(280, visual.clientWidth || 640), height: 240, series: [{}, { label: model.unit, stroke: accent, width: 2 }], axes: [{}, {}] }, prepareUPlotData(model), visual);
     } else if (!model.rows.length) visual.replaceChildren(text(documentRef, 'p', `No ${model.unit} data in this scope.`));
     const resize = () => { if (plot && visual.clientWidth) plot.setSize({ width: visual.clientWidth, height: 240 }); };
     globalThis.addEventListener?.('resize', resize);

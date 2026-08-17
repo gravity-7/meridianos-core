@@ -54,9 +54,9 @@ test('applyDottedUpdates merges onto a clone without mutating the source', () =>
   assert.equal(p.work.wip_per_agent, 2); // original untouched
 });
 
-test('UI platform defaults safely to legacy and records an auditable rollout decision', () => {
+test('UI platform defaults to the founder-approved platform and records an auditable decision', () => {
   assert.deepEqual(evaluateUiPlatformEligibility({}), {
-    enabled: false, eligible: false, decision: 'legacy', reason: 'disabled',
+    enabled: true, eligible: true, decision: 'platform', reason: 'all_users',
     audit: { policyPath: 'ui_platform', rolloutId: null, subjectId: null },
   });
   assert.deepEqual(evaluateUiPlatformEligibility({ ui_platform: { enabled: true, rollout_id: 'ui-011', eligibility: { mode: 'allowlist', subjects: ['operator-1'] } } }, { subjectId: 'operator-1' }), {

@@ -62,42 +62,55 @@ test('GET /healthz returns 200 {ok:true} with no auth token and touches no DB', 
 
 test('UI platform boundary keeps rollout, routes, and safe failures explicit', () => {
   assert.equal(isUiPlatformEnabled({ ui_platform: { enabled: true } }), true);
-  assert.equal(isUiPlatformEnabled({}), false);
+  assert.equal(isUiPlatformEnabled({}), true);
+  assert.equal(isUiPlatformEnabled({ ui_platform: { enabled: false } }), false);
   assert.equal(resolvePlatformRoute('/app/foundation').id, 'foundation');
   assert.equal(resolvePlatformRoute('/app/missing'), null);
   assert.deepEqual(platformBoundary({ body: [] }), { state: 'empty', message: 'There is nothing to show yet.' });
   assert.deepEqual(platformBoundary({ status: 500, error: new Error('secret') }), { state: 'error', message: 'Unable to load this information. Try again.', recoverable: true });
 });
 
-test('GET /app is feature-flagged and serves the stable platform shell when enabled', async () => {
+test('GET / defaults to the platform shell while /legacy preserves the previous dashboard', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'srv-app-'));
-  mkdirSync(join(repoRoot, '.ai'), { recursive: true });
-  writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), `${SAMPLE}ui_platform:\n  enabled: true\n`);
   const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot }));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
-    const result = await new Promise((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app/foundation' }, (res) => {
+    const request = (path) => new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.address().port, path }, (res) => {
         let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve({ status: res.statusCode, body }));
       }); req.on('error', reject); req.end();
     });
-    assert.equal(result.status, 200);
-    assert.match(result.body, /MeridianOS/);
+    const platform = await request('/');
+    assert.equal(platform.status, 200);
+    assert.match(platform.body, /app-platform\.mjs/);
+    assert.match(platform.body, /const AIOS_TOKEN = "/);
+    const legacy = await request('/legacy');
+    assert.equal(legacy.status, 200);
+    assert.match(legacy.body, /<title>AIOS control<\/title>/);
+    const directPlatform = await request('/app/foundation');
+    assert.equal(directPlatform.status, 200);
+    assert.match(directPlatform.body, /app-platform\.mjs/);
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
-test('GET /app falls back to the legacy dashboard while the platform flag is disabled', async () => {
+test('an explicit disabled platform policy keeps root and direct platform requests on the legacy fallback', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'srv-app-legacy-'));
   mkdirSync(join(repoRoot, '.ai'), { recursive: true });
-  writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), SAMPLE);
+  writeFileSync(join(repoRoot, '.ai', 'policy.yaml'), `${SAMPLE}ui_platform:\n  enabled: false\n`);
   const server = createDashboardServer(resolvePaths({ domain: FIXTURE_DOMAIN, root: repoRoot }));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
-    const result = await new Promise((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/app' }, (res) => resolve({ status: res.statusCode, location: res.headers.location }));
+    const request = (path) => new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.address().port, path }, (res) => {
+        let body = ''; res.on('data', (chunk) => body += chunk); res.on('end', () => resolve({ status: res.statusCode, location: res.headers.location, body }));
+      });
       req.on('error', reject); req.end();
     });
-    assert.deepEqual(result, { status: 302, location: '/' });
+    const root = await request('/');
+    assert.equal(root.status, 200);
+    assert.match(root.body, /<title>AIOS control<\/title>/);
+    const directPlatform = await request('/app');
+    assert.deepEqual(directPlatform, { status: 302, location: '/legacy', body: '' });
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
@@ -251,7 +264,7 @@ test('disabling the policy flag rolls an active platform route back to legacy wi
   try {
     assert.equal((await appRequest()).status, 200);
     writeFileSync(policyPath, `${SAMPLE}ui_platform:\n  enabled: false\n`);
-    assert.deepEqual(await appRequest(), { status: 302, location: '/' });
+    assert.deepEqual(await appRequest(), { status: 302, location: '/legacy' });
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 

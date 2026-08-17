@@ -6,16 +6,18 @@ import { parseUrlScope, serializeUrlScope, inheritScope, presetScope } from '/st
 import { createOperationsApi } from '/static/app/shared/operations-api.mjs';
 import { createRealtimeCoordinator } from '/static/app/shared/realtime-coordinator.mjs';
 import { make, notice } from '/static/app/shared/view-helpers.mjs';
+import { applyThemePreference, parseThemePreference } from '/static/app/shared/theme-preference.mjs';
 
 const themeKey = 'meridianos-ui-theme'; const realtimeKey = 'meridianos-operational-realtime';
-const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme'); const searchTrigger = document.querySelector('#search-trigger');
+const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme'); const searchTrigger = document.querySelector('#search-trigger'); const sidebar = document.querySelector('#app-sidebar'); const sidebarToggle = document.querySelector('#sidebar-toggle');
 let scope = parseUrlScope(location.href); let epoch = 0; let activeOnboarding = null; let pendingMutations = 0; let realtime = null; let disposers = [];
 let realtimeScopeKey = null;
 let restoreRouteFocus = false;
+let scopeNotice = null;
 const api = createOperationsApi({ token: window.AIOS_TOKEN, getScope: () => scope });
 
-function applyTheme(theme) { document.documentElement.dataset.theme = theme; themeButton.textContent = `Theme: ${theme}`; }
-function currentTheme() { return localStorage.getItem(themeKey) || 'system'; }
+function applyTheme(theme) { const selected = applyThemePreference(theme); themeButton.textContent = `Theme: ${selected}`; themeButton.setAttribute('aria-label', `Change color theme; current ${selected}`); }
+function currentTheme() { return parseThemePreference(localStorage.getItem(themeKey)); }
 function canonicalizeScope() {
   const url = new URL(location.href); const params = serializeUrlScope(scope); let changed = false;
   for (const [key,value] of params) if (url.searchParams.get(key) !== value) { url.searchParams.set(key,value); changed = true; }
@@ -26,7 +28,7 @@ function scopedDestination(target) {
   if (new URL(location.href).searchParams.get('demo') === 'true') destination.searchParams.set('demo', 'true');
   return `${destination.pathname}${destination.search}${destination.hash}`;
 }
-function updateNav() { for (const link of document.querySelectorAll('.app-header a[href^="/app"]')) if (!link.pathname.startsWith('/app/setup')) link.href = scopedDestination(link.pathname); }
+function updateNav() { for (const link of document.querySelectorAll('.app-header a, .app-sidebar a')) if (!link.pathname.startsWith('/app/setup')) { link.href = scopedDestination(link.pathname === '/app' ? '/' : link.pathname); link.classList.toggle('is-active', link.pathname === location.pathname || (link.pathname === '/' && location.pathname === '/')); } }
 function announce(message) { announcer.textContent = ''; requestAnimationFrame(() => { announcer.textContent = message; }); }
 let searchDialog = null; let searchInput = null; let searchResults = null; let searchStatus = null; let searchRestore = null; let searchTimer = null; let searchIndex = -1;
 function closeSearch() { if (!searchDialog) return; if (typeof searchDialog.close === 'function' && searchDialog.open) searchDialog.close(); else searchDialog.removeAttribute('open'); searchDialog.remove(); searchDialog = null; searchInput = null; searchResults = null; searchStatus = null; searchIndex = -1; clearTimeout(searchTimer); searchRestore?.focus?.(); searchRestore = null; }
@@ -69,7 +71,7 @@ function openSearch() {
 }
 function cleanupRoute() { for (const dispose of disposers.splice(0)) { try { dispose(); } catch (error) { console.error('Operational route cleanup failed.', error); } } }
 function navigate(target, { replace = false } = {}) {
-  const url = new URL(target, location.origin); const destination = url.pathname.startsWith('/app/setup') ? `${url.pathname}${url.search}` : scopedDestination(`${url.pathname}${url.search}${url.hash}`);
+  const url = new URL(target, location.origin); const pathname = url.pathname === '/app' ? '/' : url.pathname; const destination = pathname.startsWith('/app/setup') ? `${pathname}${url.search}` : scopedDestination(`${pathname}${url.search}${url.hash}`);
   if (replace) history.replaceState({}, '', destination);
   else history.pushState({}, '', destination);
   restoreRouteFocus = true; void renderCurrent();
@@ -78,20 +80,22 @@ function scopeControls() {
   const form = make('form', null, 'scope-controls'); form.setAttribute('aria-label', 'Operational filters and time scope');
   const presetLabel = make('label', 'Time preset'); const preset = make('select'); preset.name = 'preset';
   for (const [value,label] of [['custom','Exact interval'],['1h','Last hour'],['24h','Last 24 hours'],['7d','Last 7 days'],['30d','Last 30 days']]) { const option = make('option', label); option.value = value; preset.append(option); } presetLabel.append(preset);
+  const requestedPreset = new URL(location.href).searchParams.get('preset'); preset.value = ['1h', '24h', '7d', '30d'].includes(requestedPreset) ? requestedPreset : 'custom';
   const field = (labelText, name, value, type = 'text') => { const label = make('label', labelText); const input = make('input'); input.name = name; input.type = type; input.value = value ?? ''; label.append(input); return { label, input }; };
   const project = field('Project', 'project', scope.project); const provider = field('Provider', 'provider', scope.provider); const from = field('From (UTC)', 'from', scope.from.slice(0,16), 'datetime-local'); const to = field('To (UTC, exclusive)', 'to', scope.to.slice(0,16), 'datetime-local');
   const submit = make('button', 'Apply scope'); submit.type = 'submit';
-  preset.addEventListener('change', () => { if (preset.value === 'custom') return; scope = presetScope(preset.value, { ...scope }); navigate(`${location.pathname}?${serializeUrlScope(scope)}`); });
+  const live = make('div', null, 'refresh-controls'); const refresh = make('button', 'Refresh now'); refresh.type = 'button'; const realtimeLabel = make('label'); const checkbox = make('input'); checkbox.type = 'checkbox'; checkbox.checked = localStorage.getItem(realtimeKey) === 'true'; const demo = new URL(location.href).searchParams.get('demo') === 'true'; checkbox.disabled = demo;
+  const state = make('span', scopeNotice ?? 'Polling every 10 seconds.', 'realtime-state'); state.id = 'realtime-state'; state.setAttribute('role','status');
+  preset.addEventListener('change', () => { if (preset.value === 'custom') return; scope = presetScope(preset.value, { ...scope }); scopeNotice = `Showing ${preset.options[preset.selectedIndex].textContent.toLowerCase()}.`; const params = serializeUrlScope(scope); params.set('preset', preset.value); navigate(`${location.pathname}?${params}`); });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    try { const next = { from: new Date(`${from.input.value}:00Z`).toISOString(), to: new Date(`${to.input.value}:00Z`).toISOString(), project: project.input.value.trim() || null, provider: provider.input.value.trim() || null, timezone: 'UTC' }; if (Date.parse(next.from) >= Date.parse(next.to)) throw new Error('From must be before To.'); scope = next; navigate(`${location.pathname}?${serializeUrlScope(scope)}`); }
+    try { const next = { from: new Date(`${from.input.value}:00Z`).toISOString(), to: new Date(`${to.input.value}:00Z`).toISOString(), project: project.input.value.trim() || null, provider: provider.input.value.trim() || null, timezone: 'UTC' }; if (Date.parse(next.from) >= Date.parse(next.to)) throw new Error('From must be before To.'); scope = next; scopeNotice = 'Scope applied.'; navigate(`${location.pathname}?${serializeUrlScope(scope)}`); }
     catch (error) { announce(error.message); }
   });
-  const live = make('div', null, 'refresh-controls'); const refresh = make('button', 'Refresh now'); refresh.type = 'button'; refresh.addEventListener('click', () => realtime?.refreshNow());
-  const realtimeLabel = make('label'); const checkbox = make('input'); checkbox.type = 'checkbox'; checkbox.checked = localStorage.getItem(realtimeKey) === 'true'; const demo = new URL(location.href).searchParams.get('demo') === 'true'; checkbox.disabled = demo;
+  refresh.addEventListener('click', () => { void (async () => { refresh.disabled = true; state.textContent = 'Refreshing…'; try { const refreshed = await realtime?.refreshNow(); const target = document.querySelector('#realtime-state'); if (target) target.textContent = refreshed ? 'Refresh complete.' : 'Refresh is unavailable while updates are paused.'; announce(target?.textContent ?? 'Refresh complete.'); } catch { state.textContent = 'Refresh failed. Try again.'; announce(state.textContent); } finally { refresh.disabled = false; } })(); });
   realtimeLabel.append(checkbox, document.createTextNode(demo ? ' Realtime disabled for demo data' : ' Use realtime updates'));
   checkbox.addEventListener('change', () => { localStorage.setItem(realtimeKey, String(checkbox.checked)); realtime?.setRealtime(checkbox.checked); });
-  const state = make('span', 'Polling every 10 seconds.', 'realtime-state'); state.id = 'realtime-state'; state.setAttribute('role','status'); live.append(refresh, realtimeLabel, state);
+  live.append(refresh, realtimeLabel, state);
   form.append(presetLabel, project.label, provider.label, from.label, to.label, submit, live); return form;
 }
 async function postLegacy(path, body) {
@@ -126,8 +130,8 @@ function missingDetailRecovery(error) {
 
 async function renderCurrent() {
   const currentEpoch = ++epoch; cleanupRoute(); api.dispose(); activeOnboarding?.dispose(); activeOnboarding = null;
-  scope = parseUrlScope(location.href); canonicalizeScope(); updateNav(); const url = new URL(location.href); const route = resolveAppRoute(url.pathname);
-  if (!route) { const panel = make('section', null, 'card'); panel.append(make('h1', 'Page not found'), make('p', 'This application route is not available.')); const home = make('a', 'Return to overview'); home.href = inheritScope('/app', scope); panel.append(home); app.replaceChildren(panel); return; }
+  scope = parseUrlScope(location.href); canonicalizeScope(); updateNav(); const url = new URL(location.href); const route = resolveAppRoute(url.pathname === '/' ? '/app' : url.pathname);
+  if (!route) { const panel = make('section', null, 'card'); panel.append(make('h1', 'Page not found'), make('p', 'This application route is not available.')); const home = make('a', 'Return to overview'); home.href = inheritScope('/', scope); panel.append(home); app.replaceChildren(panel); return; }
   document.title = `${route.id.replaceAll('-', ' ')} - MeridianOS`;
   if (route.id === 'setup' || route.id === 'setup-complete') { app.replaceChildren(); activeOnboarding = createOnboardingController({ root: app }); return activeOnboarding.render(); }
   if (route.id === 'foundation') {
@@ -154,6 +158,7 @@ async function renderCurrent() {
   const nextRealtimeScope = JSON.stringify(scope);
   if (realtimeScopeKey != null && realtimeScopeKey !== nextRealtimeScope) realtime?.setRealtime(localStorage.getItem(realtimeKey) === 'true');
   realtimeScopeKey = nextRealtimeScope;
+  if (scopeNotice) { const target = document.querySelector('#realtime-state'); if (target) target.textContent = scopeNotice; announce(scopeNotice); scopeNotice = null; }
 }
 
 document.addEventListener('click', (event) => {
@@ -163,7 +168,13 @@ document.addEventListener('click', (event) => {
 searchTrigger?.addEventListener('click', openSearch);
 document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); } });
 addEventListener('popstate', () => { restoreRouteFocus = true; void renderCurrent(); });
-themeButton.addEventListener('click', () => { const order=['system','light','dark']; const next=order[(order.indexOf(currentTheme())+1)%order.length]; localStorage.setItem(themeKey,next); applyTheme(next); });
+themeButton.addEventListener('click', () => { const order=['system','light','dark']; const next=order[(order.indexOf(currentTheme())+1)%order.length]; applyTheme(next); announce(`Theme changed to ${next}.`); });
+function syncSidebarDisclosure() { if (matchMedia('(max-width: 760px)').matches) sidebarToggle?.setAttribute('aria-expanded', String(sidebar?.classList.contains('is-open') === true)); else sidebarToggle?.setAttribute('aria-expanded', 'true'); }
+syncSidebarDisclosure(); addEventListener('resize', syncSidebarDisclosure);
+sidebarToggle?.addEventListener('click', () => { const expanded = sidebarToggle.getAttribute('aria-expanded') === 'true'; sidebarToggle.setAttribute('aria-expanded', String(!expanded)); if (matchMedia('(max-width: 760px)').matches) sidebar?.classList.toggle('is-open', !expanded); else sidebar?.classList.toggle('is-collapsed', expanded); });
+sidebar?.addEventListener('click', (event) => { const link = event.target.closest('a'); if (!link) return; if (matchMedia('(max-width: 760px)').matches) { sidebar?.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); } });
+sidebar?.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches) { sidebar?.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches && sidebar?.classList.contains('is-open')) { sidebar.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });
 addEventListener('beforeunload', () => { cleanupRoute(); api.dispose(); realtime?.stop(); });
 
 applyTheme(currentTheme()); scope = parseUrlScope(location.href); canonicalizeScope();
