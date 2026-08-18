@@ -148,10 +148,9 @@ function stopDashboardChild(child) {
   if (process.platform === 'win32' && child.pid) {
     child.stdout?.destroy();
     child.stderr?.destroy();
-    child.unref?.();
-    const killer = execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
-    killer.unref?.();
-    return Promise.resolve();
+    return new Promise((resolve) => {
+      execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+    });
   }
   return new Promise((resolve) => {
     let settled = false;
@@ -463,7 +462,7 @@ export async function createOnboardingFixture({ dashboardPort = 0, providerMode 
         await stopDashboardChild(dashboardChild?.child);
         await closeServer(providerServer);
         await closeServer(gatewayServer);
-        rmSync(root, { recursive: true, force: true });
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
         return { rootRemoved: !existsSync(root), externalAttemptCount: 0 };
       },
       // Expose only safe metadata; the descriptor itself is never returned to browser evidence.
@@ -473,7 +472,7 @@ export async function createOnboardingFixture({ dashboardPort = 0, providerMode 
     await stopDashboardChild(dashboardChild?.child);
     await closeServer(providerServer);
     await closeServer(gatewayServer);
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     throw error;
   }
 }

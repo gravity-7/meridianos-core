@@ -485,8 +485,22 @@ export function createDashboardServer(config) {
         });
         if (handled) return;
       }
-      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      const uiPlatformEligibility = () => {
+        try { return evaluateUiPlatformEligibility(loadPolicy(undefined, config)); }
+        catch { return evaluateUiPlatformEligibility({}); }
+      };
+      // /legacy is the explicit founder-approved rollback boundary. Keep /index.html mapped
+      // to the same retained dashboard for direct compatibility links.
+      if (req.method === 'GET' && (url.pathname === '/legacy' || url.pathname === '/index.html')) {
         const html = readFileSync(INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
+        return send(res, 200, html, 'text/html; charset=utf-8');
+      }
+      if (req.method === 'GET' && url.pathname === '/') {
+        if (!uiPlatformEligibility().eligible) {
+          const html = readFileSync(INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
+          return send(res, 200, html, 'text/html; charset=utf-8');
+        }
+        const html = readFileSync(APP_INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);
         return send(res, 200, html, 'text/html; charset=utf-8');
       }
       if (req.method === 'GET' && (url.pathname === '/app/setup' || url.pathname.startsWith('/app/setup/'))) {
@@ -494,10 +508,8 @@ export function createDashboardServer(config) {
         return res.end();
       }
       if (req.method === 'GET' && (url.pathname === '/app' || url.pathname.startsWith('/app/'))) {
-        let eligibility = { eligible: false };
-        try { eligibility = evaluateUiPlatformEligibility(loadPolicy(undefined, config)); } catch { /* missing policy stays safely legacy */ }
-        if (!eligibility.eligible) {
-          res.writeHead(302, { location: '/', 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
+        if (!uiPlatformEligibility().eligible) {
+          res.writeHead(302, { location: '/legacy', 'cache-control': 'no-store', ...BASELINE_SECURITY_HEADERS });
           return res.end();
         }
         const html = readFileSync(APP_INDEX, 'utf8').replaceAll('__AIOS_TOKEN__', AUTH_TOKEN);

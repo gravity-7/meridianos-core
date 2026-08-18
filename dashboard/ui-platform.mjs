@@ -13,7 +13,9 @@ export const ONBOARDING_COMPATIBILITY_TARGETS = Object.freeze({
 });
 
 export const DEFAULT_UI_PLATFORM_POLICY = Object.freeze({
-  enabled: false,
+  // Founder-approved early-stage default: serve the platform shell unless an installation
+  // explicitly opts out. The retained /legacy route is the immediate rollback boundary.
+  enabled: true,
   eligibility: Object.freeze({ mode: 'all' }),
 });
 
@@ -23,7 +25,9 @@ export const DEFAULT_UI_PLATFORM_POLICY = Object.freeze({
  */
 export function evaluateUiPlatformEligibility(policy, { subjectId = null } = {}) {
   const configured = policy?.ui_platform ?? {};
-  const enabled = configured.enabled === true;
+  const enabled = Object.hasOwn(configured, 'enabled')
+    ? configured.enabled === true
+    : DEFAULT_UI_PLATFORM_POLICY.enabled;
   const eligibility = configured.eligibility ?? DEFAULT_UI_PLATFORM_POLICY.eligibility;
   const audit = {
     policyPath: 'ui_platform',
