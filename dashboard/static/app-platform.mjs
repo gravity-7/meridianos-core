@@ -144,6 +144,11 @@ function scopeControls() {
   
   return toolbar;
 }
+
+async function postLegacy(path, body) {
+  const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-aios-token': window.AIOS_TOKEN, 'x-correlation-id': crypto.randomUUID() }, body: JSON.stringify(body) });
+  const value = await response.json().catch(() => ({})); if (!response.ok || value.ok === false) throw new Error(value.error?.message || value.error || 'The action failed.'); return value;
+}
 function refreshButton(label) { const button = make('button', label); button.type = 'button'; button.addEventListener('click', () => void renderCurrent({ preserveView: true })); return button; }
 function forcedStatePanel(state) {
   const messages = { idle: 'Ready when you are.', pending: 'Your action is in progress…', disabled: 'This action is currently unavailable.', success: 'Your action completed successfully.', loading: 'Loading application information…', empty: 'There is nothing to show yet.', error: 'Unable to load this information.', fatal: 'This action cannot be completed. Check your access or contact an administrator.' };
