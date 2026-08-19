@@ -51,9 +51,11 @@ export function renderOperationalChart(containerOrContract, inputOrRuntime, runt
     const section = documentRef.createElement('section'); section.className = 'chart-panel'; section.setAttribute('aria-labelledby', `${input.id}-title`);
     const heading = text(documentRef, 'h2', model.title); heading.id = `${input.id}-title`;
     const summary = text(documentRef, 'p', model.summary); summary.className = 'chart-summary';
-    const meta = text(documentRef, 'p', `Series: ${model.unit} · ${model.scopeLabel} · Fresh as of ${model.freshAsOf ?? 'unknown'}`); meta.className = 'chart-meta';
+    const freshLabel = model.freshAsOf ? new Date(model.freshAsOf).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }) : 'unknown';
+    const meta = text(documentRef, 'p', `Series: ${model.unit} · ${model.scopeLabel} · Fresh as of ${freshLabel}`); meta.className = 'chart-meta';
     const visual = documentRef.createElement('div'); visual.className = 'chart-visual'; visual.setAttribute('aria-hidden', 'true');
-    const details = documentRef.createElement('details'); details.className = 'chart-table'; details.open = !uPlotCtor;
+    const existingDetails = documentRef.getElementById(`${input.id}-table`);
+    const details = documentRef.createElement('details'); details.className = 'chart-table'; details.id = `${input.id}-table`; details.open = existingDetails ? existingDetails.open : !uPlotCtor;
     details.append(text(documentRef, 'summary', `Data table for ${model.title}`));
     const table = documentRef.createElement('table');
     const caption = text(documentRef, 'caption', `${model.title}. Values in ${model.unit}. ${model.scopeLabel}`); table.append(caption);
@@ -80,7 +82,14 @@ export function renderOperationalChart(containerOrContract, inputOrRuntime, runt
     } else if (!model.rows.length) { visual.className = 'chart-visual panel-empty'; visual.replaceChildren(text(documentRef, 'p', `No ${model.unit} data in this scope.`)); }
     const resize = () => { if (plot && visual.clientWidth) plot.setSize({ width: visual.clientWidth, height: 240 }); };
     globalThis.addEventListener?.('resize', resize);
-    return { model, plot, resize, destroy() { globalThis.removeEventListener?.('resize', resize); plot?.destroy?.(); section.remove?.(); if (summaryHost && summaryHost !== container) { summary.remove?.(); meta.remove?.(); } if (tableHost && tableHost !== container) details.remove?.(); } };
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      try {
+        resizeObserver = new ResizeObserver(() => resize());
+        resizeObserver.observe(visual);
+      } catch {}
+    }
+    return { model, plot, resize, destroy() { resizeObserver?.disconnect(); globalThis.removeEventListener?.('resize', resize); plot?.destroy?.(); } };
   }, performanceRef);
   measured.metrics = { pointCount: model.rows.length, interactiveMs: measured.durationMs, longestTaskMs: measured.durationMs };
   return measured;

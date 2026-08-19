@@ -50,5 +50,5 @@ export function renderDashboardWidget(host, widget = {}) {
     const status = documentRef.createElement('p'); status.className = 'widget-status'; status.textContent = normalized.state === 'ready' ? normalized.summary ?? 'Ready.' : normalized.state === 'empty' ? 'No data in this scope.' : normalized.state === 'loading' ? 'Loading…' : normalized.state === 'error' ? 'Unable to load this metric.' : 'Metric unavailable.';
     panel.append(status); host.replaceChildren(panel);
   }
-  return { destroy: () => host.replaceChildren() };
+  return { destroy: () => {} };
 }

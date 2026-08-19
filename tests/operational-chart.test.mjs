@@ -20,12 +20,12 @@ test('chart performance instrumentation records scheduling-to-interactive work a
 
 test('exact object-form chart contract separates fallback hosts and returns bounded metrics', () => {
   const makeNode = (tag) => ({ tag, children: [], attributes: {}, clientWidth: 640, append(...children) { this.children.push(...children); }, replaceChildren(...children) { this.children = children; }, setAttribute(name, value) { this.attributes[name] = value; }, remove() { this.removed = true; } });
-  const documentRef = { createElement: makeNode, createDocumentFragment: () => makeNode('fragment') };
+  const documentRef = { createElement: makeNode, createDocumentFragment: () => makeNode('fragment'), getElementById: () => null };
   const host = makeNode('host'); const tableHost = makeNode('table-host'); const summaryHost = makeNode('summary-host');
   const series = { metric: 'requests', unit: 'requests', freshAsOf: '2026-08-11T00:00:00.000Z', scope: { from: '2026-08-10T00:00:00.000Z', to: '2026-08-11T00:00:00.000Z', project: 'project-a' }, points: makePointFixture(2) };
   const normalized = normalizeOperationalChartCall({ host, tableHost, summaryHost, series, label: 'Gateway requests', maxPoints: 2000 }, { documentRef });
   assert.equal(normalized.input.title, 'Gateway requests'); assert.equal(normalized.input.scopeLabel.includes('project project-a'), true);
   let now = 10; const result = renderOperationalChart({ host, tableHost, summaryHost, series, label: 'Gateway requests', maxPoints: 2000 }, { documentRef, uPlotCtor: null, performanceRef: { now: () => ++now, mark() {}, measure() {} } });
   assert.deepEqual(result.metrics, { pointCount: 2, interactiveMs: 1, longestTaskMs: 1 }); assert.equal(host.children.length, 1); assert.equal(tableHost.children.length, 1); assert.equal(summaryHost.children.length, 2);
-  result.destroy(); assert.equal(host.children[0].removed, true);
+  result.destroy(); assert.equal(host.children[0].removed, undefined, 'destroy() must not remove the section from the DOM — replaceChildren() in the route lifecycle handles DOM teardown atomically');
 });

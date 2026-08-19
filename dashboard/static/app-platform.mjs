@@ -13,7 +13,8 @@ const app = document.querySelector('#app'); const announcer = document.querySele
 let scope = parseUrlScope(location.href); let epoch = 0; let activeOnboarding = null; let pendingMutations = 0; let realtime = null; let disposers = [];
 let realtimeScopeKey = null;
 let restoreRouteFocus = false;
-if (matchMedia('(max-width: 1024px) and (min-width: 761px)').matches) { sidebar?.classList.add('is-collapsed'); }
+if (matchMedia('(max-width: 1024px) and (min-width: 761px)').matches) { sidebar?.classList.add('is-collapsed'); document.body.classList.add('sidebar-collapsed'); }
+for (const el of document.querySelectorAll('.sidebar-nav a, .sidebar-nav summary')) { const text = el.querySelector('span')?.textContent; if (text && !el.hasAttribute('data-title')) el.setAttribute('data-title', text); }
 let scopeNotice = null;
 let activeRouteId = null; let activeControls = null; let activeRoot = null;
 const api = createOperationsApi({ token: window.AIOS_TOKEN, getScope: () => scope });
@@ -30,7 +31,20 @@ function scopedDestination(target) {
   if (new URL(location.href).searchParams.get('demo') === 'true') destination.searchParams.set('demo', 'true');
   return `${destination.pathname}${destination.search}${destination.hash}`;
 }
-function updateNav() { for (const link of document.querySelectorAll('.app-header a, .app-sidebar a')) if (!link.pathname.startsWith('/app/setup') && !link.pathname.startsWith('/legacy')) { link.href = scopedDestination(link.pathname === '/app' ? '/' : link.pathname); const isActive = link.pathname === '/' ? location.pathname === '/' : location.pathname.startsWith(link.pathname); link.classList.toggle('is-active', isActive); link.setAttribute('aria-current', isActive ? 'page' : 'false'); } }
+function updateNav() {
+  for (const link of document.querySelectorAll('.app-header a, .app-sidebar a')) {
+    if (!link.pathname.startsWith('/app/setup') && !link.pathname.startsWith('/legacy')) {
+      link.href = scopedDestination(link.pathname === '/app' ? '/' : link.pathname);
+      const isActive = link.pathname === '/' ? location.pathname === '/' : location.pathname.startsWith(link.pathname);
+      link.classList.toggle('is-active', isActive);
+      link.setAttribute('aria-current', isActive ? 'page' : 'false');
+      if (isActive) {
+        const details = link.closest('details');
+        if (details) details.open = true;
+      }
+    }
+  }
+}
 function announce(message) { announcer.textContent = ''; requestAnimationFrame(() => { announcer.textContent = message; }); }
 let searchDialog = null; let searchInput = null; let searchResults = null; let searchStatus = null; let searchRestore = null; let searchTimer = null; let searchIndex = -1;
 function closeSearch() { if (!searchDialog) return; if (typeof searchDialog.close === 'function' && searchDialog.open) searchDialog.close(); else searchDialog.removeAttribute('open'); searchDialog.remove(); searchDialog = null; searchInput = null; searchResults = null; searchStatus = null; searchIndex = -1; clearTimeout(searchTimer); searchRestore?.focus?.(); searchRestore = null; }
@@ -81,13 +95,12 @@ function navigate(target, { replace = false } = {}) {
 function scopeControls() {
   const form = make('form', null, 'scope-controls'); form.setAttribute('aria-label', 'Operational filters and time scope');
   const field = (labelText, name, value, type = 'text') => { const label = make('label', labelText); const input = make('input'); input.name = name; input.type = type; input.value = value ?? ''; label.append(input); return { label, input }; };
-  
+
   const presetLabel = make('label', 'Time preset'); const preset = make('select'); preset.name = 'preset';
   for (const [value,label] of [['custom','Exact interval'],['1h','Last hour'],['24h','Last 24 hours'],['7d','Last 7 days'],['30d','Last 30 days']]) { const option = make('option', label); option.value = value; preset.append(option); }
   presetLabel.append(preset);
   const requestedPreset = new URL(location.href).searchParams.get('preset');
   preset.value = ['1h', '24h', '7d', '30d'].includes(requestedPreset) ? requestedPreset : 'custom';
-  
   const project = field('Project', 'project', scope.project); project.input.placeholder = 'All projects';
   const provider = field('Provider', 'provider', scope.provider); provider.input.placeholder = 'All providers';
   const from = field('From (UTC)', 'from', scope.from.slice(0,16), 'datetime-local');
@@ -166,7 +179,6 @@ function renderBoundary(view) {
   }
   return make('p', `${view.data.activeRuns} active runs · ${view.data.queuedTasks} queued tasks`, 'status');
 }
-
 function missingDetailRecovery(error) {
   const recoveries = {
     TASK_NOT_FOUND: ['/app/operations/tasks', 'Return to task list'], RUN_NOT_FOUND: ['/app/operations/runs', 'Return to run list'],
@@ -176,13 +188,16 @@ function missingDetailRecovery(error) {
 }
 
 async function renderCurrent({ preserveView = false } = {}) {
-  const currentEpoch = ++epoch; cleanupRoute(); api.dispose(); activeOnboarding?.dispose(); activeOnboarding = null;
+  const currentEpoch = ++epoch;
+  const oldDisposers = disposers.splice(0);
+  const triggerCleanup = () => { for (const dispose of oldDisposers) { try { dispose(); } catch (error) { console.error('Operational route cleanup failed.', error); } } };
+  api.dispose(); activeOnboarding?.dispose(); activeOnboarding = null;
   scope = parseUrlScope(location.href); canonicalizeScope(); updateNav(); const url = new URL(location.href); const route = resolveAppRoute(url.pathname === '/' ? '/app' : url.pathname);
-  if (!route) { activeRouteId = null; activeControls = null; activeRoot = null; const panel = make('section', null, 'card'); panel.append(make('h1', 'Page not found'), make('p', 'This application route is not available.')); const home = make('a', 'Return to overview'); home.href = inheritScope('/', scope); panel.append(home); app.replaceChildren(panel); return; }
+  if (!route) { activeRouteId = null; activeControls = null; activeRoot = null; triggerCleanup(); const panel = make('section', null, 'card'); panel.append(make('h1', 'Page not found'), make('p', 'This application route is not available.')); const home = make('a', 'Return to overview'); home.href = inheritScope('/', scope); panel.append(home); app.replaceChildren(panel); return; }
   document.title = `${route.id.replaceAll('-', ' ')} - MeridianOS`;
-  if (route.id === 'setup' || route.id === 'setup-complete') { activeRouteId = null; activeControls = null; activeRoot = null; app.replaceChildren(); activeOnboarding = createOnboardingController({ root: app }); return activeOnboarding.render(); }
+  if (route.id === 'setup' || route.id === 'setup-complete') { activeRouteId = null; activeControls = null; activeRoot = null; triggerCleanup(); app.replaceChildren(); activeOnboarding = createOnboardingController({ root: app }); return activeOnboarding.render(); }
   if (route.id === 'foundation') {
-    activeRouteId = null; activeControls = null; activeRoot = null;
+    activeRouteId = null; activeControls = null; activeRoot = null; triggerCleanup();
     const card = make('section', null, 'card'); card.append(make('h1', 'Platform foundation'), make('p', 'Shared tokens, accessible primitives, typed boundaries, and action-state conventions support the operational application.'));
     app.replaceChildren(card); const status = await readApplicationStatus(); if (currentEpoch === epoch) card.append(renderBoundary(status)); return;
   }
@@ -191,10 +206,15 @@ async function renderCurrent({ preserveView = false } = {}) {
   const root = canReuseShell ? activeRoot : make('div', null, 'route-root');
   const preservedScrollY = canReuseShell ? window.scrollY : null;
   root.setAttribute('aria-busy', 'true');
-  if (!canReuseShell) { root.append(notice('Loading operational information…')); app.replaceChildren(controls, root); }
+  if (!canReuseShell) { triggerCleanup(); root.append(notice('Loading operational information…')); app.replaceChildren(controls, root); }
   try {
     const modulePath = routeModule(route.id); if (!modulePath) throw new Error('This route has no application module.');
     const module = await import(modulePath); if (currentEpoch !== epoch) return;
+    root.replaceChildren = function(...nodes) {
+      if (canReuseShell) triggerCleanup();
+      delete root.replaceChildren;
+      root.replaceChildren(...nodes);
+    };
     const context = {
       root, route, url, scope, api, navigate, announce, postLegacy,
       demo: url.searchParams.get('demo') === 'true',
@@ -208,6 +228,7 @@ async function renderCurrent({ preserveView = false } = {}) {
     if (restoreRouteFocus) root.querySelector('h1')?.focus(); restoreRouteFocus = false;
   } catch (error) {
     if (currentEpoch !== epoch || error?.name === 'AbortError') return;
+    if (canReuseShell) triggerCleanup();
     root.setAttribute('aria-busy','false'); const panel = notice(error.message || 'Operational information is unavailable.', { error: true }); panel.append(make('p', 'Valid regions remain available after refresh; no mutation was applied by this failed read.'), refreshButton('Try again')); const recovery = missingDetailRecovery(error); if (recovery) { const destination = make('a', recovery[1]); destination.href = inheritScope(recovery[0], scope); panel.append(destination); } root.replaceChildren(panel);
   }
   const nextRealtimeScope = JSON.stringify(scope);
@@ -227,9 +248,9 @@ searchTrigger?.addEventListener('click', openSearch);
 document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); } });
 addEventListener('popstate', () => { restoreRouteFocus = true; void renderCurrent(); });
 themeButton.addEventListener('click', () => { const order=['system','light','dark']; const next=order[(order.indexOf(currentTheme())+1)%order.length]; applyTheme(next); announce(`Theme changed to ${next}.`); });
-function syncSidebarDisclosure() { if (matchMedia('(max-width: 760px)').matches) sidebarToggle?.setAttribute('aria-expanded', String(sidebar?.classList.contains('is-open') === true)); else sidebarToggle?.setAttribute('aria-expanded', 'true'); }
+function syncSidebarDisclosure() { if (matchMedia('(max-width: 760px)').matches) { sidebarToggle?.setAttribute('aria-expanded', String(sidebar?.classList.contains('is-open') === true)); sidebar?.classList.remove('is-collapsed'); document.body.classList.remove('sidebar-collapsed'); } else if (matchMedia('(max-width: 1024px)').matches) { sidebar?.classList.remove('is-open'); sidebarScrim?.classList.remove('is-active'); sidebarToggle?.setAttribute('aria-expanded', 'false'); document.body.classList.add('sidebar-collapsed'); } else { sidebar?.classList.remove('is-open'); sidebarScrim?.classList.remove('is-active'); const isCollapsed = sidebar?.classList.contains('is-collapsed') ?? false; sidebarToggle?.setAttribute('aria-expanded', String(!isCollapsed)); document.body.classList.toggle('sidebar-collapsed', isCollapsed); } }
 syncSidebarDisclosure(); addEventListener('resize', syncSidebarDisclosure);
-sidebarToggle?.addEventListener('click', () => { const expanded = sidebarToggle.getAttribute('aria-expanded') === 'true'; sidebarToggle.setAttribute('aria-expanded', String(!expanded)); if (matchMedia('(max-width: 760px)').matches) { const open = !expanded; sidebar?.classList.toggle('is-open', open); sidebarScrim.classList.toggle('is-active', open); } else { sidebar?.classList.toggle('is-collapsed', expanded); } });
+sidebarToggle?.addEventListener('click', () => { if (matchMedia('(max-width: 760px)').matches) { const open = !sidebar?.classList.contains('is-open'); sidebar?.classList.toggle('is-open', open); sidebarScrim.classList.toggle('is-active', open); sidebarToggle.setAttribute('aria-expanded', String(open)); } else { const isCollapsed = !sidebar?.classList.contains('is-collapsed'); sidebar?.classList.toggle('is-collapsed', isCollapsed); document.body.classList.toggle('sidebar-collapsed', isCollapsed); sidebarToggle.setAttribute('aria-expanded', String(!isCollapsed)); } });
 sidebar?.addEventListener('click', (event) => { const link = event.target.closest('a'); if (!link) return; if (matchMedia('(max-width: 760px)').matches) { sidebar?.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); } });
 sidebar?.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches) { sidebar?.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches && sidebar?.classList.contains('is-open')) { sidebar.classList.remove('is-open'); sidebarScrim.classList.remove('is-active'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });

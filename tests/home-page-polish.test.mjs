@@ -13,7 +13,7 @@ test('overview refreshes reuse the mounted shell to preserve scroll and prevent 
 
 test('overview scope and KPI markup support the founder-approved home-page layout', async () => {
   const platform = await fs.readFile('dashboard/static/app-platform.mjs', 'utf8');
-  assert.match(platform, /scope-submit-row/);
+  assert.match(platform, /scope-row-actions/);
   const overview = await fs.readFile('dashboard/app/routes/overview/index.mjs', 'utf8');
   assert.match(overview, /panel-stat-footer/);
   assert.match(overview, /panel-drilldown/);
