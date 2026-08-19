@@ -17,6 +17,7 @@ const REVIEW_ROOT = join(REPO_ROOT, ".ai", "reviews");
 const SKILL_PATH = join(REPO_ROOT, ".github", "skills", "meridianos-review-antigravity", "SKILL.md");
 const INSTRUCTIONS_PATH = join(REPO_ROOT, ".github", "skills", "meridianos-review-antigravity", "instructions.md");
 const BUDGET_EXHAUSTION_PCT = 80;
+const REVIEW_COMMAND_MAX_BUFFER = 16 * 1024 * 1024;
 
 export const EXIT = Object.freeze({ APPROVE: 0, REQUEST_CHANGES: 2, BLOCKED: 3, USAGE: 64 });
 
@@ -36,7 +37,7 @@ function isProjectRelative(path) {
 }
 
 function command(command, args, { cwd = REPO_ROOT, input } = {}) {
-  return execFileSync(command, args, { cwd, encoding: "utf8", input, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true });
+  return execFileSync(command, args, { cwd, encoding: "utf8", input, maxBuffer: REVIEW_COMMAND_MAX_BUFFER, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true });
 }
 
 function createDefaultDeps() {
