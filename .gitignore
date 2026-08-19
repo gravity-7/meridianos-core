@@ -55,6 +55,8 @@ docs/MASTER-PLAN-CLOSE-GAPS.md
 /debug-activity.mjs
 /test-output.txt
 /artifacts/
+# Local backup of Spec 018 scratch scripts and visual captures; never commit
+/artifacts/018-home-page-polish-backup/
 
 # Phase 7 packaged binary / Electron installer output (scripts/build.mjs, desktop/electron-builder)
 dist/
