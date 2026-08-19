@@ -4,8 +4,9 @@ import { renderCircledMeter, dashboardPanel, renderPanelFamily } from '../../sha
 
 function panelStat(documentRef, title, value, caption, destination = null) {
   const panel = dashboardPanel(documentRef, { title, kind: 'stat' });
-  const strong = make('strong', value == null ? '—' : String(value)); const detail = make('span', caption ?? 'No data', 'stat-caption'); panel.append(strong, detail);
-  if (destination) panel.append(link(destination.href, destination.label)); return panel;
+  const strong = make('strong', value == null ? '—' : String(value)); const footer = make('div', null, 'panel-stat-footer'); footer.append(make('span', caption ?? 'No data', 'stat-caption'));
+  if (destination) { footer.append(link(destination.href, destination.label, 'panel-drilldown')); }
+  panel.append(strong, footer); return panel;
 }
 
 function panelList(documentRef, title, items, emptyMessage) {

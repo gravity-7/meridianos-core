@@ -14,6 +14,7 @@ let scope = parseUrlScope(location.href); let epoch = 0; let activeOnboarding = 
 let realtimeScopeKey = null;
 let restoreRouteFocus = false;
 let scopeNotice = null;
+let activeRouteId = null; let activeControls = null; let activeRoot = null;
 const api = createOperationsApi({ token: window.AIOS_TOKEN, getScope: () => scope });
 
 function applyTheme(theme) { const selected = applyThemePreference(theme); themeButton.textContent = `Theme: ${selected}`; themeButton.setAttribute('aria-label', `Change color theme; current ${selected}`); }
@@ -82,8 +83,8 @@ function scopeControls() {
   for (const [value,label] of [['custom','Exact interval'],['1h','Last hour'],['24h','Last 24 hours'],['7d','Last 7 days'],['30d','Last 30 days']]) { const option = make('option', label); option.value = value; preset.append(option); } presetLabel.append(preset);
   const requestedPreset = new URL(location.href).searchParams.get('preset'); preset.value = ['1h', '24h', '7d', '30d'].includes(requestedPreset) ? requestedPreset : 'custom';
   const field = (labelText, name, value, type = 'text') => { const label = make('label', labelText); const input = make('input'); input.name = name; input.type = type; input.value = value ?? ''; label.append(input); return { label, input }; };
-  const project = field('Project', 'project', scope.project); const provider = field('Provider', 'provider', scope.provider); const from = field('From (UTC)', 'from', scope.from.slice(0,16), 'datetime-local'); const to = field('To (UTC, exclusive)', 'to', scope.to.slice(0,16), 'datetime-local');
-  const submit = make('button', 'Apply scope'); submit.type = 'submit';
+  const project = field('Project', 'project', scope.project); project.input.placeholder = 'All projects'; const provider = field('Provider', 'provider', scope.provider); provider.input.placeholder = 'All providers'; const from = field('From (UTC)', 'from', scope.from.slice(0,16), 'datetime-local'); const to = field('To (UTC, exclusive)', 'to', scope.to.slice(0,16), 'datetime-local');
+  const submit = make('button', 'Apply scope'); submit.type = 'submit'; const submitRow = make('div', null, 'scope-submit-row'); submitRow.append(submit);
   const live = make('div', null, 'refresh-controls'); const refresh = make('button', 'Refresh now'); refresh.type = 'button'; const realtimeLabel = make('label'); const checkbox = make('input'); checkbox.type = 'checkbox'; checkbox.checked = localStorage.getItem(realtimeKey) === 'true'; const demo = new URL(location.href).searchParams.get('demo') === 'true'; checkbox.disabled = demo;
   const state = make('span', scopeNotice ?? 'Polling every 10 seconds.', 'realtime-state'); state.id = 'realtime-state'; state.setAttribute('role','status');
   preset.addEventListener('change', () => { if (preset.value === 'custom') return; scope = presetScope(preset.value, { ...scope }); scopeNotice = `Showing ${preset.options[preset.selectedIndex].textContent.toLowerCase()}.`; const params = serializeUrlScope(scope); params.set('preset', preset.value); navigate(`${location.pathname}?${params}`); });
@@ -96,13 +97,13 @@ function scopeControls() {
   realtimeLabel.append(checkbox, document.createTextNode(demo ? ' Realtime disabled for demo data' : ' Use realtime updates'));
   checkbox.addEventListener('change', () => { localStorage.setItem(realtimeKey, String(checkbox.checked)); realtime?.setRealtime(checkbox.checked); });
   live.append(refresh, realtimeLabel, state);
-  form.append(presetLabel, project.label, provider.label, from.label, to.label, submit, live); return form;
+  form.append(presetLabel, project.label, provider.label, from.label, to.label, submitRow, live); return form;
 }
 async function postLegacy(path, body) {
   const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-aios-token': window.AIOS_TOKEN, 'x-correlation-id': crypto.randomUUID() }, body: JSON.stringify(body) });
   const value = await response.json().catch(() => ({})); if (!response.ok || value.ok === false) throw new Error(value.error?.message || value.error || 'The action failed.'); return value;
 }
-function refreshButton(label) { const button = make('button', label); button.type = 'button'; button.addEventListener('click', () => void renderCurrent()); return button; }
+function refreshButton(label) { const button = make('button', label); button.type = 'button'; button.addEventListener('click', () => void renderCurrent({ preserveView: true })); return button; }
 function forcedStatePanel(state) {
   const messages = { idle: 'Ready when you are.', pending: 'Your action is in progress…', disabled: 'This action is currently unavailable.', success: 'Your action completed successfully.', loading: 'Loading application information…', empty: 'There is nothing to show yet.', error: 'Unable to load this information.', fatal: 'This action cannot be completed. Check your access or contact an administrator.' };
   if (!messages[state]) return null;
@@ -128,17 +129,23 @@ function missingDetailRecovery(error) {
   return recoveries[error?.code] ?? null;
 }
 
-async function renderCurrent() {
+async function renderCurrent({ preserveView = false } = {}) {
   const currentEpoch = ++epoch; cleanupRoute(); api.dispose(); activeOnboarding?.dispose(); activeOnboarding = null;
   scope = parseUrlScope(location.href); canonicalizeScope(); updateNav(); const url = new URL(location.href); const route = resolveAppRoute(url.pathname === '/' ? '/app' : url.pathname);
-  if (!route) { const panel = make('section', null, 'card'); panel.append(make('h1', 'Page not found'), make('p', 'This application route is not available.')); const home = make('a', 'Return to overview'); home.href = inheritScope('/', scope); panel.append(home); app.replaceChildren(panel); return; }
+  if (!route) { activeRouteId = null; activeControls = null; activeRoot = null; const panel = make('section', null, 'card'); panel.append(make('h1', 'Page not found'), make('p', 'This application route is not available.')); const home = make('a', 'Return to overview'); home.href = inheritScope('/', scope); panel.append(home); app.replaceChildren(panel); return; }
   document.title = `${route.id.replaceAll('-', ' ')} - MeridianOS`;
-  if (route.id === 'setup' || route.id === 'setup-complete') { app.replaceChildren(); activeOnboarding = createOnboardingController({ root: app }); return activeOnboarding.render(); }
+  if (route.id === 'setup' || route.id === 'setup-complete') { activeRouteId = null; activeControls = null; activeRoot = null; app.replaceChildren(); activeOnboarding = createOnboardingController({ root: app }); return activeOnboarding.render(); }
   if (route.id === 'foundation') {
+    activeRouteId = null; activeControls = null; activeRoot = null;
     const card = make('section', null, 'card'); card.append(make('h1', 'Platform foundation'), make('p', 'Shared tokens, accessible primitives, typed boundaries, and action-state conventions support the operational application.'));
     app.replaceChildren(card); const status = await readApplicationStatus(); if (currentEpoch === epoch) card.append(renderBoundary(status)); return;
   }
-  const controls = scopeControls(); const root = make('div', null, 'route-root'); root.setAttribute('aria-busy','true'); root.append(notice('Loading operational information…')); app.replaceChildren(controls, root);
+  const canReuseShell = preserveView && activeRouteId === route.id && activeControls?.isConnected && activeRoot?.isConnected && app.contains(activeRoot);
+  const controls = canReuseShell ? activeControls : scopeControls();
+  const root = canReuseShell ? activeRoot : make('div', null, 'route-root');
+  const preservedScrollY = canReuseShell ? window.scrollY : null;
+  root.setAttribute('aria-busy', 'true');
+  if (!canReuseShell) { root.append(notice('Loading operational information…')); app.replaceChildren(controls, root); }
   try {
     const modulePath = routeModule(route.id); if (!modulePath) throw new Error('This route has no application module.');
     const module = await import(modulePath); if (currentEpoch !== epoch) return;
@@ -147,15 +154,18 @@ async function renderCurrent() {
       demo: url.searchParams.get('demo') === 'true',
       isCurrent: () => currentEpoch === epoch,
       setPending(value) { pendingMutations += value ? 1 : -1; pendingMutations = Math.max(0, pendingMutations); },
-      registerDispose(dispose) { disposers.push(dispose); }, refresh: () => renderCurrent(), refreshButton,
+      registerDispose(dispose) { disposers.push(dispose); }, refresh: () => renderCurrent({ preserveView: true }), refreshButton,
     };
-    await module.renderRoute(context); root.setAttribute('aria-busy','false'); const forced = forcedStatePanel(url.searchParams.get('state')); if (forced) root.append(forced);
+    await module.renderRoute(context);
+    if (preservedScrollY != null && window.scrollY !== preservedScrollY) window.scrollTo(0, preservedScrollY);
+    root.setAttribute('aria-busy','false'); const forced = forcedStatePanel(url.searchParams.get('state')); if (forced) root.append(forced);
     if (restoreRouteFocus) root.querySelector('h1')?.focus(); restoreRouteFocus = false;
   } catch (error) {
     if (currentEpoch !== epoch || error?.name === 'AbortError') return;
     root.setAttribute('aria-busy','false'); const panel = notice(error.message || 'Operational information is unavailable.', { error: true }); panel.append(make('p', 'Valid regions remain available after refresh; no mutation was applied by this failed read.'), refreshButton('Try again')); const recovery = missingDetailRecovery(error); if (recovery) { const destination = make('a', recovery[1]); destination.href = inheritScope(recovery[0], scope); panel.append(destination); } root.replaceChildren(panel);
   }
   const nextRealtimeScope = JSON.stringify(scope);
+  activeRouteId = route.id; activeControls = controls; activeRoot = root;
   if (realtimeScopeKey != null && realtimeScopeKey !== nextRealtimeScope) realtime?.setRealtime(localStorage.getItem(realtimeKey) === 'true');
   realtimeScopeKey = nextRealtimeScope;
   if (scopeNotice) { const target = document.querySelector('#realtime-state'); if (target) target.textContent = scopeNotice; announce(scopeNotice); scopeNotice = null; }
@@ -180,7 +190,7 @@ addEventListener('beforeunload', () => { cleanupRoute(); api.dispose(); realtime
 applyTheme(currentTheme()); scope = parseUrlScope(location.href); canonicalizeScope();
 realtime = createRealtimeCoordinator({
   url: () => `/api/operations/events?${serializeUrlScope(scope)}`,
-  scopeKey: () => JSON.stringify(scope), refresh: () => renderCurrent(), hasPendingMutation: () => pendingMutations > 0,
+  scopeKey: () => JSON.stringify(scope), refresh: () => renderCurrent({ preserveView: true }), hasPendingMutation: () => pendingMutations > 0,
   demo: new URL(location.href).searchParams.get('demo') === 'true',
   onState: ({ message }) => { const target = document.querySelector('#realtime-state'); if (target) target.textContent = message; announce(message); },
 });
