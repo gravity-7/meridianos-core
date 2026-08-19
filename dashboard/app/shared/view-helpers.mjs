@@ -17,4 +17,13 @@ export function table(headers, rows, captionText) {
 }
 export function page(title, intro = null) { const node = make('div', null, 'route-page'); const heading = make('h1', title); heading.tabIndex = -1; node.append(heading); if (intro) node.append(make('p', intro, 'lede')); return { node, heading }; }
 export function notice(message, { error = false } = {}) { const node = make('div', message, error ? 'notice notice-error' : 'notice'); node.setAttribute('role', error ? 'alert' : 'status'); return node; }
-export function scopeText(scope) { return `${scope.from} inclusive to ${scope.to} exclusive · UTC${scope.project ? ` · project ${scope.project}` : ''}${scope.provider ? ` · provider ${scope.provider}` : ''}`; }
+export function scopeText(scope) {
+  try {
+    const f = new Intl.DateTimeFormat(navigator.language, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const fromStr = f.format(new Date(scope.from));
+    const toStr = f.format(new Date(scope.to));
+    return `${fromStr} - ${toStr} (UTC)${scope.project ? ` • project ${scope.project}` : ''}${scope.provider ? ` • provider ${scope.provider}` : ''}`;
+  } catch {
+    return `${scope.from} inclusive to ${scope.to} exclusive • UTC${scope.project ? ` • project ${scope.project}` : ''}${scope.provider ? ` • provider ${scope.provider}` : ''}`;
+  }
+}
