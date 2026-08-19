@@ -76,8 +76,8 @@ export function renderOperationalChart(containerOrContract, inputOrRuntime, runt
     let plot = null;
     if (uPlotCtor && model.rows.length) {
       const accent = documentRef.defaultView?.getComputedStyle?.(documentRef.documentElement)?.getPropertyValue('--accent')?.trim() || '#315efb';
-      plot = new uPlotCtor({ width: Math.max(280, visual.clientWidth || 640), height: 240, series: [{}, { label: model.unit, stroke: accent, width: 2 }], axes: [{}, {}] }, prepareUPlotData(model), visual);
-    } else if (!model.rows.length) visual.replaceChildren(text(documentRef, 'p', `No ${model.unit} data in this scope.`));
+      plot = new uPlotCtor({ width: Math.max(280, visual.clientWidth || 640), height: 240, series: [{}, { label: model.unit, stroke: accent, width: 2 }], axes: [{}, { label: model.unit }] }, prepareUPlotData(model), visual);
+    } else if (!model.rows.length) { visual.className = 'chart-visual panel-empty'; visual.replaceChildren(text(documentRef, 'p', `No ${model.unit} data in this scope.`)); }
     const resize = () => { if (plot && visual.clientWidth) plot.setSize({ width: visual.clientWidth, height: 240 }); };
     globalThis.addEventListener?.('resize', resize);
     return { model, plot, resize, destroy() { globalThis.removeEventListener?.('resize', resize); plot?.destroy?.(); section.remove?.(); if (summaryHost && summaryHost !== container) { summary.remove?.(); meta.remove?.(); } if (tableHost && tableHost !== container) details.remove?.(); } };
