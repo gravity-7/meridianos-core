@@ -9,10 +9,11 @@ import { make, notice } from '/static/app/shared/view-helpers.mjs';
 import { applyThemePreference, parseThemePreference } from '/static/app/shared/theme-preference.mjs';
 
 const themeKey = 'meridianos-ui-theme'; const realtimeKey = 'meridianos-operational-realtime';
-const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme'); const searchTrigger = document.querySelector('#search-trigger'); const sidebar = document.querySelector('#app-sidebar'); const sidebarToggle = document.querySelector('#sidebar-toggle');
+const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme'); const searchTrigger = document.querySelector('#search-trigger'); const sidebar = document.querySelector('#app-sidebar'); const sidebarToggle = document.querySelector('#sidebar-toggle'); const sidebarScrim = document.createElement('div'); sidebarScrim.className = 'sidebar-scrim'; sidebarScrim.setAttribute('aria-hidden', 'true'); document.querySelector('.app-layout').prepend(sidebarScrim); sidebarScrim.addEventListener('click', () => { sidebar?.classList.remove('is-open'); sidebarScrim.classList.remove('is-active'); sidebarScrim.classList.remove('is-active'); sidebarToggle?.setAttribute('aria-expanded', 'false'); });
 let scope = parseUrlScope(location.href); let epoch = 0; let activeOnboarding = null; let pendingMutations = 0; let realtime = null; let disposers = [];
 let realtimeScopeKey = null;
 let restoreRouteFocus = false;
+if (matchMedia('(max-width: 1024px) and (min-width: 761px)').matches) { sidebar?.classList.add('is-collapsed'); }
 let scopeNotice = null;
 let activeRouteId = null; let activeControls = null; let activeRoot = null;
 const api = createOperationsApi({ token: window.AIOS_TOKEN, getScope: () => scope });
@@ -29,7 +30,7 @@ function scopedDestination(target) {
   if (new URL(location.href).searchParams.get('demo') === 'true') destination.searchParams.set('demo', 'true');
   return `${destination.pathname}${destination.search}${destination.hash}`;
 }
-function updateNav() { for (const link of document.querySelectorAll('.app-header a, .app-sidebar a')) if (!link.pathname.startsWith('/app/setup')) { link.href = scopedDestination(link.pathname === '/app' ? '/' : link.pathname); link.classList.toggle('is-active', link.pathname === location.pathname || (link.pathname === '/' && location.pathname === '/')); } }
+function updateNav() { for (const link of document.querySelectorAll('.app-header a, .app-sidebar a')) if (!link.pathname.startsWith('/app/setup') && !link.pathname.startsWith('/legacy')) { link.href = scopedDestination(link.pathname === '/app' ? '/' : link.pathname); const isActive = link.pathname === '/' ? location.pathname === '/' : location.pathname.startsWith(link.pathname); link.classList.toggle('is-active', isActive); link.setAttribute('aria-current', isActive ? 'page' : 'false'); } }
 function announce(message) { announcer.textContent = ''; requestAnimationFrame(() => { announcer.textContent = message; }); }
 let searchDialog = null; let searchInput = null; let searchResults = null; let searchStatus = null; let searchRestore = null; let searchTimer = null; let searchIndex = -1;
 function closeSearch() { if (!searchDialog) return; if (typeof searchDialog.close === 'function' && searchDialog.open) searchDialog.close(); else searchDialog.removeAttribute('open'); searchDialog.remove(); searchDialog = null; searchInput = null; searchResults = null; searchStatus = null; searchIndex = -1; clearTimeout(searchTimer); searchRestore?.focus?.(); searchRestore = null; }
@@ -172,8 +173,10 @@ async function renderCurrent({ preserveView = false } = {}) {
 }
 
 document.addEventListener('click', (event) => {
-  const link = event.target.closest('a[href^="/app"]'); if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-  event.preventDefault(); navigate(link.href);
+    const link = event.target.closest('a');
+    if (!link || link.origin !== location.origin || link.hasAttribute('download') || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (link.pathname.startsWith('/legacy') || link.pathname.startsWith('/app/setup')) return;
+    event.preventDefault(); navigate(link.href);
 });
 searchTrigger?.addEventListener('click', openSearch);
 document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); } });
@@ -181,10 +184,10 @@ addEventListener('popstate', () => { restoreRouteFocus = true; void renderCurren
 themeButton.addEventListener('click', () => { const order=['system','light','dark']; const next=order[(order.indexOf(currentTheme())+1)%order.length]; applyTheme(next); announce(`Theme changed to ${next}.`); });
 function syncSidebarDisclosure() { if (matchMedia('(max-width: 760px)').matches) sidebarToggle?.setAttribute('aria-expanded', String(sidebar?.classList.contains('is-open') === true)); else sidebarToggle?.setAttribute('aria-expanded', 'true'); }
 syncSidebarDisclosure(); addEventListener('resize', syncSidebarDisclosure);
-sidebarToggle?.addEventListener('click', () => { const expanded = sidebarToggle.getAttribute('aria-expanded') === 'true'; sidebarToggle.setAttribute('aria-expanded', String(!expanded)); if (matchMedia('(max-width: 760px)').matches) sidebar?.classList.toggle('is-open', !expanded); else sidebar?.classList.toggle('is-collapsed', expanded); });
+sidebarToggle?.addEventListener('click', () => { const expanded = sidebarToggle.getAttribute('aria-expanded') === 'true'; sidebarToggle.setAttribute('aria-expanded', String(!expanded)); if (matchMedia('(max-width: 760px)').matches) { const open = !expanded; sidebar?.classList.toggle('is-open', open); sidebarScrim.classList.toggle('is-active', open); } else { sidebar?.classList.toggle('is-collapsed', expanded); } });
 sidebar?.addEventListener('click', (event) => { const link = event.target.closest('a'); if (!link) return; if (matchMedia('(max-width: 760px)').matches) { sidebar?.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); } });
 sidebar?.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches) { sidebar?.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches && sidebar?.classList.contains('is-open')) { sidebar.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches && sidebar?.classList.contains('is-open')) { sidebar.classList.remove('is-open'); sidebarScrim.classList.remove('is-active'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });
 addEventListener('beforeunload', () => { cleanupRoute(); api.dispose(); realtime?.stop(); });
 
 applyTheme(currentTheme()); scope = parseUrlScope(location.href); canonicalizeScope();
