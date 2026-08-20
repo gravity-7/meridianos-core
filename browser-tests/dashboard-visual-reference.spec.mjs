@@ -12,7 +12,7 @@ test('desktop root board matches the Grafana-inspired hierarchy and keeps the le
   await expect(page.locator('.panel-graph')).toHaveCount(4);
   await expect(page.locator('.panel-bar-gauge')).toBeVisible();
   await expect(page.locator('.panel-heatmap')).toBeVisible();
-  await expect(page.locator('.panel-table')).toHaveCount(2);
+  await expect(page.locator('.panel-table')).toHaveCount(1);
   await expect(page.locator('.panel-list')).toHaveCount(2);
   await page.getByRole('button', { name: /Change color theme/ }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');

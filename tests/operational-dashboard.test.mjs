@@ -13,7 +13,7 @@ test('circled meter model exposes threshold status and accessible empty state', 
 
 test('root route includes operational trends and circled meter panels', async () => {
   const source = await fs.readFile('dashboard/app/routes/overview/index.mjs', 'utf8');
-  for (const marker of ['renderCircledMeter', 'Cost used', 'Tokens used', 'Budget consumed', 'Request volume', 'Latency P95', 'Cost over time', 'Token usage', 'Open alerts', 'Error rate gauge', 'Latency heatmap', 'Budget signals', 'Recent activity']) assert.match(source, new RegExp(marker));
+  for (const marker of ['renderCircledMeter', 'Cost used', 'Tokens used', 'Budget consumed', 'Request volume', 'Latency P95', 'Cost over time', 'Token usage', 'Open alert list', 'Error rate gauge', 'Latency heatmap', 'Budget signals', 'Recent activity']) assert.match(source, new RegExp(marker));
   const panelSource = await fs.readFile('dashboard/app/shared/dashboard-panels.mjs', 'utf8');
   for (const family of ['bar-gauge', 'heatmap', 'panel-family-table', 'panel-family-list']) assert.match(panelSource, new RegExp(family));
   const css = await fs.readFile('dashboard/static/app-platform.css', 'utf8');

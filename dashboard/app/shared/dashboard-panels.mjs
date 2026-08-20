@@ -20,11 +20,13 @@ export function renderCircledMeter(host, input = {}) {
   const state = documentRef.createElement('span'); state.className = 'meter-state'; state.textContent = model.value == null ? 'No data' : model.status;
   ring.append(value, unit); panel.append(heading, ring, state);
   const details = documentRef.createElement('p'); details.className = 'meter-details'; details.textContent = model.value == null ? 'No metric data is available in this scope.' : `${model.percent.toFixed(0)}% of ${model.max} ${model.unit}`; panel.append(details);
-  host.replaceChildren(panel); return { model, destroy: () => panel.remove() };
+  host.replaceChildren(panel); return { model, destroy: () => {} };
 }
 
 export function dashboardPanel(documentRef, { title, kind = 'panel', className = '' } = {}, ...children) {
-  const panel = documentRef.createElement('section'); panel.className = `dashboard-panel panel-${kind}${className ? ` ${className}` : ''}`; const heading = documentRef.createElement('h2'); heading.textContent = title; panel.append(heading, ...children.filter(Boolean)); return panel;
+  const panel = documentRef.createElement('section'); panel.className = `dashboard-panel panel-${kind}${className ? ` ${className}` : ''}`; const heading = documentRef.createElement('h2');
+  if (title?.nodeType) heading.append(title); else heading.textContent = title ?? '';
+  panel.append(heading, ...children.filter(Boolean)); return panel;
 }
 
 /**
@@ -47,13 +49,13 @@ export function renderPanelFamily(host, { title, kind = 'stat', value = null, pe
     if (!rows.length) heatmap.append(Object.assign(documentRef.createElement('span'), { className: 'heatmap-empty', textContent: emptyMessage }));
     panel.append(heatmap);
   } else if (kind === 'table') {
-    const table = documentRef.createElement('table'); table.className = 'data-table panel-family-table'; const captionNode = documentRef.createElement('caption'); captionNode.textContent = title; table.append(captionNode);
+    const table = documentRef.createElement('table'); table.className = 'data-table panel-family-table'; const captionNode = documentRef.createElement('caption'); captionNode.className = 'visually-hidden'; captionNode.textContent = title; table.append(captionNode);
     const head = documentRef.createElement('thead'); const headerRow = documentRef.createElement('tr'); for (const label of ['Signal', 'Value']) { const th = documentRef.createElement('th'); th.scope = 'col'; th.textContent = label; headerRow.append(th); } head.append(headerRow); table.append(head);
-    const body = documentRef.createElement('tbody'); for (const row of rows) { const tr = documentRef.createElement('tr'); const name = documentRef.createElement('th'); name.scope = 'row'; name.textContent = row.label ?? 'Metric'; const valueCell = documentRef.createElement('td'); valueCell.textContent = row.value ?? '—'; tr.append(name, valueCell); body.append(tr); } table.append(body); panel.append(table);
+    const body = documentRef.createElement('tbody'); for (const row of rows) { const tr = documentRef.createElement('tr'); const name = documentRef.createElement('th'); name.scope = 'row'; name.textContent = row.label ?? 'Metric'; const valueCell = documentRef.createElement('td'); valueCell.append(row.value?.nodeType ? row.value : documentRef.createTextNode(String(row.value ?? '—'))); tr.append(name, valueCell); body.append(tr); } table.append(body); panel.append(table);
   } else {
     const list = documentRef.createElement('ul'); list.className = 'panel-family-list';
     if (!rows.length) { const empty = documentRef.createElement('li'); empty.className = 'panel-family-empty'; empty.textContent = emptyMessage; list.append(empty); }
-    for (const row of rows) { const item = documentRef.createElement('li'); item.className = 'panel-family-row'; const label = documentRef.createElement('span'); label.textContent = row.label ?? 'Event'; const valueNode = documentRef.createElement('strong'); valueNode.textContent = row.value ?? ''; item.append(label, valueNode); list.append(item); }
+    for (const row of rows) { const item = documentRef.createElement('li'); item.className = 'panel-family-row'; const label = documentRef.createElement('span'); label.append(row.label?.nodeType ? row.label : documentRef.createTextNode(String(row.label ?? 'Event'))); const valueNode = documentRef.createElement('strong'); valueNode.append(row.value?.nodeType ? row.value : documentRef.createTextNode(String(row.value ?? ''))); item.append(label, valueNode); list.append(item); }
     panel.append(list);
   }
   if (href) { const link = documentRef.createElement('a'); link.href = href; link.className = 'panel-drilldown'; link.textContent = linkLabel; panel.append(link); }

@@ -71,9 +71,10 @@ test('existing onboarding baseline remains a synthetic headed /setup journey wit
     await page.getByRole('button', { name: 'Go to dashboard' }).click();
     await expect(page.locator('#app .scope-controls')).toBeVisible();
     await page.getByLabel('Time preset').selectOption('24h');
+    await page.getByRole('button', { name: 'Apply scope' }).click();
     await expect(page).toHaveURL(/preset=24h/);
     await expect(page.getByLabel('Time preset')).toHaveValue('24h');
-    await expect(page.locator('#realtime-state')).toContainText('Showing last 24 hours.');
+    await expect(page.locator('#realtime-state')).toContainText('Scope applied.');
     await page.getByLabel('Project').fill('synthetic-project');
     await page.getByRole('button', { name: 'Apply scope' }).click();
     await expect(page).toHaveURL(/project=synthetic-project/);

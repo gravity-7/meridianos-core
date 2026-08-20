@@ -9,11 +9,14 @@ import { make, notice } from '/static/app/shared/view-helpers.mjs';
 import { applyThemePreference, parseThemePreference } from '/static/app/shared/theme-preference.mjs';
 
 const themeKey = 'meridianos-ui-theme'; const realtimeKey = 'meridianos-operational-realtime';
-const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme'); const searchTrigger = document.querySelector('#search-trigger'); const sidebar = document.querySelector('#app-sidebar'); const sidebarToggle = document.querySelector('#sidebar-toggle');
+const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme'); const searchTrigger = document.querySelector('#search-trigger'); const sidebar = document.querySelector('#app-sidebar'); const sidebarToggle = document.querySelector('#sidebar-toggle'); const sidebarScrim = document.createElement('div'); sidebarScrim.className = 'sidebar-scrim'; sidebarScrim.setAttribute('aria-hidden', 'true'); document.querySelector('.app-layout').prepend(sidebarScrim); sidebarScrim.addEventListener('click', () => { sidebar?.classList.remove('is-open'); sidebarScrim.classList.remove('is-active'); sidebarToggle?.setAttribute('aria-expanded', 'false'); });
 let scope = parseUrlScope(location.href); let epoch = 0; let activeOnboarding = null; let pendingMutations = 0; let realtime = null; let disposers = [];
 let realtimeScopeKey = null;
 let restoreRouteFocus = false;
+if (matchMedia('(max-width: 1024px) and (min-width: 761px)').matches) { sidebar?.classList.add('is-collapsed'); document.body.classList.add('sidebar-collapsed'); }
+for (const el of document.querySelectorAll('.sidebar-nav a, .sidebar-nav summary')) { const text = el.querySelector('span')?.textContent; if (text && !el.hasAttribute('data-title')) el.setAttribute('data-title', text); }
 let scopeNotice = null;
+let activeRouteId = null; let activeControls = null; let activeRoot = null;
 const api = createOperationsApi({ token: window.AIOS_TOKEN, getScope: () => scope });
 
 function applyTheme(theme) { const selected = applyThemePreference(theme); themeButton.textContent = `Theme: ${selected}`; themeButton.setAttribute('aria-label', `Change color theme; current ${selected}`); }
@@ -28,7 +31,20 @@ function scopedDestination(target) {
   if (new URL(location.href).searchParams.get('demo') === 'true') destination.searchParams.set('demo', 'true');
   return `${destination.pathname}${destination.search}${destination.hash}`;
 }
-function updateNav() { for (const link of document.querySelectorAll('.app-header a, .app-sidebar a')) if (!link.pathname.startsWith('/app/setup')) { link.href = scopedDestination(link.pathname === '/app' ? '/' : link.pathname); link.classList.toggle('is-active', link.pathname === location.pathname || (link.pathname === '/' && location.pathname === '/')); } }
+function updateNav() {
+  for (const link of document.querySelectorAll('.app-header a, .app-sidebar a')) {
+    if (!link.pathname.startsWith('/app/setup') && !link.pathname.startsWith('/legacy')) {
+      link.href = scopedDestination(link.pathname === '/app' ? '/' : link.pathname);
+      const isActive = link.pathname === '/' ? location.pathname === '/' : location.pathname.startsWith(link.pathname);
+      link.classList.toggle('is-active', isActive);
+      link.setAttribute('aria-current', isActive ? 'page' : 'false');
+      if (isActive) {
+        const details = link.closest('details');
+        if (details) details.open = true;
+      }
+    }
+  }
+}
 function announce(message) { announcer.textContent = ''; requestAnimationFrame(() => { announcer.textContent = message; }); }
 let searchDialog = null; let searchInput = null; let searchResults = null; let searchStatus = null; let searchRestore = null; let searchTimer = null; let searchIndex = -1;
 function closeSearch() { if (!searchDialog) return; if (typeof searchDialog.close === 'function' && searchDialog.open) searchDialog.close(); else searchDialog.removeAttribute('open'); searchDialog.remove(); searchDialog = null; searchInput = null; searchResults = null; searchStatus = null; searchIndex = -1; clearTimeout(searchTimer); searchRestore?.focus?.(); searchRestore = null; }
@@ -78,31 +94,75 @@ function navigate(target, { replace = false } = {}) {
 }
 function scopeControls() {
   const form = make('form', null, 'scope-controls'); form.setAttribute('aria-label', 'Operational filters and time scope');
-  const presetLabel = make('label', 'Time preset'); const preset = make('select'); preset.name = 'preset';
-  for (const [value,label] of [['custom','Exact interval'],['1h','Last hour'],['24h','Last 24 hours'],['7d','Last 7 days'],['30d','Last 30 days']]) { const option = make('option', label); option.value = value; preset.append(option); } presetLabel.append(preset);
-  const requestedPreset = new URL(location.href).searchParams.get('preset'); preset.value = ['1h', '24h', '7d', '30d'].includes(requestedPreset) ? requestedPreset : 'custom';
   const field = (labelText, name, value, type = 'text') => { const label = make('label', labelText); const input = make('input'); input.name = name; input.type = type; input.value = value ?? ''; label.append(input); return { label, input }; };
-  const project = field('Project', 'project', scope.project); const provider = field('Provider', 'provider', scope.provider); const from = field('From (UTC)', 'from', scope.from.slice(0,16), 'datetime-local'); const to = field('To (UTC, exclusive)', 'to', scope.to.slice(0,16), 'datetime-local');
-  const submit = make('button', 'Apply scope'); submit.type = 'submit';
-  const live = make('div', null, 'refresh-controls'); const refresh = make('button', 'Refresh now'); refresh.type = 'button'; const realtimeLabel = make('label'); const checkbox = make('input'); checkbox.type = 'checkbox'; checkbox.checked = localStorage.getItem(realtimeKey) === 'true'; const demo = new URL(location.href).searchParams.get('demo') === 'true'; checkbox.disabled = demo;
+
+  const presetLabel = make('label', 'Time preset'); const preset = make('select'); preset.name = 'preset';
+  for (const [value,label] of [['custom','Exact interval'],['1h','Last hour'],['24h','Last 24 hours'],['7d','Last 7 days'],['30d','Last 30 days']]) { const option = make('option', label); option.value = value; preset.append(option); }
+  presetLabel.append(preset);
+  const requestedPreset = new URL(location.href).searchParams.get('preset');
+  preset.value = ['1h', '24h', '7d', '30d'].includes(requestedPreset) ? requestedPreset : 'custom';
+  const project = field('Project', 'project', scope.project); project.input.placeholder = 'All projects';
+  const provider = field('Provider', 'provider', scope.provider); provider.input.placeholder = 'All providers';
+  const from = field('From (UTC)', 'from', scope.from.slice(0,16), 'datetime-local');
+  const to = field('To (UTC, exclusive)', 'to', scope.to.slice(0,16), 'datetime-local');
+  
+  const row1 = make('div', null, 'scope-row-filters');
+  row1.append(presetLabel, project.label, provider.label, from.label, to.label);
+  
+  const submit = make('button', 'Apply scope'); submit.type = 'submit'; submit.className = 'btn-primary';
+  const refresh = make('button', 'Refresh now'); refresh.type = 'button';
+  const realtimeLabel = make('label', '', 'realtime-label'); const checkbox = make('input'); checkbox.type = 'checkbox';
+  checkbox.checked = localStorage.getItem(realtimeKey) === 'true';
+  const demo = new URL(location.href).searchParams.get('demo') === 'true'; checkbox.disabled = demo;
+  realtimeLabel.append(checkbox, document.createTextNode(demo ? ' Realtime disabled for demo data' : ' Use realtime updates'));
   const state = make('span', scopeNotice ?? 'Polling every 10 seconds.', 'realtime-state'); state.id = 'realtime-state'; state.setAttribute('role','status');
-  preset.addEventListener('change', () => { if (preset.value === 'custom') return; scope = presetScope(preset.value, { ...scope }); scopeNotice = `Showing ${preset.options[preset.selectedIndex].textContent.toLowerCase()}.`; const params = serializeUrlScope(scope); params.set('preset', preset.value); navigate(`${location.pathname}?${params}`); });
+  
+  const row2 = make('div', null, 'scope-row-actions');
+  
+  // MER-UI-023: Add "Reset" button
+  const reset = make('button', 'Reset to default'); reset.type = 'button'; reset.className = 'btn-reset';
+  reset.addEventListener('click', () => {
+    scope = presetScope('24h', { timezone: 'UTC' });
+    navigate(location.pathname);
+  });
+  
+  row2.append(submit, reset, refresh, realtimeLabel, state);
+  
+  const toolbar = make('div', null, 'dashboard-toolbar');
+  
+  form.append(row1, row2);
+  toolbar.append(form);
+  
+  preset.addEventListener('change', () => {
+    if (preset.value === 'custom') return;
+    const tempScope = presetScope(preset.value, { ...scope });
+    from.input.value = tempScope.from.slice(0,16);
+    to.input.value = tempScope.to.slice(0,16);
+  });
+  
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    try { const next = { from: new Date(`${from.input.value}:00Z`).toISOString(), to: new Date(`${to.input.value}:00Z`).toISOString(), project: project.input.value.trim() || null, provider: provider.input.value.trim() || null, timezone: 'UTC' }; if (Date.parse(next.from) >= Date.parse(next.to)) throw new Error('From must be before To.'); scope = next; scopeNotice = 'Scope applied.'; navigate(`${location.pathname}?${serializeUrlScope(scope)}`); }
-    catch (error) { announce(error.message); }
+    try {
+      const next = { from: new Date(`${from.input.value}:00Z`).toISOString(), to: new Date(`${to.input.value}:00Z`).toISOString(), project: project.input.value.trim() || null, provider: provider.input.value.trim() || null, timezone: 'UTC' };
+      if (Date.parse(next.from) >= Date.parse(next.to)) throw new Error('From must be before To.');
+      scope = next; scopeNotice = 'Scope applied.';
+      const params = serializeUrlScope(scope);
+      if (preset.value !== 'custom') params.set('preset', preset.value);
+      navigate(`${location.pathname}?${params}`);
+    } catch (error) { announce(error.message); }
   });
-  refresh.addEventListener('click', () => { void (async () => { refresh.disabled = true; state.textContent = 'Refreshing…'; try { const refreshed = await realtime?.refreshNow(); const target = document.querySelector('#realtime-state'); if (target) target.textContent = refreshed ? 'Refresh complete.' : 'Refresh is unavailable while updates are paused.'; announce(target?.textContent ?? 'Refresh complete.'); } catch { state.textContent = 'Refresh failed. Try again.'; announce(state.textContent); } finally { refresh.disabled = false; } })(); });
-  realtimeLabel.append(checkbox, document.createTextNode(demo ? ' Realtime disabled for demo data' : ' Use realtime updates'));
+  
+  refresh.addEventListener('click', () => { void (async () => { refresh.disabled = true; state.textContent = 'Refreshing.'; try { const refreshed = await realtime?.refreshNow(); const target = document.querySelector('#realtime-state'); if (target) target.textContent = refreshed ? 'Refresh complete.' : 'Refresh is unavailable while updates are paused.'; announce(target?.textContent ?? 'Refresh complete.'); } catch { state.textContent = 'Refresh failed. Try again.'; announce(state.textContent); } finally { refresh.disabled = false; } })(); });
   checkbox.addEventListener('change', () => { localStorage.setItem(realtimeKey, String(checkbox.checked)); realtime?.setRealtime(checkbox.checked); });
-  live.append(refresh, realtimeLabel, state);
-  form.append(presetLabel, project.label, provider.label, from.label, to.label, submit, live); return form;
+  
+  return toolbar;
 }
+
 async function postLegacy(path, body) {
   const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-aios-token': window.AIOS_TOKEN, 'x-correlation-id': crypto.randomUUID() }, body: JSON.stringify(body) });
   const value = await response.json().catch(() => ({})); if (!response.ok || value.ok === false) throw new Error(value.error?.message || value.error || 'The action failed.'); return value;
 }
-function refreshButton(label) { const button = make('button', label); button.type = 'button'; button.addEventListener('click', () => void renderCurrent()); return button; }
+function refreshButton(label) { const button = make('button', label); button.type = 'button'; button.addEventListener('click', () => void renderCurrent({ preserveView: true })); return button; }
 function forcedStatePanel(state) {
   const messages = { idle: 'Ready when you are.', pending: 'Your action is in progress…', disabled: 'This action is currently unavailable.', success: 'Your action completed successfully.', loading: 'Loading application information…', empty: 'There is nothing to show yet.', error: 'Unable to load this information.', fatal: 'This action cannot be completed. Check your access or contact an administrator.' };
   if (!messages[state]) return null;
@@ -119,7 +179,6 @@ function renderBoundary(view) {
   }
   return make('p', `${view.data.activeRuns} active runs · ${view.data.queuedTasks} queued tasks`, 'status');
 }
-
 function missingDetailRecovery(error) {
   const recoveries = {
     TASK_NOT_FOUND: ['/app/operations/tasks', 'Return to task list'], RUN_NOT_FOUND: ['/app/operations/runs', 'Return to run list'],
@@ -128,59 +187,80 @@ function missingDetailRecovery(error) {
   return recoveries[error?.code] ?? null;
 }
 
-async function renderCurrent() {
-  const currentEpoch = ++epoch; cleanupRoute(); api.dispose(); activeOnboarding?.dispose(); activeOnboarding = null;
+async function renderCurrent({ preserveView = false } = {}) {
+  const currentEpoch = ++epoch;
+  const oldDisposers = disposers.splice(0);
+  const triggerCleanup = () => { for (const dispose of oldDisposers) { try { dispose(); } catch (error) { console.error('Operational route cleanup failed.', error); } } };
+  api.dispose(); activeOnboarding?.dispose(); activeOnboarding = null;
   scope = parseUrlScope(location.href); canonicalizeScope(); updateNav(); const url = new URL(location.href); const route = resolveAppRoute(url.pathname === '/' ? '/app' : url.pathname);
-  if (!route) { const panel = make('section', null, 'card'); panel.append(make('h1', 'Page not found'), make('p', 'This application route is not available.')); const home = make('a', 'Return to overview'); home.href = inheritScope('/', scope); panel.append(home); app.replaceChildren(panel); return; }
+  if (!route) { activeRouteId = null; activeControls = null; activeRoot = null; triggerCleanup(); const panel = make('section', null, 'card'); panel.append(make('h1', 'Page not found'), make('p', 'This application route is not available.')); const home = make('a', 'Return to overview'); home.href = inheritScope('/', scope); panel.append(home); app.replaceChildren(panel); return; }
   document.title = `${route.id.replaceAll('-', ' ')} - MeridianOS`;
-  if (route.id === 'setup' || route.id === 'setup-complete') { app.replaceChildren(); activeOnboarding = createOnboardingController({ root: app }); return activeOnboarding.render(); }
+  if (route.id === 'setup' || route.id === 'setup-complete') { activeRouteId = null; activeControls = null; activeRoot = null; triggerCleanup(); app.replaceChildren(); activeOnboarding = createOnboardingController({ root: app }); return activeOnboarding.render(); }
   if (route.id === 'foundation') {
+    activeRouteId = null; activeControls = null; activeRoot = null; triggerCleanup();
     const card = make('section', null, 'card'); card.append(make('h1', 'Platform foundation'), make('p', 'Shared tokens, accessible primitives, typed boundaries, and action-state conventions support the operational application.'));
     app.replaceChildren(card); const status = await readApplicationStatus(); if (currentEpoch === epoch) card.append(renderBoundary(status)); return;
   }
-  const controls = scopeControls(); const root = make('div', null, 'route-root'); root.setAttribute('aria-busy','true'); root.append(notice('Loading operational information…')); app.replaceChildren(controls, root);
+  const canReuseShell = preserveView && activeRouteId === route.id && activeControls?.isConnected && activeRoot?.isConnected && app.contains(activeRoot);
+  const controls = canReuseShell ? activeControls : scopeControls();
+  const root = canReuseShell ? activeRoot : make('div', null, 'route-root');
+  const preservedScrollY = canReuseShell ? window.scrollY : null;
+  root.setAttribute('aria-busy', 'true');
+  if (!canReuseShell) { triggerCleanup(); root.append(notice('Loading operational information…')); app.replaceChildren(controls, root); }
   try {
     const modulePath = routeModule(route.id); if (!modulePath) throw new Error('This route has no application module.');
     const module = await import(modulePath); if (currentEpoch !== epoch) return;
+    root.replaceChildren = function(...nodes) {
+      if (canReuseShell) triggerCleanup();
+      delete root.replaceChildren;
+      root.replaceChildren(...nodes);
+    };
     const context = {
       root, route, url, scope, api, navigate, announce, postLegacy,
       demo: url.searchParams.get('demo') === 'true',
       isCurrent: () => currentEpoch === epoch,
       setPending(value) { pendingMutations += value ? 1 : -1; pendingMutations = Math.max(0, pendingMutations); },
-      registerDispose(dispose) { disposers.push(dispose); }, refresh: () => renderCurrent(), refreshButton,
+      registerDispose(dispose) { disposers.push(dispose); }, refresh: () => renderCurrent({ preserveView: true }), refreshButton,
     };
-    await module.renderRoute(context); root.setAttribute('aria-busy','false'); const forced = forcedStatePanel(url.searchParams.get('state')); if (forced) root.append(forced);
+    await module.renderRoute(context);
+    if (preservedScrollY != null && window.scrollY !== preservedScrollY) window.scrollTo(0, preservedScrollY);
+    root.setAttribute('aria-busy','false'); const forced = forcedStatePanel(url.searchParams.get('state')); if (forced) root.append(forced);
     if (restoreRouteFocus) root.querySelector('h1')?.focus(); restoreRouteFocus = false;
   } catch (error) {
     if (currentEpoch !== epoch || error?.name === 'AbortError') return;
+    if (canReuseShell) triggerCleanup();
     root.setAttribute('aria-busy','false'); const panel = notice(error.message || 'Operational information is unavailable.', { error: true }); panel.append(make('p', 'Valid regions remain available after refresh; no mutation was applied by this failed read.'), refreshButton('Try again')); const recovery = missingDetailRecovery(error); if (recovery) { const destination = make('a', recovery[1]); destination.href = inheritScope(recovery[0], scope); panel.append(destination); } root.replaceChildren(panel);
   }
   const nextRealtimeScope = JSON.stringify(scope);
+  activeRouteId = route.id; activeControls = controls; activeRoot = root;
   if (realtimeScopeKey != null && realtimeScopeKey !== nextRealtimeScope) realtime?.setRealtime(localStorage.getItem(realtimeKey) === 'true');
   realtimeScopeKey = nextRealtimeScope;
   if (scopeNotice) { const target = document.querySelector('#realtime-state'); if (target) target.textContent = scopeNotice; announce(scopeNotice); scopeNotice = null; }
 }
 
 document.addEventListener('click', (event) => {
-  const link = event.target.closest('a[href^="/app"]'); if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-  event.preventDefault(); navigate(link.href);
+    const link = event.target.closest('a');
+    if (!link || link.origin !== location.origin || link.hasAttribute('download') || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const isSpaRoute = link.pathname === '/' || link.pathname === '/app' || link.pathname.startsWith('/app/');
+    if (!isSpaRoute || link.pathname.startsWith('/app/setup')) return;
+    event.preventDefault(); navigate(link.href);
 });
 searchTrigger?.addEventListener('click', openSearch);
 document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); } });
 addEventListener('popstate', () => { restoreRouteFocus = true; void renderCurrent(); });
 themeButton.addEventListener('click', () => { const order=['system','light','dark']; const next=order[(order.indexOf(currentTheme())+1)%order.length]; applyTheme(next); announce(`Theme changed to ${next}.`); });
-function syncSidebarDisclosure() { if (matchMedia('(max-width: 760px)').matches) sidebarToggle?.setAttribute('aria-expanded', String(sidebar?.classList.contains('is-open') === true)); else sidebarToggle?.setAttribute('aria-expanded', 'true'); }
+function syncSidebarDisclosure() { if (matchMedia('(max-width: 760px)').matches) { sidebarToggle?.setAttribute('aria-expanded', String(sidebar?.classList.contains('is-open') === true)); sidebar?.classList.remove('is-collapsed'); document.body.classList.remove('sidebar-collapsed'); } else if (matchMedia('(max-width: 1024px)').matches) { sidebar?.classList.remove('is-open'); sidebarScrim?.classList.remove('is-active'); sidebarToggle?.setAttribute('aria-expanded', 'false'); document.body.classList.add('sidebar-collapsed'); } else { sidebar?.classList.remove('is-open'); sidebarScrim?.classList.remove('is-active'); const isCollapsed = sidebar?.classList.contains('is-collapsed') ?? false; sidebarToggle?.setAttribute('aria-expanded', String(!isCollapsed)); document.body.classList.toggle('sidebar-collapsed', isCollapsed); } }
 syncSidebarDisclosure(); addEventListener('resize', syncSidebarDisclosure);
-sidebarToggle?.addEventListener('click', () => { const expanded = sidebarToggle.getAttribute('aria-expanded') === 'true'; sidebarToggle.setAttribute('aria-expanded', String(!expanded)); if (matchMedia('(max-width: 760px)').matches) sidebar?.classList.toggle('is-open', !expanded); else sidebar?.classList.toggle('is-collapsed', expanded); });
+sidebarToggle?.addEventListener('click', () => { if (matchMedia('(max-width: 760px)').matches) { const open = !sidebar?.classList.contains('is-open'); sidebar?.classList.toggle('is-open', open); sidebarScrim.classList.toggle('is-active', open); sidebarToggle.setAttribute('aria-expanded', String(open)); } else { const isCollapsed = !sidebar?.classList.contains('is-collapsed'); sidebar?.classList.toggle('is-collapsed', isCollapsed); document.body.classList.toggle('sidebar-collapsed', isCollapsed); sidebarToggle.setAttribute('aria-expanded', String(!isCollapsed)); } });
 sidebar?.addEventListener('click', (event) => { const link = event.target.closest('a'); if (!link) return; if (matchMedia('(max-width: 760px)').matches) { sidebar?.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); } });
 sidebar?.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches) { sidebar?.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches && sidebar?.classList.contains('is-open')) { sidebar.classList.remove('is-open'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && matchMedia('(max-width: 760px)').matches && sidebar?.classList.contains('is-open')) { sidebar.classList.remove('is-open'); sidebarScrim.classList.remove('is-active'); sidebarToggle?.setAttribute('aria-expanded', 'false'); sidebarToggle?.focus(); } });
 addEventListener('beforeunload', () => { cleanupRoute(); api.dispose(); realtime?.stop(); });
 
 applyTheme(currentTheme()); scope = parseUrlScope(location.href); canonicalizeScope();
 realtime = createRealtimeCoordinator({
   url: () => `/api/operations/events?${serializeUrlScope(scope)}`,
-  scopeKey: () => JSON.stringify(scope), refresh: () => renderCurrent(), hasPendingMutation: () => pendingMutations > 0,
+  scopeKey: () => JSON.stringify(scope), refresh: () => renderCurrent({ preserveView: true }), hasPendingMutation: () => pendingMutations > 0,
   demo: new URL(location.href).searchParams.get('demo') === 'true',
   onState: ({ message }) => { const target = document.querySelector('#realtime-state'); if (target) target.textContent = message; announce(message); },
 });
