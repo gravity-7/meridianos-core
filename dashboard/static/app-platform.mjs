@@ -9,7 +9,7 @@ import { make, notice } from '/static/app/shared/view-helpers.mjs';
 import { applyThemePreference, parseThemePreference } from '/static/app/shared/theme-preference.mjs';
 
 const themeKey = 'meridianos-ui-theme'; const realtimeKey = 'meridianos-operational-realtime';
-const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme'); const searchTrigger = document.querySelector('#search-trigger'); const sidebar = document.querySelector('#app-sidebar'); const sidebarToggle = document.querySelector('#sidebar-toggle'); const sidebarScrim = document.createElement('div'); sidebarScrim.className = 'sidebar-scrim'; sidebarScrim.setAttribute('aria-hidden', 'true'); document.querySelector('.app-layout').prepend(sidebarScrim); sidebarScrim.addEventListener('click', () => { sidebar?.classList.remove('is-open'); sidebarScrim.classList.remove('is-active'); sidebarScrim.classList.remove('is-active'); sidebarToggle?.setAttribute('aria-expanded', 'false'); });
+const app = document.querySelector('#app'); const announcer = document.querySelector('#announcer'); const themeButton = document.querySelector('#theme'); const searchTrigger = document.querySelector('#search-trigger'); const sidebar = document.querySelector('#app-sidebar'); const sidebarToggle = document.querySelector('#sidebar-toggle'); const sidebarScrim = document.createElement('div'); sidebarScrim.className = 'sidebar-scrim'; sidebarScrim.setAttribute('aria-hidden', 'true'); document.querySelector('.app-layout').prepend(sidebarScrim); sidebarScrim.addEventListener('click', () => { sidebar?.classList.remove('is-open'); sidebarScrim.classList.remove('is-active'); sidebarToggle?.setAttribute('aria-expanded', 'false'); });
 let scope = parseUrlScope(location.href); let epoch = 0; let activeOnboarding = null; let pendingMutations = 0; let realtime = null; let disposers = [];
 let realtimeScopeKey = null;
 let restoreRouteFocus = false;
@@ -241,7 +241,8 @@ async function renderCurrent({ preserveView = false } = {}) {
 document.addEventListener('click', (event) => {
     const link = event.target.closest('a');
     if (!link || link.origin !== location.origin || link.hasAttribute('download') || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    if (link.pathname.startsWith('/legacy') || link.pathname.startsWith('/app/setup')) return;
+    const isSpaRoute = link.pathname === '/' || link.pathname === '/app' || link.pathname.startsWith('/app/');
+    if (!isSpaRoute || link.pathname.startsWith('/app/setup')) return;
     event.preventDefault(); navigate(link.href);
 });
 searchTrigger?.addEventListener('click', openSearch);

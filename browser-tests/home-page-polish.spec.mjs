@@ -31,3 +31,13 @@ test('manual overview refresh reuses the mounted board and preserves the viewpor
   expect(after.sameRoot).toBe(true);
   expect(after.scrollY).toBeGreaterThanOrEqual(Math.min(before.scrollY, before.maxScrollY));
 });
+
+test('observability export links use the browser download route instead of SPA navigation', async ({ page }) => {
+  await page.goto('/app/observability/cost');
+  await expect(page.getByRole('link', { name: 'Export scoped cost evidence' })).toBeVisible();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('link', { name: 'Export scoped cost evidence' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('meridianos-cost.csv');
+  await expect(page.getByRole('heading', { name: 'Page not found' })).toHaveCount(0);
+});
