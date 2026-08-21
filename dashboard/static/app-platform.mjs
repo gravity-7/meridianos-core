@@ -110,7 +110,7 @@ function scopeControls() {
   row1.append(presetLabel, project.label, provider.label, from.label, to.label);
   
   const submit = make('button', 'Apply scope'); submit.type = 'submit'; submit.className = 'btn-primary';
-  const refresh = make('button', 'Refresh now'); refresh.type = 'button';
+  const refresh = make('button', 'Refresh now'); refresh.type = 'button'; refresh.className = 'btn-secondary';
   const realtimeLabel = make('label', '', 'realtime-label'); const checkbox = make('input'); checkbox.type = 'checkbox';
   checkbox.checked = localStorage.getItem(realtimeKey) === 'true';
   const demo = new URL(location.href).searchParams.get('demo') === 'true'; checkbox.disabled = demo;
