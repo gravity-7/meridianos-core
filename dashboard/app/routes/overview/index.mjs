@@ -57,11 +57,31 @@ export async function renderRoute(context) {
   errorRateGauge.classList.add('span-3');
   const latencyHeatmap = familyPanel(document, { title: 'Latency heatmap', kind: 'heatmap', rows: latencyRows, emptyMessage: 'No latency samples in this scope.', href: '/app/observability/gateway?metric=latencyP95', linkLabel: 'Open latency evidence' });
   latencyHeatmap.style.gridColumn = '1 / -1';
-  const budgetSignals = familyPanel(document, { title: 'Budget signals', kind: 'table', rows: [
-    { label: 'Spend', value: money(data.cost.spend) },
-    { label: 'Monthly limit', value: data.cost.budget?.monthlyLimit ? money(data.cost.budget.monthlyLimit) : 'Not configured' },
-    { label: 'Forecast', value: data.cost.budget?.forecast == null ? 'Not available' : money(data.cost.budget.forecast) },
-  ], href: data.cost.drilldown.href, linkLabel: 'Open cost drivers' });
+  const spendVal = Number(data.cost.spend) || 0;
+  const limitVal = Number(data.cost.budget?.monthlyLimit) || 0;
+  const forecastVal = data.cost.budget?.forecast != null ? Number(data.cost.budget.forecast) : null;
+  const budgetPct = limitVal > 0 ? (spendVal / limitVal) * 100 : 0;
+  const forecastStatus = !limitVal ? 'is-on-track' : forecastVal != null && forecastVal > limitVal ? 'is-exceeded' : forecastVal != null && forecastVal >= limitVal * 0.85 ? 'is-approaching' : 'is-on-track';
+  const forecastLabel = forecastVal != null ? `Forecast: ${money(forecastVal)} (${forecastStatus === 'is-exceeded' ? 'Exceeding' : forecastStatus === 'is-approaching' ? 'Near limit' : 'On track'})` : 'Forecast: Not available';
+
+  const budgetSignals = familyPanel(document, {
+    title: 'Budget signals',
+    kind: 'table',
+    budget: {
+      spendFormatted: money(data.cost.spend),
+      limitFormatted: data.cost.budget?.monthlyLimit ? money(data.cost.budget.monthlyLimit) : null,
+      percent: budgetPct,
+      forecastStatus,
+      forecastLabel,
+    },
+    rows: [
+      { label: 'Spend', value: money(data.cost.spend) },
+      { label: 'Monthly limit', value: data.cost.budget?.monthlyLimit ? money(data.cost.budget.monthlyLimit) : 'Not configured' },
+      { label: 'Forecast', value: data.cost.budget?.forecast == null ? 'Not available' : money(data.cost.budget.forecast) },
+    ],
+    href: data.cost.drilldown.href,
+    linkLabel: 'Open cost drivers'
+  });
   budgetSignals.classList.add('span-5');
 
   const recentActivity = familyPanel(document, { title: 'Recent activity', kind: 'list', rows: (data.attention ?? []).slice(0, 5).map((item) => ({ label: item.title, value: item.severity })), emptyMessage: 'No recent alerts in this scope.', href: '/app/observability/alerts', linkLabel: 'Open alert list' });
@@ -73,11 +93,11 @@ export async function renderRoute(context) {
   const latency = trendHost(document, 'Latency P95', 'latency-p95', data.trends?.latencyP95, context.scope, 'ms', { href: '/app/observability/gateway?metric=latencyP95', label: 'Open latency evidence' }); grid.append(latency.host); context.registerDispose(latency.rendered.destroy);
   const spend = trendHost(document, 'Cost over time', 'cost', data.trends?.cost, context.scope, 'USD', data.cost.drilldown); grid.append(spend.host); context.registerDispose(spend.rendered.destroy);
   const tokenTrend = trendHost(document, 'Token usage', 'tokens', data.trends?.tokens, context.scope, 'tokens', { href: '/app/observability/usage', label: 'Open token evidence' }); grid.append(tokenTrend.host); context.registerDispose(tokenTrend.rendered.destroy);
-  const driverPanel = familyPanel(document, { title: iconLabel('dashboard-grid', 'Operational snapshot', { size: '1.35rem', strokeWidth: 2.5, color: 'inherit' }), kind: 'list', rows: [
-    { label: iconLabel('topology', 'Gateway state'), value: badge(data.health.state, data.health.state) },
-    { label: iconLabel('database', 'Spend'), value: money(data.cost.spend) },
-    { label: iconLabel('layout-dashboard', 'Budget period'), value: data.cost.budget?.periodLabel ?? 'Unknown' },
-    { label: iconLabel('chart-bars', 'Usage requests'), value: number(data.usage?.requests ?? 0) }
+  const driverPanel = familyPanel(document, { title: iconLabel('dashboard-grid', 'Operational snapshot', { size: '1.35rem', strokeWidth: 2.5, color: 'inherit' }), kind: 'snapshot-grid', rows: [
+    { icon: 'topology', label: 'Gateway state', value: badge(data.health.state, data.health.state), hasPulse: data.health.state === 'healthy' || data.health.state === 'ok' },
+    { icon: 'database', label: 'Spend', value: money(data.cost.spend) },
+    { icon: 'layout-dashboard', label: 'Budget period', value: data.cost.budget?.periodLabel ?? 'Unknown' },
+    { icon: 'chart-bars', label: 'Usage requests', value: number(data.usage?.requests ?? 0) }
   ], href: '/app/observability/cost', linkLabel: 'Open cost drivers' });
   driverPanel.style.gridColumn = '1 / -1';
   grid.append(driverPanel);

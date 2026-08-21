@@ -1,3 +1,5 @@
+import { renderPanelFamily, dashboardPanel } from './dashboard-panels.mjs';
+
 export const make = (tag, text = null, className = '') => {
   const node = document.createElement(tag); if (text != null) node.textContent = String(text); if (className) node.className = className; return node;
 };
@@ -20,9 +22,42 @@ export const iconLabel = (iconId, labelText, { size = '1.15rem', strokeWidth = 2
   container.append(svg, document.createTextNode(labelText));
   return container;
 };
+
+export function listPanel(doc, options = {}) {
+  const host = (doc ?? document).createElement('div');
+  renderPanelFamily(host, { kind: 'list', ...options });
+  const panel = host.firstElementChild;
+  if (options.className) panel.classList.add(...options.className.split(' ').filter(Boolean));
+  return panel;
+}
+
+export function formPanel(doc, { title, icon, subtitle = '', className = '' } = {}, ...children) {
+  const documentRef = doc ?? document;
+  const panel = dashboardPanel(documentRef, {
+    title: icon ? iconLabel(icon, title, { size: '1.2rem', strokeWidth: 2.2, color: 'inherit' }) : title,
+    kind: 'form',
+    className: `management-form-panel${className ? ` ${className}` : ''}`
+  });
+  if (subtitle) {
+    const p = make('p', subtitle, 'panel-subtitle');
+    panel.append(p);
+  }
+  panel.append(...children.filter(Boolean));
+  return panel;
+}
+
 export function card(title, ...children) { const node = make('section', null, 'card'); node.append(make('h2', title), ...children.filter(Boolean)); return node; }
+
 export function definitionList(entries) {
-  const dl = make('dl'); for (const [term, value] of entries) { const dd = make('dd'); dd.append(value?.nodeType ? value : document.createTextNode(String(value ?? 'Unknown'))); dl.append(make('dt', term), dd); } return dl;
+  const dl = make('dl', null, 'panel-family-list definition-list');
+  for (const [term, value] of entries) {
+    const dt = make('dt');
+    dt.append(term?.nodeType ? term : document.createTextNode(String(term ?? '—')));
+    const dd = make('dd', null, 'panel-family-val');
+    dd.append(value?.nodeType ? value : document.createTextNode(String(value ?? 'Unknown')));
+    dl.append(dt, dd);
+  }
+  return dl;
 }
 export function table(headers, rows, captionText) {
   const tableNode = make('table', null, 'data-table'); tableNode.append(make('caption', captionText));

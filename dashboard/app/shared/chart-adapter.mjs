@@ -49,7 +49,28 @@ export function renderOperationalChart(containerOrContract, inputOrRuntime, runt
   const model = chartTableModel(input);
   const measured = measureChartWork(() => {
     const section = documentRef.createElement('section'); section.className = 'chart-panel'; section.setAttribute('aria-labelledby', `${input.id}-title`);
+    const headerRow = documentRef.createElement('div'); headerRow.className = 'chart-header-row';
     const heading = text(documentRef, 'h2', model.title); heading.id = `${input.id}-title`;
+    headerRow.append(heading);
+
+    if (model.rows.length) {
+      const lastPoint = model.rows[model.rows.length - 1];
+      const sumValue = model.rows.reduce((acc, r) => acc + (Number(r.value) || 0), 0);
+      let badgeText = '';
+      if (input.unit === 'USD') {
+        badgeText = `$${Number(lastPoint.value || 0).toFixed(2)}`;
+      } else if (input.unit === 'ms') {
+        badgeText = `${Number(lastPoint.value || 0).toFixed(0)} ms`;
+      } else if (input.unit === 'requests' || input.unit === 'tokens') {
+        badgeText = sumValue >= 1000000 ? `${(sumValue / 1000000).toFixed(1)}M ${input.unit}` : sumValue >= 1000 ? `${(sumValue / 1000).toFixed(1)}k ${input.unit}` : `${sumValue} ${input.unit}`;
+      } else {
+        badgeText = `${lastPoint.value} ${input.unit}`;
+      }
+      const badgeEl = text(documentRef, 'span', badgeText);
+      badgeEl.className = 'chart-summary-badge';
+      headerRow.append(badgeEl);
+    }
+
     const summary = text(documentRef, 'p', model.summary); summary.className = 'chart-summary';
     const freshLabel = model.freshAsOf ? new Date(model.freshAsOf).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }) : 'unknown';
     const meta = text(documentRef, 'p', `Series: ${model.unit} · ${model.scopeLabel} · Fresh as of ${freshLabel}`); meta.className = 'chart-meta';
@@ -70,7 +91,7 @@ export function renderOperationalChart(containerOrContract, inputOrRuntime, runt
       else evidence.textContent = 'No linked record';
       tr.append(evidence); fragment.append(tr);
     }
-    body.append(fragment); table.append(body); details.append(table); section.append(heading);
+    body.append(fragment); table.append(body); details.append(table); section.append(headerRow);
     if (summaryHost && summaryHost !== container) summaryHost.replaceChildren(summary, meta); else section.append(summary, meta);
     section.append(visual);
     if (tableHost && tableHost !== container) tableHost.replaceChildren(details); else section.append(details);
@@ -78,7 +99,22 @@ export function renderOperationalChart(containerOrContract, inputOrRuntime, runt
     let plot = null;
     if (uPlotCtor && model.rows.length) {
       const accent = documentRef.defaultView?.getComputedStyle?.(documentRef.documentElement)?.getPropertyValue('--accent')?.trim() || '#315efb';
-      plot = new uPlotCtor({ width: Math.max(280, visual.clientWidth || 640), height: 240, series: [{}, { label: model.unit, stroke: accent, width: 2 }], axes: [{}, { label: model.unit }] }, prepareUPlotData(model), visual);
+      const fillGradient = (self) => {
+        const ctx = self?.ctx;
+        if (!ctx || !self?.bbox) return 'rgba(47, 125, 225, 0.12)';
+        try {
+          const gradient = ctx.createLinearGradient(0, self.bbox.top, 0, self.bbox.top + self.bbox.height);
+          gradient.addColorStop(0, 'rgba(47, 125, 225, 0.28)');
+          gradient.addColorStop(1, 'rgba(47, 125, 225, 0.01)');
+          return gradient;
+        } catch { return 'rgba(47, 125, 225, 0.12)'; }
+      };
+      plot = new uPlotCtor({
+        width: Math.max(280, visual.clientWidth || 640),
+        height: 240,
+        series: [{}, { label: model.unit, stroke: accent, width: 2, fill: fillGradient }],
+        axes: [{}, { label: model.unit, grid: { stroke: 'rgba(128, 128, 128, 0.12)', width: 1 } }]
+      }, prepareUPlotData(model), visual);
     } else if (!model.rows.length) { visual.className = 'chart-visual panel-empty'; visual.replaceChildren(text(documentRef, 'p', `No ${model.unit} data in this scope.`)); }
     const resize = () => { if (plot && visual.clientWidth) plot.setSize({ width: visual.clientWidth, height: 240 }); };
     globalThis.addEventListener?.('resize', resize);
